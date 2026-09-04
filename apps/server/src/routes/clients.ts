@@ -8,6 +8,7 @@ import { storage } from '../integrations/storage.js';
 import { clientFolder } from '../services/attachments.js';
 import { listCaseTypes, upsertCaseType, createCase, updateCase, listCases, getCase, caseTimeline, addCaseNote, deleteCaseNote, generateCaseSummary, structureNote } from '../services/cases.js';
 import * as creditors from '../services/creditors.js';
+import { onedriveCandidates, chatworkCandidates, applyImport } from '../services/clientImport.js';
 
 export const clientRoutes = new Hono();
 
@@ -69,6 +70,19 @@ clientRoutes.get('/drive/folders', async (c) => {
   const p = c.req.query('path') ?? storage().clientRoot();
   const items = await storage().list(p);
   return c.json({ path: p, items });
+});
+
+// ---- 依頼者の一括登録 ----
+clientRoutes.get('/clients/import/candidates', async (c) => {
+  const source = c.req.query('source') ?? 'onedrive';
+  return c.json(source === 'chatwork' ? await chatworkCandidates() : await onedriveCandidates());
+});
+
+clientRoutes.post('/clients/import', async (c) => {
+  const rows = z
+    .array(z.object({ name: z.string(), folderPath: z.string().optional().nullable(), chatworkRoomId: z.number().int().optional().nullable(), existingClientId: z.number().int().optional().nullable() }))
+    .parse(await c.req.json());
+  return c.json(applyImport(rows));
 });
 
 // ---- 事件類型 ----

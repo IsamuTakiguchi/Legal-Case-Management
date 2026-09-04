@@ -24,6 +24,7 @@ export default function Clients() {
   const qc = useQueryClient();
   const [q, setQ] = useState('');
   const [showNew, setShowNew] = useState(params.has('new'));
+  const [showImport, setShowImport] = useState(false);
   const list = useQuery({ queryKey: ['clients', q], queryFn: () => api.get<ClientRow[]>(`/clients${q ? `?q=${encodeURIComponent(q)}` : ''}`) });
   const create = useMutation({
     mutationFn: (body: Partial<ClientRow>) => api.post<ClientRow>('/clients', body),
@@ -37,10 +38,14 @@ export default function Clients() {
       <div className="flex items-center gap-2">
         <h1 className="text-xl font-bold">依頼者</h1>
         <input className="input ml-auto w-64" placeholder="名前・かなで検索" value={q} onChange={(e) => setQ(e.target.value)} />
+        <button className="btn" onClick={() => setShowImport(!showImport)}>
+          一括登録（フォルダ / Chatwork）
+        </button>
         <button className="btn btn-primary" onClick={() => setShowNew(!showNew)}>
           ＋ 新規依頼者
         </button>
       </div>
+      {showImport && <BulkImport onDone={() => { setShowImport(false); qc.invalidateQueries({ queryKey: ['clients'] }); }} />}
       {showNew && <ClientForm initial={{ name: params.get('new') ?? '', emails: params.get('email') ? [params.get('email')!] : [] }} onSubmit={(b) => create.mutate(b)} onCancel={() => setShowNew(false)} busy={create.isPending} />}
       <div className="card p-0">
         <table className="w-full text-sm">
@@ -146,5 +151,87 @@ export function ClientForm({ initial, onSubmit, onCancel, busy }: { initial: Par
         </button>
       </div>
     </form>
+  );
+}
+
+interface Candidate {
+  source: 'onedrive' | 'chatwork';
+  name: string;
+  folderPath?: string;
+  chatworkRoomId?: number;
+  existingClientId?: number | null;
+  note?: string;
+}
+
+function BulkImport({ onDone }: { onDone: () => void }) {
+  const [source, setSource] = useState<'onedrive' | 'chatwork'>('onedrive');
+  const [rows, setRows] = useState<(Candidate & { checked: boolean })[]>([]);
+  const [msg, setMsg] = useState('');
+  const load = useMutation({
+    mutationFn: () => api.get<Candidate[]>(`/clients/import/candidates?source=${source}`),
+    onSuccess: (r) => {
+      setRows(r.map((c) => ({ ...c, checked: !c.existingClientId })));
+      setMsg(r.length === 0 ? '候補が見つかりませんでした' : '');
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
+  const apply = useMutation({
+    mutationFn: () => api.post<{ created: number; updated: number }>('/clients/import', rows.filter((r) => r.checked).map(({ name, folderPath, chatworkRoomId, existingClientId }) => ({ name, folderPath, chatworkRoomId, existingClientId }))),
+    onSuccess: (r) => {
+      setMsg(`登録 ${r.created} 件、既存の更新 ${r.updated} 件`);
+      onDone();
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
+  return (
+    <div className="card space-y-2 text-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-semibold">一括登録</span>
+        <select className="input w-auto" value={source} onChange={(e) => setSource(e.target.value as 'onedrive' | 'chatwork')}>
+          <option value="onedrive">OneDrive の依頼者フォルダ名から</option>
+          <option value="chatwork">Chatwork のルームから</option>
+        </select>
+        <button className="btn btn-sm" onClick={() => load.mutate()} disabled={load.isPending}>
+          {load.isPending ? '読み込み中…' : '候補を読み込む'}
+        </button>
+        {rows.length > 0 && (
+          <button className="btn btn-primary btn-sm ml-auto" onClick={() => apply.mutate()} disabled={apply.isPending || rows.every((r) => !r.checked)}>
+            選択した {rows.filter((r) => r.checked).length} 件を登録
+          </button>
+        )}
+      </div>
+      <div className="text-xs text-slate-500">フォルダ名やルーム名から氏名を推定します。氏名は登録前に編集できます。既に登録済みの依頼者にはフォルダ／ルームだけを紐付けます。</div>
+      {msg && <div className="text-xs text-slate-700">{msg}</div>}
+      {rows.length > 0 && (
+        <div className="max-h-80 overflow-y-auto rounded border border-slate-200">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-50 text-left text-slate-500">
+              <tr>
+                <th className="px-2 py-1">
+                  <input type="checkbox" checked={rows.every((r) => r.checked)} onChange={(e) => setRows(rows.map((r) => ({ ...r, checked: e.target.checked })))} />
+                </th>
+                <th className="px-2 py-1">氏名（編集可）</th>
+                <th className="px-2 py-1">{source === 'onedrive' ? 'フォルダ' : 'ルーム'}</th>
+                <th className="px-2 py-1">状態</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i} className="border-t border-slate-100">
+                  <td className="px-2 py-1">
+                    <input type="checkbox" checked={r.checked} onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, checked: e.target.checked } : x)))} />
+                  </td>
+                  <td className="px-2 py-1">
+                    <input className="input py-0.5" value={r.name} onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} />
+                  </td>
+                  <td className="px-2 py-1 text-slate-600">{r.folderPath ?? r.note}</td>
+                  <td className="px-2 py-1">{r.existingClientId ? <span className="badge badge-gray">登録済（紐付けのみ）</span> : <span className="badge badge-blue">新規</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }

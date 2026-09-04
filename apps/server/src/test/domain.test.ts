@@ -29,6 +29,13 @@ describe('共有ユーティリティ', () => {
     expect(classifyEventTitle('佐藤 WEB相談')).toBe('consult');
     expect(classifyEventTitle('佐藤 新規相談 仮')).toBe('hold');
     expect(classifyEventTitle('歯医者')).toBe('other');
+    expect(classifyEventTitle('山田 WEB裁判')).toBe('hearing');
+    expect(classifyEventTitle('山田 ＷＥＢ裁判')).toBe('hearing');
+    expect(classifyEventTitle('山田 電話打合せ')).toBe('meeting');
+    expect(classifyEventTitle('山田 第1回 集会期日')).toBe('hearing');
+    expect(classifyEventTitle('山田 新規相談')).toBe('consult');
+    expect(classifyEventTitle('山田 検認 ※遺言書持参')).toBe('hearing');
+    expect(classifyEventTitle('山田 控訴確認')).toBe('other');
   });
   it('姓の抽出と依頼者名の一致', () => {
     expect(familyName('山田 太郎')).toBe('山田');
@@ -132,3 +139,20 @@ describe('期日終了後の確認', () => {
 });
 
 import { eq } from 'drizzle-orm';
+
+describe('依頼者の一括登録', () => {
+  it('フォルダ名から氏名を推定し、既存と突合して登録できる', async () => {
+    const { guessNameFromFolder, onedriveCandidates, applyImport } = await import('../services/clientImport.js');
+    expect(guessNameFromFolder('20240101_山田太郎_離婚')).toBe('山田太郎');
+    expect(guessNameFromFolder('鈴木 花子（相続）')).toBe('鈴木 花子');
+    expect(guessNameFromFolder('株式会社ABC様')).toBe('株式会社ABC');
+    const root = path.join(tmp, 'clients');
+    for (const f of ['山田太郎_離婚', '_未振分', '書式', '田中一郎']) fs.mkdirSync(path.join(root, f), { recursive: true });
+    const cands = await onedriveCandidates();
+    expect(cands.map((c) => c.name)).toEqual(['山田太郎', '田中一郎']);
+    const r = applyImport(cands);
+    expect(r.created).toBe(2);
+    const again = await onedriveCandidates();
+    expect(again.every((c) => c.existingClientId)).toBe(true);
+  });
+});

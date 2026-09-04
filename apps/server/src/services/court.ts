@@ -1,7 +1,7 @@
 import { and, eq, gt, inArray, lt, desc } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import * as cal from '../integrations/calendar.js';
-import { classifyEventTitle, titleMentionsClient, formatJaDateTime, familyName, type EventKind, type NextHearingInput } from '@lcm/shared';
+import { classifyEventTitle, titleMentionsClient, isNonClientTitle, formatJaDateTime, familyName, type EventKind, type NextHearingInput } from '@lcm/shared';
 import { upsertAlert, resolveAlert, resolveAlertsByKeyPrefix } from './alerts.js';
 import { storage } from '../integrations/storage.js';
 import { clientFolder } from './attachments.js';
@@ -23,9 +23,13 @@ export async function syncCalendar(): Promise<{ synced: number }> {
     let kind: EventKind = e.tag.kind ?? classifyEventTitle(e.title);
     let clientId = e.tag.clientId ?? null;
     let caseId = e.tag.caseId ?? null;
-    if (!clientId) {
-      const hit = clients.find((c) => titleMentionsClient(e.title, [c.name, familyName(c.name), ...c.aliases]));
-      if (hit) clientId = hit.id;
+    if (!clientId && !isNonClientTitle(e.title)) {
+      // 姓が長い順に照合し、同姓の依頼者は別名（フルネーム等）で区別できるようにする
+      const hit = clients
+        .map((c) => ({ c, names: [c.name, familyName(c.name), ...c.aliases] }))
+        .sort((a, b) => Math.max(...b.names.map((n) => n.length)) - Math.max(...a.names.map((n) => n.length)))
+        .find((x) => titleMentionsClient(e.title, x.names));
+      if (hit) clientId = hit.c.id;
     }
     if (clientId && !caseId) {
       const active = d.select().from(schema.cases).where(and(eq(schema.cases.clientId, clientId), eq(schema.cases.status, 'active'))).orderBy(desc(schema.cases.updatedAt)).get();
