@@ -260,3 +260,8 @@ export async function deltaChildren(folderPath: string, deltaLink?: string | nul
 export async function meProfile(): Promise<{ displayName?: string; mail?: string; userPrincipalName?: string }> {
   return graph('/me');
 }
+
+/** 接続情報の変更後にクライアントを作り直す */
+export function resetMsalClient() {
+  app = null;
+}

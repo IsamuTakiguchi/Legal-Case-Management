@@ -26,11 +26,13 @@ LINE公式アカウント・Chatwork・Gmail に分散した依頼者とのや�
 
 ## セットアップ（概要）
 
-1. `.env.example` を `.env` にコピーし、[docs/setup](docs/setup/) の手順で各サービスのキーを取得して記入
-2. `docker compose up -d --build`（事務所 PC なら `--profile tunnel` で cloudflared も起動）
-3. ブラウザで `http://localhost:8787` を開き、`APP_PASSWORD` でログイン
-4. 設定画面で Google と OneDrive に接続 → 「Gmail 送信済みを取込」→「文体プロファイルを生成」
-5. LINE Developers と Chatwork に Webhook URL を登録（設定画面に表示されます）
+1. Docker Desktop を入れて、`scripts/setup.ps1`（Windows）または `scripts/setup.sh`（Mac）を実行
+2. ブラウザで `http://localhost:8787` を開き、決めたパスワードでログイン
+3. 左メニューの **初期設定** で各サービスのキーを貼り付け → 保存 → 接続テスト（Google / Microsoft は「接続」ボタンで同意）
+4. 初期設定画面に表示される Webhook URL を LINE Developers と Chatwork に登録
+5. 設定画面で「Gmail 送信済みを取込」→「文体プロファイルを生成」
+
+キーの取得手順は [docs/setup](docs/setup/) にあります。
 
 詳細は [docs/setup/deploy.md](docs/setup/deploy.md) を参照してください。
 

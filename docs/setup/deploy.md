@@ -11,18 +11,25 @@
 
 どちらも OneDrive へは Microsoft Graph API 経由で書き込むため、PC の同期フォルダは不要です（A で同期フォルダに直接書きたい場合は `STORAGE_BACKEND=local` にして `docker-compose.yml` のボリュームを有効にします）。
 
-## 共通の準備
+## 最短手順（推奨）
 
-1. リポジトリを取得し、`.env.example` を `.env` にコピー
-2. 各サービスのキーを取得して `.env` に記入
-   - [LINE公式アカウント](line.md)
-   - [Chatwork](chatwork.md)
-   - [Google（Gmail・カレンダー）](google.md)
-   - [Zoom](zoom.md)
-   - [OneDrive for Business](onedrive.md)
-   - Anthropic: [Console](https://console.anthropic.com/) で API キーを発行し `ANTHROPIC_API_KEY` に設定
-3. `APP_PASSWORD`（ログイン用）と `SESSION_SECRET`（32 文字以上のランダム文字列）を設定
-4. `PUBLIC_BASE_URL` に公開 URL（末尾スラッシュなし）を設定。Google / Microsoft のリダイレクト URI はこの URL を基に作られます
+1. リポジトリを取得（ブランチ `claude/unified-communication-manager-cidsxx`）
+2. 起動スクリプトを実行（ログイン用パスワードを聞かれます）
+   - Windows: PowerShell で `scripts\setup.ps1`
+   - Mac / Linux: `bash scripts/setup.sh`
+3. ブラウザで `http://localhost:8787` を開いてログイン → 左メニュー **初期設定**
+4. 各サービスのキーを貼り付けて「保存」→「接続テスト」。Google と Microsoft は保存後に「接続」ボタンで同意
+5. 初期設定画面に表示される Webhook URL を LINE Developers と Chatwork に登録
+
+キーの取得方法は各手順書を参照してください: [LINE公式](line.md) / [Chatwork](chatwork.md) / [Google](google.md) / [Zoom](zoom.md) / [OneDrive](onedrive.md)。Anthropic は [Console](https://console.anthropic.com/) で API キーを発行します。
+
+`.env` に直接書く方法も引き続き使えます（環境変数より画面で保存した値が優先されます）。
+
+## 共通の準備（手動で行う場合）
+
+1. `.env.example` を `.env` にコピー
+2. `APP_PASSWORD`（ログイン用）と `SESSION_SECRET`（32 文字以上のランダム文字列）を設定
+3. `PUBLIC_BASE_URL` に公開 URL（末尾スラッシュなし）を設定。Google / Microsoft のリダイレクト URI と Webhook URL はこの URL を基に作られます（初期設定画面からも変更可）
 
 ## A. 事務所 PC ＋ Cloudflare Tunnel
 

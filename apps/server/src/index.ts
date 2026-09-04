@@ -17,6 +17,8 @@ import { taskRoutes } from './routes/tasks.js';
 import { schedulingRoutes } from './routes/scheduling.js';
 import { fileRoutes } from './routes/files.js';
 import { settingsRoutes } from './routes/settings.js';
+import { setupRoutes } from './routes/setup.js';
+import { applyCredentialOverrides } from './services/credentials.js';
 import { startJobs } from './jobs/index.js';
 import { ZodError } from 'zod';
 
@@ -42,6 +44,7 @@ export function createApp() {
   api.route('/', schedulingRoutes);
   api.route('/', fileRoutes);
   api.route('/', settingsRoutes);
+  api.route('/', setupRoutes);
   app.route('/api', api);
 
   // 静的ファイル（ビルド済み web）＋ SPA フォールバック
@@ -62,6 +65,7 @@ async function main() {
   const e = env();
   ensureDataDirSafe();
   openDatabase();
+  applyCredentialOverrides();
   ensurePasswordHash();
   const app = createApp();
   serve({ fetch: app.fetch, port: e.PORT, hostname: '0.0.0.0' }, (info) => {

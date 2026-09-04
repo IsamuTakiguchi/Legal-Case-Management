@@ -14,6 +14,7 @@ import Tasks from './pages/Tasks';
 import Alerts from './pages/Alerts';
 import Files from './pages/Files';
 import Settings from './pages/Settings';
+import Setup from './pages/Setup';
 
 const NAV = [
   { to: '/', label: 'ダッシュボード', icon: '◎' },
@@ -24,6 +25,7 @@ const NAV = [
   { to: '/alerts', label: '要確認', icon: '⚠' },
   { to: '/files', label: 'ファイル', icon: '📎' },
   { to: '/forms', label: '書式ライブラリ', icon: '📄' },
+  { to: '/setup', label: '初期設定', icon: '🔌' },
   { to: '/settings', label: '設定', icon: '⚙' },
 ];
 
@@ -74,6 +76,7 @@ export default function App() {
           <Route path="/alerts" element={<Alerts />} />
           <Route path="/files" element={<Files />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/setup" element={<Setup />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

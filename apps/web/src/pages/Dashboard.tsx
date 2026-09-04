@@ -15,12 +15,23 @@ interface DashboardData {
 
 export default function Dashboard() {
   const q = useQuery({ queryKey: ['dashboard'], queryFn: () => api.get<DashboardData>('/dashboard'), refetchInterval: 60_000 });
+  const status = useQuery({ queryKey: ['status'], queryFn: () => api.get<{ anthropic: { configured: boolean }; google: { connected: boolean }; microsoft: { connected: boolean } }>('/status') });
   const d = q.data;
   if (!d) return <div className="text-slate-500">読み込み中…</div>;
+  const needsSetup = status.data && (!status.data.anthropic.configured || !status.data.google.connected || !status.data.microsoft.connected);
   const now = Date.now();
   return (
     <div className="space-y-6">
       <h1 className="text-xl font-bold">ダッシュボード</h1>
+      {needsSetup && (
+        <div className="card border-yellow-300 bg-yellow-50 text-sm">
+          まだ接続していないサービスがあります。{' '}
+          <Link to="/setup" className="font-semibold text-blue-700 hover:underline">
+            初期設定
+          </Link>{' '}
+          からキーを貼り付けて接続テストを行ってください。
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <Stat label="未返信の会話" value={d.needsReply} to="/inbox?needsReply=1" />
         <Stat label="返信待ち" value={d.waiting.length} to="/tasks" />

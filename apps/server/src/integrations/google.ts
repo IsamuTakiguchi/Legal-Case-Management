@@ -102,3 +102,8 @@ export function gmailApi() {
 export function calendarApi() {
   return google.calendar({ version: 'v3', auth: googleClient() });
 }
+
+/** 接続情報の変更後にクライアントを作り直す */
+export function resetGoogleClient() {
+  authedClient = null;
+}

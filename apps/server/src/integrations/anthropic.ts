@@ -68,3 +68,7 @@ export async function generateStructured<T extends z.ZodType>(opts: {
   if (!res.parsed_output) throw new Error('構造化出力の解析に失敗しました');
   return res.parsed_output as z.infer<T>;
 }
+
+export function resetAnthropicClient() {
+  client = null;
+}

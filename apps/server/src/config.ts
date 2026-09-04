@@ -46,15 +46,34 @@ const envSchema = z.object({
 export type Env = z.infer<typeof envSchema>;
 
 let cached: Env | null = null;
+/** 画面から保存した接続情報（DB に暗号化保存）で環境変数を上書きする */
+let overrides: Record<string, string> = {};
+
 export function env(): Env {
   if (!cached) {
-    const parsed = envSchema.safeParse(process.env);
+    const merged: Record<string, string | undefined> = { ...process.env };
+    for (const [k, v] of Object.entries(overrides)) if (v !== '') merged[k] = v;
+    const parsed = envSchema.safeParse(merged);
     if (!parsed.success) {
       throw new Error(`環境変数が不正です: ${parsed.error.message}`);
     }
     cached = parsed.data;
   }
   return cached;
+}
+
+export function setEnvOverrides(values: Record<string, string>) {
+  overrides = { ...values };
+  cached = null;
+}
+
+export function envOverrides(): Record<string, string> {
+  return { ...overrides };
+}
+
+/** .env（環境変数）側に値があるか */
+export function envHasValue(key: string): boolean {
+  return !!process.env[key];
 }
 
 export function dataDir(): string {
