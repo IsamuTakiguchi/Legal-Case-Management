@@ -6,10 +6,10 @@ export const SETTING_DEFAULTS: Record<string, string> = {
   lawyer_name: '瀧口勇',
   signature_gmail: `***********************************
 弁護士・中小企業診断士 瀧口勇
-〒630-8213 奈良市登大路５番地 修徳ビル１階
+〒630-8213 奈良市登大路町５番地 修徳ビル１階
 登大路総合法律事務所
 ＨＰ http://www.noboriohji.com/
-電話 0742-23-8710 FAX 0742-23-8699
+電話 0742（23）8710 FAX 0742（23）8699
 Mail takiguchi@noborilaw.com
 ***********************************`,
   access_note: `なお、契約車以外の駐車場がございませんので、お車でお越しの際は、修徳ビル隣のモータープール(有料)をご利用ください。
@@ -29,7 +29,7 @@ http://www.noboriohji.com/access/`,
   share_link_expiry_days: '30',
   share_link_scope: 'anonymous',
   morning_digest_hour: '8',
-  office_location: '登大路総合法律事務所（奈良市登大路5番地 修徳ビル1階）',
+  office_location: '登大路総合法律事務所（奈良市登大路町5番地 修徳ビル1階）',
   holidays: '',
   line_manual_send_note: 'ファイルは LINE公式アカウントの管理画面（チャット）から手動でお送りください。',
 };
