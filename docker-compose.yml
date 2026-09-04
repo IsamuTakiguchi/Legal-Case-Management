@@ -1,0 +1,30 @@
+services:
+  app:
+    build: .
+    image: legal-case-management:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      PORT: 8787
+      TZ: Asia/Tokyo
+    volumes:
+      - app-data:/data
+      # 事務所 PC で OneDrive 同期フォルダに直接書く場合（STORAGE_BACKEND=local）
+      # - "C:/Users/you/OneDrive - 事務所/依頼者:/mnt/onedrive/依頼者"
+    ports:
+      - "8787:8787"
+
+  # 公開 URL（LINE / Chatwork の Webhook 受信用）。Cloudflare Zero Trust で作ったトンネルのトークンを .env の CLOUDFLARE_TUNNEL_TOKEN に設定
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      - app
+    profiles: ["tunnel"]
+
+volumes:
+  app-data:

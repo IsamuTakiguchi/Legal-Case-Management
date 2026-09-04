@@ -1,0 +1,21 @@
+{
+  "name": "legal-case-management",
+  "private": true,
+  "version": "0.1.0",
+  "description": "依頼者との LINE公式・Chatwork・Gmail のやり取りを統合管理する法律事務所向けアプリ",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @lcm/shared build && pnpm -r --parallel run dev",
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm --filter @lcm/shared build && pnpm -r run test",
+    "start": "pnpm --filter @lcm/server run start",
+    "db:generate": "pnpm --filter @lcm/server run db:generate"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  }
+}
