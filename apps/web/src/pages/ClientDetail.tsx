@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import { channelBadge, channelLabel, fmtDateTime, fmtBytes } from '../lib/format';
 import { ClientForm, type ClientRow } from './Clients';
 import { EVENT_KIND_LABEL, TASK_STATUS_LABEL, type EventKind, type TaskStatus } from '@lcm/shared';
+import { CaseStatusBadge } from './Cases';
 
 interface Detail extends ClientRow {
   folder: string;
@@ -88,6 +89,7 @@ export default function ClientDetail() {
                 <Link to={`/cases/${k.id}`} className="text-blue-700 hover:underline">
                   {k.title}
                 </Link>
+                <CaseStatusBadge status={k.status} />
                 <span className="badge badge-gray">{k.caseTypeLabel}</span>
                 {k.stage && <span className="text-xs text-slate-500">{k.stage}</span>}
                 {k.nextHearingAt && <span className="ml-auto text-xs text-slate-500">次回 {fmtDateTime(k.nextHearingAt)}</span>}

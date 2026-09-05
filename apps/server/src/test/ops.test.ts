@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { gunzipSync } from 'node:zlib';
+import { eq, inArray } from 'drizzle-orm';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lcm-ops-'));
 process.env.SESSION_SECRET = 'test-session-secret';
@@ -16,6 +17,9 @@ const { runBackup, listLocalBackups, localBackupPath } = await import('../servic
 const { isAllowedContentUrl } = await import('../channels/line.js');
 const { loginLockedFor, recordLoginFailure, clearLoginFailures } = await import('../auth/index.js');
 const { createApp } = await import('../index.js');
+const { listCases, activeCasesForClient } = await import('../services/cases.js');
+const { setSetting } = await import('../services/settings.js');
+const { loginAllowedEmails } = await import('../routes/auth.js');
 
 beforeAll(() => openTestDatabase());
 afterAll(() => closeDatabase());
@@ -39,6 +43,34 @@ describe('デモデータ', () => {
     expect(db().select().from(schema.clients).all().length).toBe(before);
     expect(db().select().from(schema.messages).all().length).toBe(0);
     expect(db().select().from(schema.creditorEvents).all().length).toBe(0);
+  });
+});
+
+describe('事件の進捗区分', () => {
+  it('相談・進行事件・残務処理・終了事件で絞り込め、自動割当は進行事件を優先する', () => {
+    const client = db().insert(schema.clients).values({ name: '区分 太郎' }).returning().get();
+    const mk = (title: string, status: string) => db().insert(schema.cases).values({ clientId: client.id, title, status }).returning().get();
+    const consult = mk('相談', 'consultation');
+    const active = mk('進行', 'active');
+    const wrap = mk('残務', 'wrapup');
+    const closed = mk('終了', 'closed');
+    expect(listCases({ clientId: client.id, status: 'consultation' }).map((c) => c.id)).toEqual([consult.id]);
+    expect(listCases({ clientId: client.id, status: 'wrapup' }).map((c) => c.id)).toEqual([wrap.id]);
+    expect(listCases({ clientId: client.id, status: 'closed' }).map((c) => c.id)).toEqual([closed.id]);
+    expect(listCases({ clientId: client.id, status: 'open' }).map((c) => c.id).sort()).toEqual([consult.id, active.id, wrap.id].sort());
+    expect(activeCasesForClient(client.id)[0].id).toBe(active.id);
+    db().delete(schema.cases).where(inArray(schema.cases.id, [consult.id, active.id, wrap.id, closed.id])).run();
+    db().delete(schema.clients).where(eq(schema.clients.id, client.id)).run();
+  });
+});
+
+describe('Google ログインの許可アドレス', () => {
+  it('設定が空なら接続アカウント、設定があればその一覧（小文字化・区切り対応）', () => {
+    setSetting('login_google_emails', '');
+    expect(loginAllowedEmails()).toEqual([]); // 未接続
+    setSetting('login_google_emails', 'Isamu.Lawyer@gmail.com\nstaff@example.com, third@example.com');
+    expect(loginAllowedEmails()).toEqual(['isamu.lawyer@gmail.com', 'staff@example.com', 'third@example.com']);
+    setSetting('login_google_emails', '');
   });
 });
 

@@ -1,18 +1,38 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { createSession, destroySession, isAuthenticated, verifyPassword, setPassword, requireAuth, cookieSecure, currentSessionId, clientIp, loginLockedFor, recordLoginFailure, clearLoginFailures } from '../auth/index.js';
-import { googleAuthUrl, handleGoogleCallback, disconnectGoogle } from '../integrations/google.js';
+import { googleAuthUrl, handleGoogleCallback, disconnectGoogle, googleLoginUrl, verifyGoogleLogin, googleAccount } from '../integrations/google.js';
+import { isConfigured } from '../config.js';
+import { getSetting } from '../services/settings.js';
 import { msAuthUrl, handleMsCallback, disconnectMs, startDeviceCodeFlow, deviceCodeStatus } from '../integrations/onedrive.js';
 import { saveCredentials } from '../services/credentials.js';
 import { resetIntegrationCaches } from '../integrations/reset.js';
 import { randomToken } from '../crypto.js';
-import { getCookie, setCookie } from 'hono/cookie';
+import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { logger } from '../logger.js';
 import { runOnboardingAfterGoogle, runOnboardingAfterMicrosoft } from '../services/onboarding.js';
 
 export const authRoutes = new Hono();
 
-authRoutes.get('/me', (c) => c.json({ authenticated: isAuthenticated(c) }));
+authRoutes.get('/me', (c) => c.json({ authenticated: isAuthenticated(c), googleLogin: isConfigured('google') }));
+
+/** Google でログインできるメールアドレス一覧（設定が空なら「Google に接続」したアカウント） */
+export function loginAllowedEmails(): string[] {
+  const configured = getSetting('login_google_emails')
+    .split(/[\s,、]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  if (configured.length) return configured;
+  const connected = googleAccount();
+  return connected ? [connected.toLowerCase()] : [];
+}
+
+authRoutes.get('/google/login/start', (c) => {
+  if (!isConfigured('google')) return c.redirect('/login?error=google_not_configured');
+  if (loginAllowedEmails().length === 0) return c.redirect('/login?error=no_allowed_email');
+  const state = stateCookie(c, 'oauth_login_google');
+  return c.redirect(googleLoginUrl(state));
+});
 
 authRoutes.post('/login', async (c) => {
   const ip = clientIp(c);
@@ -56,6 +76,29 @@ authRoutes.get('/google/start', requireAuth, (c) => {
 authRoutes.get('/google/callback', async (c) => {
   const state = c.req.query('state');
   const code = c.req.query('code');
+  // ---- ログイン用（同じリダイレクト URI を共有し、state の Cookie で区別） ----
+  const loginState = getCookie(c, 'oauth_login_google');
+  if (code && state && loginState && state === loginState) {
+    deleteCookie(c, 'oauth_login_google', { path: '/' });
+    const ip = clientIp(c);
+    if (loginLockedFor(ip) > 0) return c.redirect('/login?error=locked');
+    try {
+      const email = await verifyGoogleLogin(code);
+      if (!email || !loginAllowedEmails().includes(email)) {
+        recordLoginFailure(ip);
+        logger.warn({ ip, email }, 'Google ログイン拒否（許可されていないアカウント）');
+        return c.redirect(`/login?error=not_allowed&email=${encodeURIComponent(email ?? '')}`);
+      }
+      clearLoginFailures(ip);
+      createSession(c);
+      logger.info({ email }, 'Google ログイン');
+      return c.redirect('/');
+    } catch (err) {
+      logger.error({ err }, 'Google ログイン失敗');
+      return c.redirect('/login?error=google_failed');
+    }
+  }
+  // ---- Gmail・カレンダー接続用 ----
   if (!code || !state || state !== getCookie(c, 'oauth_state_google')) return c.text('不正なリクエストです', 400);
   if (!isAuthenticated(c)) return c.text('ログインしてから再度お試しください', 401);
   try {
