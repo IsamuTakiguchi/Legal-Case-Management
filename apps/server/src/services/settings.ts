@@ -32,6 +32,13 @@ http://www.noboriohji.com/access/`,
   web_meeting_provider: 'auto',
   office_location: '登大路総合法律事務所（奈良市登大路町5番地 修徳ビル1階）',
   holidays: '',
+  backup_folder: '_システム/バックアップ',
+  backup_keep_generations: '14',
+  backup_local_keep: '7',
+  digest_title: 'おはようございます。本日のまとめ',
+  digest_footer: '',
+  digest_max_items: '15',
+  alert_notify_title: '確認が必要な事項',
   line_manual_send_note: 'ファイルは LINE公式アカウントの管理画面（チャット）から手動でお送りください。',
 };
 

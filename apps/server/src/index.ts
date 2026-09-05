@@ -2,6 +2,8 @@ import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { logger as honoLogger } from 'hono/logger';
+import { bodyLimit } from 'hono/body-limit';
+import { secureHeaders } from 'hono/secure-headers';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,11 +27,35 @@ import { ZodError } from 'zod';
 export function createApp() {
   const app = new Hono();
   app.use('*', honoLogger((msg) => logger.debug(msg)));
+  app.use(
+    '*',
+    secureHeaders({
+      contentSecurityPolicy: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", 'data:', 'blob:'],
+        connectSrc: ["'self'"],
+        fontSrc: ["'self'", 'data:'],
+        frameAncestors: ["'none'"],
+        formAction: ["'self'"],
+        baseUri: ["'self'"],
+      },
+      referrerPolicy: 'strict-origin-when-cross-origin',
+    }),
+  );
+  // 本文サイズの上限。Excel 取込だけ大きめに許可
+  const LIMIT_DEFAULT = 2 * 1024 * 1024;
+  const LIMIT_UPLOAD = 25 * 1024 * 1024;
+  app.use('*', (c, next) => bodyLimit({ maxSize: c.req.path.includes('/creditors/import') ? LIMIT_UPLOAD : LIMIT_DEFAULT, onError: (cc) => cc.json({ error: 'リクエストが大きすぎます' }, 413) })(c, next));
 
   app.onError((err, c) => {
     if (err instanceof ZodError) return c.json({ error: '入力が不正です', issues: err.issues }, 400);
     logger.error({ err, path: c.req.path }, 'リクエスト処理でエラー');
-    return c.json({ error: (err as Error).message ?? String(err) }, 500);
+    // 認証済みの操作画面には原因を返し、未認証経路には詳細を出さない
+    const authed = c.req.path.startsWith('/api/') && !c.req.path.startsWith('/api/auth/login');
+    const message = authed ? ((err as Error).message ?? String(err)).slice(0, 500) : 'サーバーでエラーが発生しました';
+    return c.json({ error: message }, 500);
   });
 
   app.get('/healthz', (c) => c.json({ ok: true }));

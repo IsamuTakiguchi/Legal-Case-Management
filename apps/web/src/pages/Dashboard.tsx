@@ -11,6 +11,7 @@ interface DashboardData {
   needsReply: number;
   todaysEvents: { id: number; title: string; startAt: string; kind: string; clientName: string | null; location: string | null }[];
   lineQuota: { used: number; limit: number } | null;
+  demo?: boolean;
 }
 
 export default function Dashboard() {
@@ -23,6 +24,15 @@ export default function Dashboard() {
   return (
     <div className="space-y-6">
       <h1 className="text-xl font-bold">ダッシュボード</h1>
+      {d.demo && (
+        <div className="card border-orange-300 bg-orange-50 text-sm">
+          デモデータを表示中です（架空の依頼者名には【デモ】が付いています）。本番運用を始める前に{' '}
+          <Link to="/settings" className="font-semibold text-blue-700 hover:underline">
+            設定 → デモデータ
+          </Link>{' '}
+          から削除してください。
+        </div>
+      )}
       {needsSetup && (
         <div className="card border-yellow-300 bg-yellow-50 text-sm">
           まだ接続していないサービスがあります。{' '}

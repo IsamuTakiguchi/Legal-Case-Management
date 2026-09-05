@@ -28,6 +28,7 @@ export interface StorageBackend {
   move(file: { itemId?: string | null; path: string }, newFolderPath: string): Promise<StoredFile>;
   list(folderPath: string): Promise<ListedFile[]>;
   shareLink?(file: { itemId?: string | null; path: string }, expiresAt: Date): Promise<string>;
+  remove(file: { itemId?: string | null; path: string }): Promise<void>;
 }
 
 class OneDriveStorage implements StorageBackend {
@@ -67,6 +68,9 @@ class OneDriveStorage implements StorageBackend {
   async shareLink(file: { itemId?: string | null; path: string }, expiresAt: Date): Promise<string> {
     return od.createShareLink(await this.resolveId(file), { scope: 'anonymous', expiresAt });
   }
+  async remove(file: { itemId?: string | null; path: string }): Promise<void> {
+    await od.deleteItem(await this.resolveId(file));
+  }
 }
 
 /** OneDrive 同期フォルダに直接書き込む（事務所 PC で動かす場合の代替） */
@@ -81,7 +85,7 @@ export class LocalFolderStorage implements StorageBackend {
   }
   private abs(p: string) {
     const abs = path.resolve(this.base, p.replace(/^\/+/, ''));
-    if (!abs.startsWith(this.base)) throw new Error('不正なパスです');
+    if (abs !== this.base && !abs.startsWith(this.base + path.sep)) throw new Error('不正なパスです');
     return abs;
   }
   async put(folderPath: string, filename: string, data: Buffer): Promise<StoredFile> {
@@ -119,6 +123,9 @@ export class LocalFolderStorage implements StorageBackend {
       out.push({ name: e.name, path: od.joinPath(folderPath, e.name), isFolder: e.isDirectory(), size: st?.size, modifiedAt: st?.mtime.toISOString() });
     }
     return out;
+  }
+  async remove(file: { path: string }): Promise<void> {
+    await fs.unlink(this.abs(file.path));
   }
 }
 

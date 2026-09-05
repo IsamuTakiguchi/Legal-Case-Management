@@ -23,7 +23,7 @@ interface SetupData {
   state: { anthropic: boolean; line: boolean; chatwork: boolean; google: { configured: boolean; connected: boolean }; microsoft: { configured: boolean; connected: boolean; mode?: string }; zoom: boolean };
 }
 
-const DOC_BASE = 'https://github.com/IsamuTakiguchi/Legal-Case-Management/blob/claude/unified-communication-manager-cidsxx/docs/setup/';
+const DOC_BASE = 'https://github.com/IsamuTakiguchi/Legal-Case-Management/blob/main/docs/setup/';
 
 const CONSOLE: Record<string, { label: string; url: string }[]> = {
   anthropic: [{ label: 'Anthropic Console（API キー）', url: 'https://console.anthropic.com/settings/keys' }],
@@ -35,21 +35,15 @@ const CONSOLE: Record<string, { label: string; url: string }[]> = {
     { label: 'Chatwork API トークン', url: 'https://www.chatwork.com/service/packages/chatwork/subpackages/api/token.php' },
     { label: 'Chatwork Webhook 設定', url: 'https://www.chatwork.com/service/packages/chatwork/subpackages/webhook/list.php' },
   ],
-  google: [
-    { label: '① Gmail と Calendar の API を一括で有効化', url: 'https://console.cloud.google.com/apis/enableflow?apiid=gmail.googleapis.com,calendar-json.googleapis.com' },
-    { label: '② OAuth 同意画面（内部 or 本番に公開）', url: 'https://console.cloud.google.com/auth/overview' },
-    { label: '③ OAuth クライアントを作成（ウェブ）', url: 'https://console.cloud.google.com/apis/credentials/oauthclient' },
-  ],
   microsoft: [{ label: 'Microsoft Entra アプリの登録', url: 'https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade' }],
   zoom: [{ label: 'Zoom App Marketplace（Build App）', url: 'https://marketplace.zoom.us/develop/create' }],
 };
 
 const STEPS: Record<string, string[]> = {
-  general: ['アプリを公開している URL を入力します（Cloudflare Tunnel や Fly.io の URL）。', 'この URL を基に、下の Webhook URL とリダイレクト URI が決まります。'],
+  general: ['Railway / Render / Fly.io では自動で認識されるため、通常は入力不要です（自前のドメインや Cloudflare Tunnel を使う場合のみ入力）。', 'この URL を基に、下の Webhook URL とリダイレクト URI が決まります。'],
   anthropic: ['console.anthropic.com で API キーを発行して貼り付けます。', '「接続テスト」で短い応答が返れば完了です。'],
   line: ['LINE Developers → 該当チャネル →「チャネル基本設定」タブにある「チャネル ID」と「チャネルシークレット」の 2 つを貼り付けて保存。', '「接続テスト」を押すと、アクセストークンの発行と Webhook URL の登録・疎通確認まで自動で行います（トークンは期限前に自動更新）。', 'あとは LINE Developers の「Webhook の利用」を ON、LINE Official Account Manager → 応答設定で「チャット」を ON にするだけです。'],
   chatwork: ['Chatwork → サービス連携 → API Token を貼り付けます。', '（任意）サービス連携 → Webhook で下の URL を登録し、表示されたトークンを貼り付けると即時受信になります。'],
-  google: ['①のリンクで 2 つの API をまとめて有効化（プロジェクトがなければその場で作成）。', '②で同意画面を作成: Workspace なら「内部」、個人 Gmail なら「外部」で作って「本番環境に公開」。', '③でクライアント（ウェブ アプリケーション）を作り、下のリダイレクト URI を貼り付け。表示された ID とシークレットをここに貼って保存 →「Google に接続」。'],
   microsoft: ['最短: 下の「簡易接続（アプリ登録なし）」を押し、表示されたコードを microsoft.com/devicelogin で入力して事務所の Microsoft アカウントでサインイン。', '簡易接続がテナントの設定で拒否される場合のみ、Entra でアプリ登録（リダイレクト URI、シークレット、Files.ReadWrite / User.Read / offline_access）を行い、下の欄に貼り付けます。'],
   zoom: ['任意です。未設定のときは Google 接続済みなら WEB 相談の確定時に Google Meet の URL を自動発行して送ります。', 'Zoom を使う場合: Zoom App Marketplace → Build App → Server-to-Server OAuth → Account ID / Client ID / Client Secret を貼り付け → Scopes に meeting:write:admin と meeting:read:admin を追加して Activate。'],
 };
@@ -121,12 +115,16 @@ export default function Setup() {
                 手順書を開く
               </a>
             </div>
-            <ol className="ml-5 list-decimal space-y-0.5 text-xs text-slate-600">
-              {STEPS[s.id]?.map((t, i) => (
-                <li key={i}>{t}</li>
-              ))}
-            </ol>
-            {CONSOLE[s.id] && (
+            {s.id === 'google' ? (
+              <GoogleGuide redirectUri={d.urls.googleRedirect} />
+            ) : (
+              <ol className="ml-5 list-decimal space-y-0.5 text-xs text-slate-600">
+                {STEPS[s.id]?.map((t, i) => (
+                  <li key={i}>{t}</li>
+                ))}
+              </ol>
+            )}
+            {CONSOLE[s.id] && s.id !== 'google' && (
               <div className="flex flex-wrap gap-2 text-xs">
                 {CONSOLE[s.id].map((l) => (
                   <a key={l.url} href={l.url} target="_blank" rel="noreferrer" className="btn btn-sm">
@@ -137,7 +135,6 @@ export default function Setup() {
             )}
             {s.id === 'line' && <Url label="Webhook URL" value={d.urls.lineWebhook} />}
             {s.id === 'chatwork' && <Url label="Webhook URL" value={d.urls.chatworkWebhook} />}
-            {s.id === 'google' && <Url label="リダイレクト URI" value={d.urls.googleRedirect} />}
             {s.id === 'microsoft' && <Url label="リダイレクト URI" value={d.urls.microsoftRedirect} />}
             <div className="grid gap-2 md:grid-cols-2">
               {s.fields.map((f) => (
@@ -192,6 +189,92 @@ export default function Setup() {
           <li>設定 → バックグラウンド処理 → 「Gmail 受信」「カレンダー同期」を今すぐ実行して動作確認</li>
         </ol>
       </section>
+    </div>
+  );
+}
+
+/** Google だけはアプリ登録を省略できないため、押すボタンをそのまま書いたガイドを出す */
+const GOOGLE_STEPS: { title: string; url?: string; linkLabel?: string; actions: string[]; note?: string }[] = [
+  {
+    title: 'API を有効にする',
+    url: 'https://console.cloud.google.com/apis/enableflow?apiid=gmail.googleapis.com,calendar-json.googleapis.com',
+    linkLabel: 'Gmail API と Calendar API を一括で有効化',
+    actions: ['リンクを開き、事務所の Google アカウントでログイン', 'プロジェクトの選択画面が出たら「新しいプロジェクト」→ 名前は任意（例: 事務所アプリ）→「作成」', '「次へ」→「有効にする」を押す'],
+    note: 'すでにプロジェクトがある場合はそれを選んで構いません。',
+  },
+  {
+    title: '同意画面を作る',
+    url: 'https://console.cloud.google.com/auth/overview',
+    linkLabel: 'OAuth 同意画面（Google Auth Platform）',
+    actions: [
+      '「開始」を押す',
+      'アプリ名: 事務所アプリ（任意）、ユーザーサポートメール: 自分のアドレス →「次へ」',
+      '対象: Google Workspace を使っていれば「内部」、個人の Gmail なら「外部」→「次へ」',
+      '連絡先メール: 自分のアドレス →「次へ」→ 同意にチェック →「作成」',
+    ],
+    note: '「外部」にした場合は、左メニュー「対象」→「アプリを公開」を押して本番にしてください。テストのままだと 7 日で接続が切れます。',
+  },
+  {
+    title: 'クライアント ID を作る',
+    url: 'https://console.cloud.google.com/auth/clients/create',
+    linkLabel: 'OAuth クライアントを作成',
+    actions: ['アプリケーションの種類: 「ウェブ アプリケーション」', '名前: 任意', '「承認済みのリダイレクト URI」→「URI を追加」→ 下のリダイレクト URI を貼り付け', '「作成」を押す'],
+  },
+  {
+    title: 'ID とシークレットを貼る',
+    actions: ['作成後の画面に「クライアント ID」と「クライアント シークレット」が表示されます', 'この画面の下の欄にそれぞれ貼り付けて「保存」', '「Google に接続」→ 事務所のアカウントを選び、権限を許可'],
+    note: '「このアプリは Google で確認されていません」と出たら「詳細」→「（安全ではないページ）に移動」で進めます（自分で作ったアプリなので問題ありません）。',
+  },
+];
+
+function GoogleGuide({ redirectUri }: { redirectUri: string }) {
+  const KEY = 'lcm_google_guide_done';
+  const [done, setDone] = useState<boolean[]>(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem(KEY) ?? '[]') as boolean[];
+      return GOOGLE_STEPS.map((_, i) => !!v[i]);
+    } catch {
+      return GOOGLE_STEPS.map(() => false);
+    }
+  });
+  const toggle = (i: number) => {
+    const next = done.map((v, j) => (j === i ? !v : v));
+    setDone(next);
+    try {
+      localStorage.setItem(KEY, JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+  };
+  return (
+    <div className="space-y-2 text-xs">
+      <div className="text-slate-600">Google だけはアプリ登録を省略できません。上から順に、書いてあるボタンをそのまま押してください（5 分ほど）。</div>
+      {GOOGLE_STEPS.map((st, i) => (
+        <div key={i} className={`rounded border p-2 ${done[i] ? 'border-green-200 bg-green-50' : 'border-slate-200'}`}>
+          <label className="flex cursor-pointer items-center gap-2 font-semibold">
+            <input type="checkbox" checked={done[i]} onChange={() => toggle(i)} />
+            <span>
+              {i + 1}. {st.title}
+            </span>
+            {st.url && (
+              <a href={st.url} target="_blank" rel="noreferrer" className="btn btn-sm ml-auto">
+                ↗ {st.linkLabel}
+              </a>
+            )}
+          </label>
+          <ol className="ml-8 mt-1 list-decimal space-y-0.5 text-slate-700">
+            {st.actions.map((a, j) => (
+              <li key={j}>{a}</li>
+            ))}
+          </ol>
+          {i === 2 && (
+            <div className="ml-6 mt-1">
+              <Url label="リダイレクト URI" value={redirectUri} />
+            </div>
+          )}
+          {st.note && <div className="ml-6 mt-1 text-slate-500">{st.note}</div>}
+        </div>
+      ))}
     </div>
   );
 }

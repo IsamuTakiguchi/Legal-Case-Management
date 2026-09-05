@@ -300,6 +300,10 @@ export async function moveItem(itemId: string, newFolderPath: string, newName?: 
   });
 }
 
+export async function deleteItem(itemId: string): Promise<void> {
+  await graph<void>(`/me/drive/items/${itemId}`, { method: 'DELETE' });
+}
+
 export async function createShareLink(itemId: string, opts: { scope: 'anonymous' | 'organization'; expiresAt?: Date }): Promise<string> {
   const body: Record<string, unknown> = { type: 'view', scope: opts.scope };
   if (opts.expiresAt && opts.scope === 'anonymous') body.expirationDateTime = opts.expiresAt.toISOString();

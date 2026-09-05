@@ -4,6 +4,7 @@ import { notifyMyChat, appUrl } from '../services/notify.js';
 import { todaysEvents } from '../services/court.js';
 import { openAlerts } from '../services/alerts.js';
 import { formatJaDateTime, TASK_STATUS_LABEL, type TaskStatus, EVENT_KIND_LABEL, type EventKind } from '@lcm/shared';
+import { getSetting, getSettingInt } from '../services/settings.js';
 
 /** 毎朝のダイジェストを Chatwork マイチャットへ */
 export async function morningDigest(): Promise<string> {
@@ -33,7 +34,8 @@ export async function morningDigest(): Promise<string> {
   sections.push(`■ 未返信の会話: ${needsReply.length} 件`);
   sections.push(`■ 返信待ち (${waiting.length})`);
   const now = Date.now();
-  for (const r of waiting.slice(0, 15)) {
+  const maxItems = Math.max(1, getSettingInt('digest_max_items', 15));
+  for (const r of waiting.slice(0, maxItems)) {
     const over = r.t.followUpAt && new Date(r.t.followUpAt).getTime() < now ? '【期限超過】' : '';
     sections.push(`  ${over}${r.clientName ? `${r.clientName} / ` : ''}${r.t.title}（${TASK_STATUS_LABEL[r.t.status as TaskStatus]}）`);
   }
@@ -43,8 +45,10 @@ export async function morningDigest(): Promise<string> {
   }
   const alertLines = Object.entries(byType).map(([k, v]) => `  ${labelAlert(k)}: ${v} 件`);
   if (alertLines.length) sections.push(`■ 要確認`, ...alertLines);
+  const footer = getSetting('digest_footer').trim();
+  if (footer) sections.push('', footer);
   sections.push('', appUrl('/'));
-  const text = `[info][title]おはようございます。本日のまとめ[/title]${sections.join('\n')}[/info]`;
+  const text = `[info][title]${getSetting('digest_title') || '本日のまとめ'}[/title]${sections.join('\n')}[/info]`;
   await notifyMyChat(text);
   return text;
 }

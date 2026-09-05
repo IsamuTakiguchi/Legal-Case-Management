@@ -13,6 +13,12 @@ interface Status {
   zoom: { configured: boolean };
   anthropic: { configured: boolean; model: string };
   jobs: { name: string; label: string; cron: string; enabled: boolean; running: boolean; last: { startedAt: string; ok: boolean | null; summary: string | null; error: string | null } | null }[];
+  demo: { seeded: boolean; seededAt: string | null };
+}
+
+interface BackupInfo {
+  local: { name: string; size: number; createdAt: string }[];
+  remoteFolder: string;
 }
 
 const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean }[] = [
@@ -38,6 +44,25 @@ const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean }
   { key: 'web_meeting_provider', label: 'WEB 会議の提供元（auto / zoom / meet）', hint: 'auto は Zoom 設定済みなら Zoom、なければ Google Meet' },
   { key: 'line_manual_send_note', label: 'LINE でファイルを送れない時の案内文', multiline: true },
 ];
+
+const NOTIFY_FIELDS: { key: string; label: string; hint?: string; multiline?: boolean }[] = [
+  { key: 'digest_title', label: '朝ダイジェストの見出し' },
+  { key: 'digest_max_items', label: '朝ダイジェストに載せる返信待ちの最大件数' },
+  { key: 'digest_footer', label: '朝ダイジェストの末尾に付ける文（空なら無し）', multiline: true },
+  { key: 'alert_notify_title', label: '要確認の通知の見出し', hint: '件数が自動で付きます' },
+];
+
+const BACKUP_FIELDS: { key: string; label: string; hint?: string }[] = [
+  { key: 'backup_folder', label: 'OneDrive の保存先（依頼者ルートからの相対パス）' },
+  { key: 'backup_keep_generations', label: 'OneDrive に残す世代数' },
+  { key: 'backup_local_keep', label: 'サーバー内に残す世代数' },
+];
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
 
 export default function Settings() {
   const qc = useQueryClient();
@@ -69,6 +94,26 @@ export default function Settings() {
   const [importChannel, setImportChannel] = useState('line');
   const [pw, setPw] = useState({ current: '', next: '' });
   const changePw = useMutation({ mutationFn: () => api.post('/auth/password', pw), onSuccess: () => { setMsg('パスワードを変更しました'); setPw({ current: '', next: '' }); }, onError: (e) => setMsg((e as Error).message) });
+  const backup = useQuery({ queryKey: ['backup'], queryFn: () => api.get<BackupInfo>('/backup') });
+  const [backupMsg, setBackupMsg] = useState('');
+  const runBackup = useMutation({
+    mutationFn: () => api.post<{ file: string; size: number; remote: { path: string } | null }>('/backup/run'),
+    onSuccess: (r) => {
+      setBackupMsg(r.remote ? `${r.file} を OneDrive（${r.remote.path}）に保存しました` : `${r.file} をサーバー内に保存しました（OneDrive 未接続のため OneDrive には保存していません）`);
+      qc.invalidateQueries({ queryKey: ['backup'] });
+      qc.invalidateQueries({ queryKey: ['status'] });
+    },
+    onError: (e) => setBackupMsg((e as Error).message),
+  });
+  const [demoMsg, setDemoMsg] = useState('');
+  const demo = useMutation({
+    mutationFn: (action: 'seed' | 'clear') => api.post<{ ok: boolean; clients?: number; deleted?: number }>(`/demo/${action}`),
+    onSuccess: (r, action) => {
+      setDemoMsg(action === 'seed' ? `デモデータを投入しました（依頼者 ${r.clients} 名）。受信箱・事件・タスク・要確認を見てみてください。` : `デモデータを削除しました（${r.deleted} 行）`);
+      qc.invalidateQueries();
+    },
+    onError: (e) => setDemoMsg((e as Error).message),
+  });
   const s = status.data;
   return (
     <div className="space-y-6">
@@ -170,6 +215,93 @@ export default function Settings() {
         <button className="btn btn-primary mt-3" onClick={() => save.mutate()} disabled={save.isPending}>
           保存
         </button>
+      </section>
+
+      <section className="card">
+        <h2 className="mb-1 font-semibold">通知の文面</h2>
+        <p className="mb-3 text-xs text-slate-500">Chatwork マイチャットに届く朝のダイジェストと要確認の通知の文面です。返信の催促文や期日報告は文体エンジンが作るため、ここでは変えません。</p>
+        <div className="grid gap-3 md:grid-cols-2">
+          {NOTIFY_FIELDS.map((f) => (
+            <div key={f.key} className={f.multiline ? 'md:col-span-2' : ''}>
+              <label className="label">
+                {f.label}
+                {f.hint && <span className="ml-1 text-slate-400">（{f.hint}）</span>}
+              </label>
+              {f.multiline ? <textarea className="input" rows={2} value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} /> : <input className="input" value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} />}
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button className="btn btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>
+            保存
+          </button>
+          <button className="btn" onClick={() => runJob.mutate('morningDigest')} disabled={runJob.isPending || !s?.chatwork.configured}>
+            ダイジェストを今すぐ送って確認
+          </button>
+        </div>
+      </section>
+
+      <section className="card">
+        <h2 className="mb-1 font-semibold">バックアップ</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          毎日 3:00（JST）にデータベースのスナップショットを圧縮し、サーバー内と OneDrive の <code>{backup.data?.remoteFolder ?? '…'}</code> に世代保存します。復元手順は手順書（deploy.md）を参照してください。
+        </p>
+        <div className="grid gap-3 md:grid-cols-3">
+          {BACKUP_FIELDS.map((f) => (
+            <div key={f.key}>
+              <label className="label">{f.label}</label>
+              <input className="input" value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} />
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button className="btn btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>
+            保存
+          </button>
+          <button className="btn" onClick={() => runBackup.mutate()} disabled={runBackup.isPending}>
+            {runBackup.isPending ? '作成中…' : '今すぐバックアップ'}
+          </button>
+          {backupMsg && <span className="text-xs text-slate-700">{backupMsg}</span>}
+        </div>
+        {backup.data && backup.data.local.length > 0 && (
+          <div className="mt-3 text-xs">
+            <div className="mb-1 text-slate-500">サーバー内の世代（クリックでダウンロード）</div>
+            <ul className="flex flex-wrap gap-2">
+              {backup.data.local.map((b) => (
+                <li key={b.name}>
+                  <a className="btn btn-sm" href={`/api/backup/${b.name}`}>
+                    {b.name}（{fmtBytes(b.size)}）
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </section>
+
+      <section className="card">
+        <h2 className="mb-1 font-semibold">デモデータ</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          架空の依頼者 3 名（離婚調停・交通事故・法人破産）と会話・タスク・期日・債権者・要確認を投入して、接続前に操作感を確かめられます。実データとは混ざらず、ワンクリックで消せます。名前には【デモ】が付きます。
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          {s?.demo.seeded ? (
+            <>
+              <span className="badge badge-orange">デモデータ表示中</span>
+              <button className="btn" onClick={() => demo.mutate('clear')} disabled={demo.isPending}>
+                デモデータを削除
+              </button>
+              <button className="btn btn-sm" onClick={() => demo.mutate('seed')} disabled={demo.isPending}>
+                入れ直す
+              </button>
+            </>
+          ) : (
+            <button className="btn btn-primary" onClick={() => demo.mutate('seed')} disabled={demo.isPending}>
+              {demo.isPending ? '投入中…' : 'デモデータを投入'}
+            </button>
+          )}
+          {demoMsg && <span className="text-xs text-slate-700">{demoMsg}</span>}
+        </div>
       </section>
 
       {s && (

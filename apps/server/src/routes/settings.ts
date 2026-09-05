@@ -15,6 +15,9 @@ import { listTasks } from '../services/tasks.js';
 import { todaysEvents } from '../services/court.js';
 import { db, schema } from '../db/index.js';
 import { and, eq } from 'drizzle-orm';
+import { runBackup, listLocalBackups, localBackupPath, remoteBackupFolder } from '../services/backup.js';
+import { seedDemoData, clearDemoData, demoStatus } from '../services/demo.js';
+import fs from 'node:fs';
 
 export const settingsRoutes = new Hono();
 
@@ -24,6 +27,8 @@ settingsRoutes.get('/settings', (c) => {
   const s = allSettings();
   delete s.password_hash;
   delete s.templates_json;
+  delete s.demo_ids;
+  for (const k of Object.keys(s)) if (k.startsWith('cred:') || k.startsWith('line_auto_token') || k.startsWith('ms_')) delete s[k];
   return c.json(s);
 });
 
@@ -56,8 +61,27 @@ settingsRoutes.get('/status', async (c) => {
     zoom: { configured: isConfigured('zoom') },
     anthropic: { configured: isConfigured('anthropic'), model: e.ANTHROPIC_MODEL },
     jobs: jobStatus(),
+    demo: demoStatus(),
   });
 });
+
+// ---- バックアップ ----
+settingsRoutes.get('/backup', (c) => c.json({ local: listLocalBackups(), remoteFolder: remoteBackupFolder() }));
+settingsRoutes.post('/backup/run', async (c) => c.json(await runBackup()));
+settingsRoutes.get('/backup/:name', (c) => {
+  const p = localBackupPath(c.req.param('name'));
+  if (!p) return c.json({ error: 'not found' }, 404);
+  c.header('Content-Type', 'application/gzip');
+  c.header('Content-Disposition', `attachment; filename="${c.req.param('name')}"`);
+  return c.body(new Uint8Array(fs.readFileSync(p)));
+});
+
+// ---- デモデータ ----
+settingsRoutes.post('/demo/seed', (c) => {
+  const ids = seedDemoData();
+  return c.json({ ok: true, clients: ids.clients.length, cases: ids.cases.length, messages: ids.messages.length });
+});
+settingsRoutes.post('/demo/clear', (c) => c.json({ ok: true, deleted: clearDemoData() }));
 
 settingsRoutes.post('/jobs/:name/run', async (c) => {
   const job = JOBS.find((j) => j.name === c.req.param('name'));
@@ -98,5 +122,5 @@ settingsRoutes.get('/dashboard', (c) => {
   for (const a of alerts) byType[a.type] = (byType[a.type] ?? 0) + 1;
   const waiting = listTasks({ status: 'active' }).filter((t) => t.status !== 'open');
   const needsReply = db().select({ id: schema.conversations.id }).from(schema.conversations).where(and(eq(schema.conversations.needsReply, true), eq(schema.conversations.archived, false))).all().length;
-  return c.json({ alerts: alerts.slice(0, 20), alertCounts: byType, waiting, needsReply, todaysEvents: todaysEvents(), lineQuota: isConfigured('line') ? lineQuotaStatus() : null });
+  return c.json({ alerts: alerts.slice(0, 20), alertCounts: byType, waiting, needsReply, todaysEvents: todaysEvents(), lineQuota: isConfigured('line') ? lineQuotaStatus() : null, demo: demoStatus().seeded });
 });

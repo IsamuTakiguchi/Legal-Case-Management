@@ -52,7 +52,7 @@ webhookRoutes.post('/line', async (c) => {
           }
           await ingestMessage(norm);
         } catch (err) {
-          logger.error({ err, ev }, 'LINE イベント処理に失敗');
+          logger.error({ err, type: ev.type, messageId: ev.message?.id }, 'LINE イベント処理に失敗');
         }
       }
     })();

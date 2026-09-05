@@ -127,12 +127,25 @@ export interface LineSendResult extends SendResult {
   pushed: boolean;
 }
 
+/** 外部プロバイダーのコンテンツ URL は LINE 系ドメインの https のみ取得する（SSRF 対策） */
+export function isAllowedContentUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'https:') return false;
+    const host = u.hostname.toLowerCase();
+    return ['line-scdn.net', 'line.me', 'line-apps.com', 'line.naver.jp'].some((d) => host === d || host.endsWith(`.${d}`));
+  } catch {
+    return false;
+  }
+}
+
 export const lineAdapter: ChannelAdapter = {
   channel: 'line',
   isConfigured: () => isConfigured('line'),
   async fetchAttachment(att) {
     const ref = att.ref as { messageId?: string; type?: string; url?: string };
     if (ref.url) {
+      if (!isAllowedContentUrl(ref.url)) throw new Error('許可されていない外部コンテンツ URL です');
       const res = await fetch(ref.url);
       if (!res.ok) throw new Error(`外部コンテンツ取得失敗 ${res.status}`);
       return Buffer.from(await res.arrayBuffer());

@@ -98,6 +98,26 @@ fly deploy
 
 ## バックアップ
 
+### 自動バックアップ（既定で有効）
+
+毎日 3:00（JST）にデータベースのスナップショットを gzip 圧縮し、次の 2 か所に世代保存します。
+
+- サーバー内 `/data/backups/app-YYYYMMDD-HHMM.db.gz`（既定 7 世代）
+- OneDrive `{依頼者ルート}/_システム/バックアップ/`（既定 14 世代。Microsoft 接続後に有効）
+
+設定 → バックアップ で保存先・世代数を変更でき、「今すぐバックアップ」も押せます。サーバー内の世代はその画面からダウンロードできます。
+
+### 復元
+
+1. 新しい環境（Railway など）にアプリをデプロイし、Volume を `/data` に付ける
+2. バックアップの `.db.gz` を展開して `app.db` にする（`gunzip app-XXXX.db.gz && mv app-XXXX.db app.db`）
+3. アプリを停止した状態で Volume の `/data/app.db` を置き換える（Railway なら一時的に `railway ssh` またはボリュームのファイル操作で配置）
+4. アプリを起動する
+
+接続情報（各サービスのキー、Google / Microsoft のトークン）は `SESSION_SECRET` から導いた鍵で暗号化されています。`SESSION_SECRET` を自動生成にしている場合は `/data/session_secret` も一緒に保管してください。これが無い環境に復元した場合、依頼者・事件・会話などのデータはそのまま使えますが、初期設定でキーを貼り直し、Google / Microsoft を再接続する必要があります。
+
+### 手動バックアップ（PC 運用の場合）
+
 - `/data/app.db`（SQLite）と `/data` 配下をそのままコピーすれば復元できます
 - Docker ボリュームのバックアップ例:
   ```bash

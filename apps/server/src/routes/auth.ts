@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { createSession, destroySession, isAuthenticated, verifyPassword, setPassword, requireAuth } from '../auth/index.js';
+import { createSession, destroySession, isAuthenticated, verifyPassword, setPassword, requireAuth, cookieSecure, currentSessionId, clientIp, loginLockedFor, recordLoginFailure, clearLoginFailures } from '../auth/index.js';
 import { googleAuthUrl, handleGoogleCallback, disconnectGoogle } from '../integrations/google.js';
 import { msAuthUrl, handleMsCallback, disconnectMs, startDeviceCodeFlow, deviceCodeStatus } from '../integrations/onedrive.js';
 import { saveCredentials } from '../services/credentials.js';
@@ -15,8 +15,16 @@ export const authRoutes = new Hono();
 authRoutes.get('/me', (c) => c.json({ authenticated: isAuthenticated(c) }));
 
 authRoutes.post('/login', async (c) => {
-  const body = z.object({ password: z.string() }).parse(await c.req.json());
-  if (!verifyPassword(body.password)) return c.json({ error: 'パスワードが違います' }, 401);
+  const ip = clientIp(c);
+  const locked = loginLockedFor(ip);
+  if (locked > 0) return c.json({ error: `試行回数が多すぎます。${Math.ceil(locked / 60)} 分後に再度お試しください` }, 429);
+  const body = z.object({ password: z.string().max(256) }).parse(await c.req.json());
+  if (!(await verifyPassword(body.password))) {
+    recordLoginFailure(ip);
+    logger.warn({ ip }, 'ログイン失敗');
+    return c.json({ error: 'パスワードが違います' }, 401);
+  }
+  clearLoginFailures(ip);
   createSession(c);
   return c.json({ ok: true });
 });
@@ -27,16 +35,16 @@ authRoutes.post('/logout', (c) => {
 });
 
 authRoutes.post('/password', requireAuth, async (c) => {
-  const body = z.object({ current: z.string(), next: z.string().min(8) }).parse(await c.req.json());
-  if (!verifyPassword(body.current)) return c.json({ error: '現在のパスワードが違います' }, 400);
-  setPassword(body.next);
+  const body = z.object({ current: z.string().max(256), next: z.string().min(8).max(256) }).parse(await c.req.json());
+  if (!(await verifyPassword(body.current))) return c.json({ error: '現在のパスワードが違います' }, 400);
+  setPassword(body.next, currentSessionId(c));
   return c.json({ ok: true });
 });
 
 // ---- OAuth (Google / Microsoft) ----
 function stateCookie(c: Parameters<typeof getCookie>[0], name: string): string {
   const s = randomToken(16);
-  setCookie(c, name, s, { httpOnly: true, sameSite: 'Lax', path: '/', maxAge: 600 });
+  setCookie(c, name, s, { httpOnly: true, sameSite: 'Lax', secure: cookieSecure(), path: '/', maxAge: 600 });
   return s;
 }
 

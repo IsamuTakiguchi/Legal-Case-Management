@@ -136,7 +136,7 @@ export function saveCredentials(values: Record<string, string>) {
 
 function mask(v: string): string {
   if (v.length <= 8) return '••••';
-  return `${v.slice(0, 4)}…${v.slice(-4)}`;
+  return `••••${v.slice(-2)}`;
 }
 
 /** 画面表示用（秘密値はマスク） */
