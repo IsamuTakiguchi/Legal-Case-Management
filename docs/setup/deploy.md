@@ -7,6 +7,7 @@
 | 方式 | 向いている場合 | 公開 URL | 手間 |
 |---|---|---|---|
 | **C. Render.com（推奨・最も手間が少ない）** | PC に何も入れたくない。月額 7 ドル程度は許容できる | Render が自動発行（https://…onrender.com） | ブラウザで数クリック |
+| **D. Railway** | Render と同程度の手軽さ。月額 5 ドル〜（従量） | Railway が自動発行（https://…up.railway.app） | ブラウザで数クリック（ボリュームの追加が 1 手順多い） |
 | A. 事務所 PC（Docker Desktop）＋ Cloudflare Tunnel | 追加費用をかけたくない。PC を常時起動できる | Cloudflare Zero Trust のトンネル | Docker と Cloudflare の設定が必要 |
 | B. Fly.io（ボリューム付き） | CLI 操作に抵抗がない | Fly.io が自動発行 | CLI のインストールが必要 |
 
@@ -19,6 +20,24 @@
 5. その URL を開いてログイン → 「初期設定」からキーを登録
 
 ディスク（5GB）付きの Starter プランになります。データはこのディスクに保存され、再デプロイしても消えません。
+
+## D. Railway
+
+Render と同じく Dockerfile をそのまま使えます。ディスク（Volume）を使うため Hobby プラン（月 5 ドル、使用量込み）が必要です。
+
+1. [Railway](https://railway.com/) にアカウントを作成し、GitHub を連携
+2. New Project → **Deploy from GitHub repo** → このリポジトリを選択。Settings → Source → Branch を `claude/unified-communication-manager-cidsxx` にする（`railway.json` が自動で読まれ、Dockerfile でビルドされます）
+3. サービスの **Variables** に以下を追加
+   - `APP_PASSWORD` = ログイン用パスワード（自分で決める）
+   - `SESSION_SECRET` = 32 文字以上のランダム文字列（Variables 画面の「Generate」で生成可）
+   - `PORT` = `8787`
+   - `DATA_DIR` = `/data`
+   - `TZ` = `Asia/Tokyo`
+4. サービスを右クリック（または Command+K）→ **Add Volume** → Mount Path を `/data` にする（データ保存先。再デプロイしても消えません）
+5. Settings → Networking → **Generate Domain** → ポートを `8787` にする。`https://xxxx.up.railway.app` の URL が付き、アプリはこの URL を自動で認識します（`RAILWAY_PUBLIC_DOMAIN` を参照）
+6. その URL を開いてログイン → 「初期設定」からキーを登録
+
+以降の手順（キーの貼り付け先、Webhook URL の登録）は Render と同じです。
 
 どちらも OneDrive へは Microsoft Graph API 経由で書き込むため、PC の同期フォルダは不要です（A で同期フォルダに直接書きたい場合は `STORAGE_BACKEND=local` にして `docker-compose.yml` のボリュームを有効にします）。
 
