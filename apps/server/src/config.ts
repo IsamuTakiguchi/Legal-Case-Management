@@ -1,13 +1,15 @@
 import { z } from 'zod';
 import path from 'node:path';
 import fs from 'node:fs';
+import { randomBytes } from 'node:crypto';
 
 const envSchema = z.object({
   PORT: z.coerce.number().default(8787),
   PUBLIC_BASE_URL: z.string().default('http://localhost:8787'),
   DATA_DIR: z.string().default('./data'),
   APP_PASSWORD: z.string().default(''),
-  SESSION_SECRET: z.string().min(8).default('dev-only-secret-change-me'),
+  /** 未設定なら初回起動時に自動生成して DATA_DIR/session_secret に保存する */
+  SESSION_SECRET: z.string().min(8),
   LOG_LEVEL: z.string().default('info'),
 
   ANTHROPIC_API_KEY: z.string().optional(),
@@ -49,6 +51,28 @@ const envSchema = z.object({
 export type Env = z.infer<typeof envSchema>;
 
 let cached: Env | null = null;
+
+/**
+ * SESSION_SECRET が環境変数にない場合、DATA_DIR 内のファイルから読む（なければ生成して保存）。
+ * セッション Cookie の署名と接続情報の暗号化キーに使うため、再デプロイ後も同じ値である必要がある。
+ */
+function loadOrCreateSessionSecret(dir: string): string {
+  const file = path.join(path.resolve(dir), 'session_secret');
+  try {
+    const existing = fs.readFileSync(file, 'utf8').trim();
+    if (existing.length >= 8) return existing;
+  } catch {
+    // 未作成
+  }
+  const secret = randomBytes(32).toString('hex');
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, secret, { mode: 0o600 });
+  } catch (err) {
+    console.warn(`SESSION_SECRET を保存できません（${file}）。再起動のたびにログインし直しになります: ${String(err)}`);
+  }
+  return secret;
+}
 /** 画面から保存した接続情報（DB に暗号化保存）で環境変数を上書きする */
 let overrides: Record<string, string> = {};
 
@@ -59,6 +83,7 @@ export function env(): Env {
     if (!merged.PUBLIC_BASE_URL && merged.RENDER_EXTERNAL_URL) merged.PUBLIC_BASE_URL = merged.RENDER_EXTERNAL_URL;
     if (!merged.PUBLIC_BASE_URL && merged.RAILWAY_PUBLIC_DOMAIN) merged.PUBLIC_BASE_URL = `https://${merged.RAILWAY_PUBLIC_DOMAIN}`;
     if (!merged.PUBLIC_BASE_URL && merged.FLY_APP_NAME) merged.PUBLIC_BASE_URL = `https://${merged.FLY_APP_NAME}.fly.dev`;
+    if (!merged.SESSION_SECRET) merged.SESSION_SECRET = loadOrCreateSessionSecret(merged.DATA_DIR ?? './data');
     for (const [k, v] of Object.entries(overrides)) if (v !== '') merged[k] = v;
     const parsed = envSchema.safeParse(merged);
     if (!parsed.success) {
