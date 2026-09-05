@@ -1,5 +1,14 @@
 # OneDrive for Business（Microsoft Graph）の設定
 
+## 最短: 簡易接続（アプリ登録なし）
+
+アプリの「初期設定」→ OneDrive for Business →「簡易接続（アプリ登録なし）を開始」を押すと、コードが表示されます。
+表示されたリンク（https://microsoft.com/devicelogin）を開いてコードを入力し、事務所の Microsoft アカウントでサインインすれば完了です。Entra でのアプリ登録は不要です。
+
+これは Microsoft 公式のコマンドラインツール（Microsoft Graph Command Line Tools）の公開クライアントを使う方法です。テナントの管理者が「ユーザーによるアプリへの同意」を禁止している場合は失敗するので、そのときだけ下の「自前のアプリ登録」を行ってください。
+
+## 自前のアプリ登録（簡易接続が使えない場合）
+
 ## 1. アプリ登録
 
 1. [Microsoft Entra 管理センター](https://entra.microsoft.com/) → アプリケーション → アプリの登録 → **新規登録**

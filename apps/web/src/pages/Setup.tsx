@@ -20,7 +20,7 @@ interface Service {
 interface SetupData {
   services: Service[];
   urls: { lineWebhook: string; chatworkWebhook: string; googleRedirect: string; microsoftRedirect: string };
-  state: { anthropic: boolean; line: boolean; chatwork: boolean; google: { configured: boolean; connected: boolean }; microsoft: { configured: boolean; connected: boolean }; zoom: boolean };
+  state: { anthropic: boolean; line: boolean; chatwork: boolean; google: { configured: boolean; connected: boolean }; microsoft: { configured: boolean; connected: boolean; mode?: string }; zoom: boolean };
 }
 
 const DOC_BASE = 'https://github.com/IsamuTakiguchi/Legal-Case-Management/blob/claude/unified-communication-manager-cidsxx/docs/setup/';
@@ -36,10 +36,9 @@ const CONSOLE: Record<string, { label: string; url: string }[]> = {
     { label: 'Chatwork Webhook 設定', url: 'https://www.chatwork.com/service/packages/chatwork/subpackages/webhook/list.php' },
   ],
   google: [
-    { label: 'Google Cloud 認証情報', url: 'https://console.cloud.google.com/apis/credentials' },
-    { label: 'OAuth 同意画面', url: 'https://console.cloud.google.com/apis/credentials/consent' },
-    { label: 'Gmail API を有効化', url: 'https://console.cloud.google.com/apis/library/gmail.googleapis.com' },
-    { label: 'Calendar API を有効化', url: 'https://console.cloud.google.com/apis/library/calendar-json.googleapis.com' },
+    { label: '① Gmail と Calendar の API を一括で有効化', url: 'https://console.cloud.google.com/apis/enableflow?apiid=gmail.googleapis.com,calendar-json.googleapis.com' },
+    { label: '② OAuth 同意画面（内部 or 本番に公開）', url: 'https://console.cloud.google.com/auth/overview' },
+    { label: '③ OAuth クライアントを作成（ウェブ）', url: 'https://console.cloud.google.com/apis/credentials/oauthclient' },
   ],
   microsoft: [{ label: 'Microsoft Entra アプリの登録', url: 'https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade' }],
   zoom: [{ label: 'Zoom App Marketplace（Build App）', url: 'https://marketplace.zoom.us/develop/create' }],
@@ -50,8 +49,8 @@ const STEPS: Record<string, string[]> = {
   anthropic: ['console.anthropic.com で API キーを発行して貼り付けます。', '「接続テスト」で短い応答が返れば完了です。'],
   line: ['LINE Developers → チャネル基本設定の「チャネルシークレット」、Messaging API 設定の「チャネルアクセストークン（長期）」を貼り付けます。', '同じ画面の Webhook URL に下の URL を登録し「検証」→「Webhook の利用」を ON。', 'LINE Official Account Manager → 応答設定で「チャット」と「Webhook」を両方 ON。'],
   chatwork: ['Chatwork → サービス連携 → API Token を貼り付けます。', '（任意）サービス連携 → Webhook で下の URL を登録し、表示されたトークンを貼り付けると即時受信になります。'],
-  google: ['Google Cloud で Gmail API と Calendar API を有効化し、OAuth 同意画面を「内部」（Workspace）または「本番」に。', 'OAuth クライアント（ウェブ）を作り、下のリダイレクト URI を登録。ID とシークレットを貼り付けて保存。', '保存後に「Google に接続」を押して同意します。'],
-  microsoft: ['Microsoft Entra → アプリの登録 → 新規登録。リダイレクト URI（Web）に下の URI を登録。', '「証明書とシークレット」でシークレットを作成し、値を貼り付け。API のアクセス許可に Files.ReadWrite / User.Read / offline_access（委任）を追加。', '保存後に「Microsoft に接続」を押してサインインします。'],
+  google: ['①のリンクで 2 つの API をまとめて有効化（プロジェクトがなければその場で作成）。', '②で同意画面を作成: Workspace なら「内部」、個人 Gmail なら「外部」で作って「本番環境に公開」。', '③でクライアント（ウェブ アプリケーション）を作り、下のリダイレクト URI を貼り付け。表示された ID とシークレットをここに貼って保存 →「Google に接続」。'],
+  microsoft: ['最短: 下の「簡易接続（アプリ登録なし）」を押し、表示されたコードを microsoft.com/devicelogin で入力して事務所の Microsoft アカウントでサインイン。', '簡易接続がテナントの設定で拒否される場合のみ、Entra でアプリ登録（リダイレクト URI、シークレット、Files.ReadWrite / User.Read / offline_access）を行い、下の欄に貼り付けます。'],
   zoom: ['Zoom App Marketplace → Build App → Server-to-Server OAuth。Account ID / Client ID / Client Secret を貼り付け。', 'Scopes に meeting:write:admin と meeting:read:admin を追加して Activate。'],
 };
 
@@ -172,11 +171,13 @@ export default function Setup() {
                   Google に接続
                 </a>
               )}
-              {s.id === 'microsoft' && state?.configured && !state.connected && (
+              {s.id === 'microsoft' && state?.configured && !state.connected && d.state.microsoft.mode !== 'device' && (
                 <a className="btn btn-primary btn-sm" href="/api/auth/microsoft/start">
                   Microsoft に接続
                 </a>
               )}
+              {s.id === 'microsoft' && !state?.connected && <DeviceConnect mode={d.state.microsoft.mode} onDone={() => { qc.invalidateQueries({ queryKey: ['setup'] }); qc.invalidateQueries({ queryKey: ['status'] }); }} />}
+              {s.id === 'microsoft' && state?.connected && d.state.microsoft.mode === 'device' && <span className="text-xs text-slate-500">簡易接続（アプリ登録なし）で接続中</span>}
               {saved === s.id && <span className="text-xs text-green-700">保存しました</span>}
               {r && <span className={`text-xs ${r.ok ? 'text-green-700' : 'text-red-600'}`}>{r.message}</span>}
             </div>
@@ -209,6 +210,70 @@ function Url({ label, value }: { label: string; value: string }) {
       >
         {copied ? 'コピー済' : 'コピー'}
       </button>
+    </div>
+  );
+}
+
+function DeviceConnect({ mode, onDone }: { mode?: string; onDone: () => void }) {
+  const [flow, setFlow] = useState<{ userCode: string; verificationUri: string; message: string; status: string; error?: string; account?: string } | null>(null);
+  const [err, setErr] = useState('');
+  const start = useMutation({
+    mutationFn: () => api.post<{ userCode: string; verificationUri: string; message: string; status: string }>('/auth/microsoft/device/start'),
+    onSuccess: (f) => {
+      setFlow({ ...f });
+      setErr('');
+    },
+    onError: (e) => setErr((e as Error).message),
+  });
+  const reset = useMutation({ mutationFn: () => api.post('/auth/microsoft/device/reset'), onSuccess: () => { setFlow(null); onDone(); } });
+  useEffect(() => {
+    if (!flow || flow.status !== 'pending') return;
+    const t = setInterval(async () => {
+      try {
+        const s = await api.get<{ status: string; error?: string; account?: string }>('/auth/microsoft/device/status');
+        if (s.status === 'done' || s.status === 'error') {
+          setFlow((f) => (f ? { ...f, status: s.status, error: s.error, account: s.account } : f));
+          if (s.status === 'done') onDone();
+        }
+      } catch {
+        /* ignore */
+      }
+    }, 3000);
+    return () => clearInterval(t);
+  }, [flow, onDone]);
+  return (
+    <div className="w-full space-y-2 rounded border border-blue-200 bg-blue-50 p-3 text-xs">
+      <div className="flex flex-wrap items-center gap-2">
+        <button className="btn btn-primary btn-sm" onClick={() => start.mutate()} disabled={start.isPending || flow?.status === 'pending'}>
+          {start.isPending ? '準備中…' : '簡易接続（アプリ登録なし）を開始'}
+        </button>
+        {mode === 'device' && (
+          <button className="btn btn-sm" onClick={() => reset.mutate()}>
+            簡易接続をやめて自前のアプリ登録に戻す
+          </button>
+        )}
+        <span className="text-slate-600">Microsoft 公式のコマンドラインツール用の公開クライアントを使うため、Entra でのアプリ登録が不要です。</span>
+      </div>
+      {err && <div className="text-red-600">{err}</div>}
+      {flow && flow.status === 'pending' && (
+        <div className="space-y-1">
+          <div>
+            <a className="font-semibold text-blue-700 underline" href={flow.verificationUri} target="_blank" rel="noreferrer">
+              {flow.verificationUri}
+            </a>{' '}
+            を開き、次のコードを入力して事務所の Microsoft アカウントでサインインしてください（15 分以内）。
+          </div>
+          <div className="select-all text-2xl font-bold tracking-widest">{flow.userCode}</div>
+          <div className="text-slate-500">サインインが完了すると自動的にこの画面が更新されます。</div>
+        </div>
+      )}
+      {flow && flow.status === 'done' && <div className="text-green-700">接続しました: {flow.account}</div>}
+      {flow && flow.status === 'error' && (
+        <div className="text-red-600">
+          接続できませんでした: {flow.error}
+          <div className="text-slate-600">テナントの設定で拒否された可能性があります。「簡易接続をやめて自前のアプリ登録に戻す」を押し、手順書に従ってアプリ登録を行ってください。</div>
+        </div>
+      )}
     </div>
   );
 }

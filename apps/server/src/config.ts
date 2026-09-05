@@ -32,6 +32,8 @@ const envSchema = z.object({
   MS_TENANT_ID: z.string().optional(),
   MS_CLIENT_ID: z.string().optional(),
   MS_CLIENT_SECRET: z.string().optional(),
+  /** app = 自前のアプリ登録（既定）, device = 公開クライアントでデバイスコード接続（アプリ登録不要） */
+  MS_AUTH_MODE: z.enum(['app', 'device']).default('app'),
 
   STORAGE_BACKEND: z.enum(['onedrive', 'local']).default('onedrive'),
   ONEDRIVE_CLIENT_ROOT: z.string().default('/依頼者'),
@@ -99,7 +101,7 @@ export function isConfigured(service: 'line' | 'chatwork' | 'google' | 'zoom' | 
     case 'zoom':
       return !!(e.ZOOM_ACCOUNT_ID && e.ZOOM_CLIENT_ID && e.ZOOM_CLIENT_SECRET);
     case 'microsoft':
-      return !!(e.MS_TENANT_ID && e.MS_CLIENT_ID && e.MS_CLIENT_SECRET);
+      return e.MS_AUTH_MODE === 'device' || !!(e.MS_TENANT_ID && e.MS_CLIENT_ID && e.MS_CLIENT_SECRET);
     case 'anthropic':
       return !!e.ANTHROPIC_API_KEY;
   }

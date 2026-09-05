@@ -24,7 +24,7 @@ setupRoutes.get('/setup', async (c) => {
       line: isConfigured('line'),
       chatwork: isConfigured('chatwork'),
       google: { configured: isConfigured('google'), connected: isGoogleConnected() },
-      microsoft: { configured: isConfigured('microsoft'), connected: await isMsConnected() },
+      microsoft: { configured: isConfigured('microsoft'), connected: await isMsConnected(), mode: env().MS_AUTH_MODE },
       zoom: isConfigured('zoom'),
     },
   });

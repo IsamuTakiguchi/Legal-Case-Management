@@ -2,7 +2,9 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { createSession, destroySession, isAuthenticated, verifyPassword, setPassword, requireAuth } from '../auth/index.js';
 import { googleAuthUrl, handleGoogleCallback, disconnectGoogle } from '../integrations/google.js';
-import { msAuthUrl, handleMsCallback, disconnectMs } from '../integrations/onedrive.js';
+import { msAuthUrl, handleMsCallback, disconnectMs, startDeviceCodeFlow, deviceCodeStatus } from '../integrations/onedrive.js';
+import { saveCredentials } from '../services/credentials.js';
+import { resetIntegrationCaches } from '../integrations/reset.js';
 import { randomToken } from '../crypto.js';
 import { getCookie, setCookie } from 'hono/cookie';
 import { logger } from '../logger.js';
@@ -83,6 +85,32 @@ authRoutes.get('/microsoft/callback', async (c) => {
     logger.error({ err }, 'Microsoft 接続失敗');
     return c.text(`OneDrive 接続に失敗しました: ${String(err)}`, 500);
   }
+});
+
+/** 簡易接続（アプリ登録なし・デバイスコード）: モードを device にして開始 */
+authRoutes.post('/microsoft/device/start', requireAuth, async (c) => {
+  saveCredentials({ MS_AUTH_MODE: 'device' });
+  resetIntegrationCaches();
+  const flow = await startDeviceCodeFlow();
+  return c.json({ userCode: flow.userCode, verificationUri: flow.verificationUri, message: flow.message, status: flow.status });
+});
+
+let onboardedDevice = false;
+authRoutes.get('/microsoft/device/status', requireAuth, (c) => {
+  const f = deviceCodeStatus();
+  if (f?.status === 'done' && !onboardedDevice) {
+    onboardedDevice = true;
+    setImmediate(() => runOnboardingAfterMicrosoft());
+  }
+  return c.json(f ? { status: f.status, error: f.error, account: f.account, userCode: f.userCode, verificationUri: f.verificationUri } : { status: 'none' });
+});
+
+/** 簡易接続をやめて自前のアプリ登録に戻す */
+authRoutes.post('/microsoft/device/reset', requireAuth, (c) => {
+  saveCredentials({ MS_AUTH_MODE: '' });
+  disconnectMs();
+  resetIntegrationCaches();
+  return c.json({ ok: true });
 });
 
 authRoutes.post('/microsoft/disconnect', requireAuth, (c) => {

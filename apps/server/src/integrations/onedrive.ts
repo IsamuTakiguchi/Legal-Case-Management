@@ -1,4 +1,4 @@
-import { ConfidentialClientApplication, type ICachePlugin, type TokenCacheContext, type AccountInfo } from '@azure/msal-node';
+import { ConfidentialClientApplication, PublicClientApplication, type ICachePlugin, type TokenCacheContext, type AccountInfo } from '@azure/msal-node';
 import { eq } from 'drizzle-orm';
 import { env, isConfigured } from '../config.js';
 import { db, schema } from '../db/index.js';
@@ -34,17 +34,85 @@ const cachePlugin: ICachePlugin = {
   },
 };
 
-let app: ConfidentialClientApplication | null = null;
-function msal(): ConfidentialClientApplication {
+/**
+ * 簡易接続用の公開クライアント ID（Microsoft Graph Command Line Tools）。
+ * アプリ登録なしでデバイスコード認証ができるが、テナントの設定で拒否される場合は自前のアプリ登録に切り替える。
+ */
+export const GRAPH_CLI_CLIENT_ID = '14d82eec-204b-4c2f-b7e8-296a70dab67e';
+
+let app: ConfidentialClientApplication | PublicClientApplication | null = null;
+function isDeviceMode(): boolean {
+  return env().MS_AUTH_MODE === 'device';
+}
+function msal(): ConfidentialClientApplication | PublicClientApplication {
   if (!isConfigured('microsoft')) throw new Error('MS_TENANT_ID / MS_CLIENT_ID / MS_CLIENT_SECRET が設定されていません');
   if (!app) {
     const e = env();
-    app = new ConfidentialClientApplication({
-      auth: { clientId: e.MS_CLIENT_ID!, clientSecret: e.MS_CLIENT_SECRET!, authority: `https://login.microsoftonline.com/${e.MS_TENANT_ID}` },
-      cache: { cachePlugin },
-    });
+    if (isDeviceMode()) {
+      app = new PublicClientApplication({
+        auth: { clientId: e.MS_CLIENT_ID || GRAPH_CLI_CLIENT_ID, authority: `https://login.microsoftonline.com/${e.MS_TENANT_ID || 'organizations'}` },
+        cache: { cachePlugin },
+      });
+    } else {
+      app = new ConfidentialClientApplication({
+        auth: { clientId: e.MS_CLIENT_ID!, clientSecret: e.MS_CLIENT_SECRET!, authority: `https://login.microsoftonline.com/${e.MS_TENANT_ID}` },
+        cache: { cachePlugin },
+      });
+    }
   }
   return app;
+}
+
+// ---- デバイスコード接続（アプリ登録不要） ----
+interface DeviceFlow {
+  userCode: string;
+  verificationUri: string;
+  message: string;
+  status: 'pending' | 'done' | 'error';
+  error?: string;
+  account?: string;
+  startedAt: number;
+}
+let deviceFlow: DeviceFlow | null = null;
+
+export async function startDeviceCodeFlow(): Promise<DeviceFlow> {
+  if (deviceFlow && deviceFlow.status === 'pending' && Date.now() - deviceFlow.startedAt < 10 * 60_000) return deviceFlow;
+  if (!isDeviceMode()) throw new Error('簡易接続モードではありません');
+  const client = msal();
+  if (!(client instanceof PublicClientApplication)) throw new Error('簡易接続には公開クライアントが必要です');
+  const flow: DeviceFlow = { userCode: '', verificationUri: '', message: '', status: 'pending', startedAt: Date.now() };
+  deviceFlow = flow;
+  const ready = new Promise<void>((resolve) => {
+    client
+      .acquireTokenByDeviceCode({
+        scopes: MS_SCOPES.filter((s) => s !== 'offline_access'),
+        deviceCodeCallback: (r) => {
+          flow.userCode = r.userCode;
+          flow.verificationUri = r.verificationUri;
+          flow.message = r.message;
+          resolve();
+        },
+      })
+      .then((result) => {
+        flow.status = 'done';
+        flow.account = result?.account?.username ?? '';
+        db().update(schema.oauthTokens).set({ account: flow.account }).where(eq(schema.oauthTokens.provider, 'microsoft')).run();
+        logger.info({ account: flow.account }, 'Microsoft 簡易接続が完了');
+      })
+      .catch((err) => {
+        flow.status = 'error';
+        flow.error = String((err as Error).message ?? err);
+        logger.warn({ err }, 'Microsoft 簡易接続に失敗');
+        resolve();
+      });
+  });
+  await ready;
+  if (flow.status === 'error') throw new Error(flow.error);
+  return flow;
+}
+
+export function deviceCodeStatus(): DeviceFlow | null {
+  return deviceFlow;
 }
 
 export function msRedirectUri(): string {

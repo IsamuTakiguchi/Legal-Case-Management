@@ -92,7 +92,7 @@ export const CREDENTIAL_SERVICES: CredentialService[] = [
 ];
 
 const PREFIX = 'cred:';
-const ALL_KEYS = new Set(CREDENTIAL_SERVICES.flatMap((s) => s.fields.map((f) => f.key)));
+const ALL_KEYS = new Set([...CREDENTIAL_SERVICES.flatMap((s) => s.fields.map((f) => f.key)), 'MS_AUTH_MODE']);
 
 export function loadCredentialOverrides(): Record<string, string> {
   const rows = db().select().from(schema.settings).where(like(schema.settings.key, `${PREFIX}%`)).all();

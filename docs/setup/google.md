@@ -1,9 +1,10 @@
 # Google（Gmail・Google カレンダー）の設定
 
-## 1. プロジェクトと API
+Google はアプリ登録を省略できません（Google の仕様）。ただし次の 3 つのリンクを順に開くだけで済みます。アプリの「初期設定」画面にも同じリンクがあります。
 
-1. [Google Cloud Console](https://console.cloud.google.com/) でプロジェクトを作成
-2. 「API とサービス」→「ライブラリ」で **Gmail API** と **Google Calendar API** を有効化
+## 1. API の一括有効化（1 クリック）
+
+[Gmail API と Calendar API をまとめて有効化](https://console.cloud.google.com/apis/enableflow?apiid=gmail.googleapis.com,calendar-json.googleapis.com) を開き、プロジェクトを選択（なければ「新しいプロジェクト」を作成）→「次へ」→「有効にする」。
 
 ## 2. OAuth 同意画面（重要）
 
