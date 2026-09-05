@@ -41,7 +41,7 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen">
-      <aside className="hidden w-56 shrink-0 border-r border-slate-200 bg-white md:block">
+      <aside className="hidden w-56 shrink-0 flex-col border-r border-slate-200 bg-white md:flex">
         <div className="border-b border-slate-200 px-4 py-4">
           <div className="text-sm font-bold text-slate-900">統合コミュニケーション管理</div>
           <div className="text-xs text-slate-500">LINE公式・Chatwork・Gmail</div>
@@ -62,6 +62,9 @@ export default function App() {
             </NavLink>
           ))}
         </nav>
+        <div className="mt-auto p-2">
+          <LogoutButton className="w-full justify-center" />
+        </div>
       </aside>
       <main className="min-w-0 flex-1 p-3 pb-24 md:p-6 md:pb-6">
         <Routes>
@@ -83,6 +86,24 @@ export default function App() {
       </main>
       <MobileTabs alertCount={alerts.data?.length ?? 0} />
     </div>
+  );
+}
+
+function LogoutButton({ className = '' }: { className?: string }) {
+  const [busy, setBusy] = useState(false);
+  const logout = async () => {
+    if (!confirm('ログアウトしますか？')) return;
+    setBusy(true);
+    try {
+      await api.post('/auth/logout');
+    } finally {
+      location.href = '/login';
+    }
+  };
+  return (
+    <button type="button" className={`btn btn-sm text-slate-600 ${className}`} onClick={logout} disabled={busy}>
+      ログアウト
+    </button>
   );
 }
 
@@ -110,6 +131,9 @@ function MobileTabs({ alertCount }: { alertCount: number }) {
                   {n.label}
                 </NavLink>
               ))}
+            </div>
+            <div className="mt-3 flex justify-end">
+              <LogoutButton />
             </div>
           </div>
         </div>
