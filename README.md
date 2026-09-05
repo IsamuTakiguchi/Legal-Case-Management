@@ -38,6 +38,10 @@ LINE公式アカウント・Chatwork・Gmail に分散した依頼者とのや�
 
 詳細は [docs/setup/deploy.md](docs/setup/deploy.md) を参照してください。
 
+## スマホ・PC でアプリとして使う
+
+PWA に対応しています。iPhone は Safari の共有 →「ホーム画面に追加」、Android / PC は Chrome の「インストール」でアプリとして起動できます。手順は [docs/setup/deploy.md](docs/setup/deploy.md) の「アプリとして使う」を参照してください。
+
 ## 開発
 
 ```bash

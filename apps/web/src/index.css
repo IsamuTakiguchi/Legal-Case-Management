@@ -30,7 +30,7 @@ body {
   @apply rounded-lg border border-slate-200 bg-white p-4 shadow-sm;
 }
 .badge {
-  @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium;
+  @apply inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium;
 }
 .badge-line {
   @apply bg-green-100 text-green-800;
@@ -52,4 +52,35 @@ body {
 }
 .prose-sm p {
   @apply my-1;
+}
+
+/* グリッド／フレックスの子が内容幅で列を押し広げないようにする（表の横スクロールを親で受ける） */
+.grid > *,
+.card {
+  min-width: 0;
+}
+
+/* スマホ幅: 表は横スクロール、入力欄は 16px（iOS のフォーカス時ズームを防ぐ） */
+@media (max-width: 767px) {
+  table.w-full {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+  .input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+  .card {
+    @apply p-3;
+  }
+}
+
+/* ホーム画面から起動したときは上部のセーフエリア分を空ける */
+@media (display-mode: standalone) {
+  main {
+    padding-top: calc(env(safe-area-inset-top) + 0.75rem);
+  }
 }

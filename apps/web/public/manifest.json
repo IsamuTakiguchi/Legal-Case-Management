@@ -1,0 +1,22 @@
+{
+  "name": "統合コミュニケーション管理",
+  "short_name": "事務所アプリ",
+  "description": "LINE公式・Chatwork・Gmail の依頼者連絡、事件・期日・タスクをひとつに",
+  "lang": "ja",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f8fafc",
+  "theme_color": "#2b4c7e",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "受信箱", "url": "/inbox", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "要確認", "url": "/alerts", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "タスク", "url": "/tasks", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

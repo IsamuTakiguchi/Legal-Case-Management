@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#2b4c7e"/>
+  <!-- 封筒 -->
+  <rect x="96" y="160" width="320" height="216" rx="24" fill="#ffffff"/>
+  <path d="M96 190 L256 300 L416 190" fill="none" stroke="#2b4c7e" stroke-width="26" stroke-linejoin="round" stroke-linecap="round"/>
+  <!-- 天秤（法律） -->
+  <circle cx="256" cy="120" r="30" fill="#f2c94c"/>
+</svg>
