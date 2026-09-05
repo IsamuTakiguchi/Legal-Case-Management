@@ -52,6 +52,9 @@ let overrides: Record<string, string> = {};
 export function env(): Env {
   if (!cached) {
     const merged: Record<string, string | undefined> = { ...process.env };
+    // ホスティング側が公開 URL を教えてくれる場合は既定値に使う（Render / Fly.io）
+    if (!merged.PUBLIC_BASE_URL && merged.RENDER_EXTERNAL_URL) merged.PUBLIC_BASE_URL = merged.RENDER_EXTERNAL_URL;
+    if (!merged.PUBLIC_BASE_URL && merged.FLY_APP_NAME) merged.PUBLIC_BASE_URL = `https://${merged.FLY_APP_NAME}.fly.dev`;
     for (const [k, v] of Object.entries(overrides)) if (v !== '') merged[k] = v;
     const parsed = envSchema.safeParse(merged);
     if (!parsed.success) {

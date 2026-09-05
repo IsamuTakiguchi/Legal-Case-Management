@@ -1,0 +1,28 @@
+# Render.com の Blueprint。ダッシュボード → New → Blueprint でこのリポジトリ（ブランチを選択）を指定すると
+# HTTPS の公開 URL 付きで起動します。ディスク付きのため Starter プラン（有料）が必要です。
+services:
+  - type: web
+    name: legal-case-management
+    runtime: docker
+    plan: starter
+    region: singapore
+    branch: claude/unified-communication-manager-cidsxx
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    disk:
+      name: app-data
+      mountPath: /data
+      sizeGB: 5
+    envVars:
+      - key: DATA_DIR
+        value: /data
+      - key: PORT
+        value: "8787"
+      - key: TZ
+        value: Asia/Tokyo
+      - key: NODE_ENV
+        value: production
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: APP_PASSWORD
+        sync: false

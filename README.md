@@ -26,6 +26,8 @@ LINE公式アカウント・Chatwork・Gmail に分散した依頼者とのや�
 
 ## セットアップ（概要）
 
+最も手間が少ないのは Render.com へのデプロイです（PC に何も入れず、公開 URL も自動）。手順は [docs/setup/deploy.md](docs/setup/deploy.md) の「C. Render.com」を参照してください。事務所 PC で動かす場合は次のとおりです。
+
 1. Docker Desktop を入れて、`scripts/setup.ps1`（Windows）または `scripts/setup.sh`（Mac）を実行
 2. ブラウザで `http://localhost:8787` を開き、決めたパスワードでログイン
 3. 左メニューの **初期設定** で各サービスのキーを貼り付け → 保存 → 接続テスト（Google / Microsoft は「接続」ボタンで同意）

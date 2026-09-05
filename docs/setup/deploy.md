@@ -4,10 +4,21 @@
 
 ## 選択肢
 
-| 方式 | 向いている場合 | 公開 URL |
-|---|---|---|
-| A. 事務所 PC（Docker Desktop）＋ Cloudflare Tunnel | 追加費用をかけたくない。PC を常時起動できる | Cloudflare Zero Trust のトンネル |
-| B. Fly.io などのクラウド（ボリューム付き） | PC を落としても受信を止めたくない | クラウドが発行する URL |
+| 方式 | 向いている場合 | 公開 URL | 手間 |
+|---|---|---|---|
+| **C. Render.com（推奨・最も手間が少ない）** | PC に何も入れたくない。月額 7 ドル程度は許容できる | Render が自動発行（https://…onrender.com） | ブラウザで数クリック |
+| A. 事務所 PC（Docker Desktop）＋ Cloudflare Tunnel | 追加費用をかけたくない。PC を常時起動できる | Cloudflare Zero Trust のトンネル | Docker と Cloudflare の設定が必要 |
+| B. Fly.io（ボリューム付き） | CLI 操作に抵抗がない | Fly.io が自動発行 | CLI のインストールが必要 |
+
+## C. Render.com（推奨）
+
+1. [Render](https://dashboard.render.com/) にアカウントを作成し、GitHub を連携
+2. New → **Blueprint** → このリポジトリを選択 → ブランチ `claude/unified-communication-manager-cidsxx` を指定（`render.yaml` を自動で読み込みます）
+3. `APP_PASSWORD`（ログイン用パスワード）だけ入力して Apply
+4. 数分でビルドが終わり、`https://legal-case-management-xxxx.onrender.com` の URL が付きます。これが公開 URL で、アプリはこの URL を自動で認識します
+5. その URL を開いてログイン → 「初期設定」からキーを登録
+
+ディスク（5GB）付きの Starter プランになります。データはこのディスクに保存され、再デプロイしても消えません。
 
 どちらも OneDrive へは Microsoft Graph API 経由で書き込むため、PC の同期フォルダは不要です（A で同期フォルダに直接書きたい場合は `STORAGE_BACKEND=local` にして `docker-compose.yml` のボリュームを有効にします）。
 

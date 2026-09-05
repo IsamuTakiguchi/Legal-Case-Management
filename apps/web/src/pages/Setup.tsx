@@ -25,6 +25,26 @@ interface SetupData {
 
 const DOC_BASE = 'https://github.com/IsamuTakiguchi/Legal-Case-Management/blob/claude/unified-communication-manager-cidsxx/docs/setup/';
 
+const CONSOLE: Record<string, { label: string; url: string }[]> = {
+  anthropic: [{ label: 'Anthropic Console（API キー）', url: 'https://console.anthropic.com/settings/keys' }],
+  line: [
+    { label: 'LINE Developers コンソール', url: 'https://developers.line.biz/console/' },
+    { label: 'LINE Official Account Manager（応答設定）', url: 'https://manager.line.biz/' },
+  ],
+  chatwork: [
+    { label: 'Chatwork API トークン', url: 'https://www.chatwork.com/service/packages/chatwork/subpackages/api/token.php' },
+    { label: 'Chatwork Webhook 設定', url: 'https://www.chatwork.com/service/packages/chatwork/subpackages/webhook/list.php' },
+  ],
+  google: [
+    { label: 'Google Cloud 認証情報', url: 'https://console.cloud.google.com/apis/credentials' },
+    { label: 'OAuth 同意画面', url: 'https://console.cloud.google.com/apis/credentials/consent' },
+    { label: 'Gmail API を有効化', url: 'https://console.cloud.google.com/apis/library/gmail.googleapis.com' },
+    { label: 'Calendar API を有効化', url: 'https://console.cloud.google.com/apis/library/calendar-json.googleapis.com' },
+  ],
+  microsoft: [{ label: 'Microsoft Entra アプリの登録', url: 'https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade' }],
+  zoom: [{ label: 'Zoom App Marketplace（Build App）', url: 'https://marketplace.zoom.us/develop/create' }],
+};
+
 const STEPS: Record<string, string[]> = {
   general: ['アプリを公開している URL を入力します（Cloudflare Tunnel や Fly.io の URL）。', 'この URL を基に、下の Webhook URL とリダイレクト URI が決まります。'],
   anthropic: ['console.anthropic.com で API キーを発行して貼り付けます。', '「接続テスト」で短い応答が返れば完了です。'],
@@ -69,6 +89,7 @@ export default function Setup() {
     onSuccess: (r, id) => setResults((p) => ({ ...p, [id]: r })),
     onError: (e, id) => setResults((p) => ({ ...p, [id]: { ok: false, message: (e as Error).message } })),
   });
+  const connected = new URLSearchParams(location.search).get('connected');
   const d = q.data;
   if (!d) return <div className="text-slate-500">読み込み中…</div>;
   const done = [d.state.anthropic, d.state.line, d.state.chatwork, d.state.google.connected, d.state.microsoft.connected, d.state.zoom].filter(Boolean).length;
@@ -80,6 +101,12 @@ export default function Setup() {
           各サービスのキーをここに貼り付けて保存すると、暗号化してアプリ内に保存されます（.env の編集は不要）。進捗: {done} / 6。詳しい取得手順は各カードの「手順書」を参照してください。
         </p>
       </div>
+      {connected && (
+        <div className="card border-green-300 bg-green-50 text-sm">
+          {connected === 'google' ? 'Google' : 'Microsoft'} に接続しました。
+          {connected === 'google' ? ' 送信済みメールの取込・文体プロファイル生成・カレンダー同期をバックグラウンドで開始しました（設定 → バックグラウンド処理で進捗を確認できます）。' : ' 書式フォルダの索引化をバックグラウンドで開始しました。'}
+        </div>
+      )}
       {d.services.map((s) => {
         const state = s.id === 'google' ? d.state.google : s.id === 'microsoft' ? d.state.microsoft : null;
         const ok = s.id === 'general' ? s.fields[0].set : state ? state.connected : (d.state as unknown as Record<string, boolean>)[s.id];
@@ -100,6 +127,15 @@ export default function Setup() {
                 <li key={i}>{t}</li>
               ))}
             </ol>
+            {CONSOLE[s.id] && (
+              <div className="flex flex-wrap gap-2 text-xs">
+                {CONSOLE[s.id].map((l) => (
+                  <a key={l.url} href={l.url} target="_blank" rel="noreferrer" className="btn btn-sm">
+                    ↗ {l.label}
+                  </a>
+                ))}
+              </div>
+            )}
             {s.id === 'line' && <Url label="Webhook URL" value={d.urls.lineWebhook} />}
             {s.id === 'chatwork' && <Url label="Webhook URL" value={d.urls.chatworkWebhook} />}
             {s.id === 'google' && <Url label="リダイレクト URI" value={d.urls.googleRedirect} />}

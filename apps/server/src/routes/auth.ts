@@ -6,6 +6,7 @@ import { msAuthUrl, handleMsCallback, disconnectMs } from '../integrations/onedr
 import { randomToken } from '../crypto.js';
 import { getCookie, setCookie } from 'hono/cookie';
 import { logger } from '../logger.js';
+import { runOnboardingAfterGoogle, runOnboardingAfterMicrosoft } from '../services/onboarding.js';
 
 export const authRoutes = new Hono();
 
@@ -50,7 +51,8 @@ authRoutes.get('/google/callback', async (c) => {
   try {
     const email = await handleGoogleCallback(code);
     logger.info({ email }, 'Google 接続完了');
-    return c.redirect('/settings?connected=google');
+    setImmediate(() => runOnboardingAfterGoogle());
+    return c.redirect('/setup?connected=google');
   } catch (err) {
     logger.error({ err }, 'Google 接続失敗');
     return c.text(`Google 接続に失敗しました: ${String(err)}`, 500);
@@ -75,7 +77,8 @@ authRoutes.get('/microsoft/callback', async (c) => {
   try {
     const user = await handleMsCallback(code);
     logger.info({ user }, 'Microsoft 接続完了');
-    return c.redirect('/settings?connected=microsoft');
+    setImmediate(() => runOnboardingAfterMicrosoft());
+    return c.redirect('/setup?connected=microsoft');
   } catch (err) {
     logger.error({ err }, 'Microsoft 接続失敗');
     return c.text(`OneDrive 接続に失敗しました: ${String(err)}`, 500);
