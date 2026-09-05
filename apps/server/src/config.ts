@@ -13,6 +13,7 @@ const envSchema = z.object({
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_MODEL: z.string().default('claude-opus-5'),
 
+  LINE_CHANNEL_ID: z.string().optional(),
   LINE_CHANNEL_SECRET: z.string().optional(),
   LINE_CHANNEL_ACCESS_TOKEN: z.string().optional(),
   LINE_MONTHLY_PUSH_LIMIT: z.coerce.number().default(5000),
@@ -93,7 +94,7 @@ export function isConfigured(service: 'line' | 'chatwork' | 'google' | 'zoom' | 
   const e = env();
   switch (service) {
     case 'line':
-      return !!(e.LINE_CHANNEL_SECRET && e.LINE_CHANNEL_ACCESS_TOKEN);
+      return !!(e.LINE_CHANNEL_SECRET && (e.LINE_CHANNEL_ACCESS_TOKEN || e.LINE_CHANNEL_ID));
     case 'chatwork':
       return !!e.CHATWORK_API_TOKEN;
     case 'google':

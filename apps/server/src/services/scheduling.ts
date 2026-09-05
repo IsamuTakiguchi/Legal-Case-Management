@@ -8,6 +8,7 @@ import { getSetting, getSettingInt, holidaySet } from './settings.js';
 import { upsertAlert, resolveAlertsByKeyPrefix } from './alerts.js';
 import { addBusinessDays, familyName, formatJaDateTime, isJstWeekend, jstDate, toJstParts, type ConfirmSlotInput, type ProposeSlotsInput } from '@lcm/shared';
 import { isConfigured } from '../config.js';
+import { isGoogleConnected } from '../integrations/google.js';
 
 export type SchedulingRow = typeof schema.schedulingSessions.$inferSelect;
 
@@ -100,7 +101,17 @@ export async function proposeSlots(input: ProposeSlotsInput): Promise<{ session:
 }
 
 /** 確定: 他の仮押さえを削除し確定イベントを作成、WEB なら Zoom 発行 */
-export async function confirmSlot(input: ConfirmSlotInput): Promise<{ session: SchedulingRow; event: cal.CalendarEventSummary; zoom: { id: string; joinUrl: string; password: string } | null; text: string }> {
+/** WEB 会議の提供元: zoom（設定済み）> meet（Google 接続済み）> なし */
+export function webMeetingProvider(): 'zoom' | 'meet' | 'none' {
+  const pref = getSetting('web_meeting_provider'); // auto | zoom | meet
+  if (pref === 'zoom') return isConfigured('zoom') ? 'zoom' : 'none';
+  if (pref === 'meet') return isGoogleConnected() ? 'meet' : 'none';
+  if (isConfigured('zoom')) return 'zoom';
+  if (isGoogleConnected()) return 'meet';
+  return 'none';
+}
+
+export async function confirmSlot(input: ConfirmSlotInput): Promise<{ session: SchedulingRow; event: cal.CalendarEventSummary; zoom: { id: string; joinUrl: string; password: string } | null; text: string; meetUrl?: string | null }> {
   const session = db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, input.sessionId)).get();
   if (!session) throw new Error('日程調整セッションが見つかりません');
   const client = session.clientId ? db().select().from(schema.clients).where(eq(schema.clients.id, session.clientId)).get() : null;
@@ -112,11 +123,11 @@ export async function confirmSlot(input: ConfirmSlotInput): Promise<{ session: S
   const startAt = new Date(input.startAt);
   const endAt = new Date(startAt.getTime() + input.durationMinutes * 60_000);
   let zoom: { id: string; joinUrl: string; password: string } | null = null;
-  if (input.createZoom || session.kind === 'WEB') {
-    if (isConfigured('zoom')) {
-      const z = await createZoomMeeting({ topic: `${familyName(name)}様 ${session.kind === 'WEB' ? 'WEB相談' : session.kind}`, startAt, durationMinutes: input.durationMinutes });
-      zoom = { id: z.id, joinUrl: z.joinUrl, password: z.password };
-    }
+  const wantsWeb = input.createZoom || session.kind === 'WEB';
+  const provider = wantsWeb ? webMeetingProvider() : 'none';
+  if (provider === 'zoom') {
+    const z = await createZoomMeeting({ topic: `${familyName(name)}様 ${session.kind === 'WEB' ? 'WEB相談' : session.kind}`, startAt, durationMinutes: input.durationMinutes });
+    zoom = { id: z.id, joinUrl: z.joinUrl, password: z.password };
   }
   const isWeb = session.kind === 'WEB';
   const event = await cal.createEvent({
@@ -125,8 +136,10 @@ export async function confirmSlot(input: ConfirmSlotInput): Promise<{ session: S
     endAt,
     location: isWeb ? null : getSetting('office_location') || null,
     description: zoom ? `Zoom: ${zoom.joinUrl}\nパスコード: ${zoom.password}` : null,
+    meet: provider === 'meet',
     tag: { clientId: session.clientId, kind: session.kind === '期日' ? 'hearing' : session.kind === '打合せ' ? 'meeting' : 'consult', sessionId: session.id },
   });
+  const meetUrl = provider === 'meet' ? (event.meetUrl ?? null) : null;
   db()
     .update(schema.schedulingSessions)
     .set({ state: 'confirmed', confirmedEventId: event.id, confirmedStartAt: startAt.toISOString(), zoom, updatedAt: new Date().toISOString() })
@@ -134,8 +147,9 @@ export async function confirmSlot(input: ConfirmSlotInput): Promise<{ session: S
     .run();
   resolveAlertsByKeyPrefix(`scheduling_stale:${session.id}`);
   const when = formatJaDateTime(startAt);
-  const text = zoom ? `${when}\nZoom URL: ${zoom.joinUrl}\nパスコード: ${zoom.password}` : when;
-  return { session: { ...session, state: 'confirmed', zoom }, event, zoom, text };
+  const text = zoom ? `${when}\nZoom URL: ${zoom.joinUrl}\nパスコード: ${zoom.password}` : meetUrl ? `${when}\nGoogle Meet URL: ${meetUrl}` : when;
+  if (meetUrl) db().update(schema.schedulingSessions).set({ zoom: { id: 'meet', joinUrl: meetUrl, password: '' } }).where(eq(schema.schedulingSessions.id, session.id)).run();
+  return { session: { ...session, state: 'confirmed', zoom: zoom ?? (meetUrl ? { id: 'meet', joinUrl: meetUrl, password: '' } : null) }, event, zoom, text, meetUrl };
 }
 
 export async function cancelSession(sessionId: number) {

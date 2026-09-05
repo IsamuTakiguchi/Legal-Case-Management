@@ -35,6 +35,7 @@ const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean }
   { key: 'forms_index_client_subfolders', label: '依頼者フォルダ内で索引化するサブフォルダ（複数は改行）', multiline: true },
   { key: 'share_link_expiry_days', label: '共有リンクの有効期限（日）' },
   { key: 'morning_digest_hour', label: '朝ダイジェストの時刻（時・JST）' },
+  { key: 'web_meeting_provider', label: 'WEB 会議の提供元（auto / zoom / meet）', hint: 'auto は Zoom 設定済みなら Zoom、なければ Google Meet' },
   { key: 'line_manual_send_note', label: 'LINE でファイルを送れない時の案内文', multiline: true },
 ];
 

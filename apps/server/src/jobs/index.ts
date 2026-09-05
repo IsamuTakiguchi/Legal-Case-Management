@@ -15,6 +15,7 @@ import { casesNeedingSummary, generateCaseSummary } from '../services/cases.js';
 import { retryFailedAttachments } from '../services/attachments.js';
 import { isGoogleConnected } from '../integrations/google.js';
 import { getSettingInt } from '../services/settings.js';
+import { refreshLineTokenIfNeeded } from '../services/lineSetup.js';
 
 export interface JobDef {
   name: string;
@@ -60,6 +61,7 @@ export const JOBS: JobDef[] = [
   { name: 'morningDigest', label: '朝のダイジェスト', cron: `0 ${getSettingInt('morning_digest_hour', 8) - 9 < 0 ? getSettingInt('morning_digest_hour', 8) + 15 : getSettingInt('morning_digest_hour', 8) - 9} * * *`, run: morningDigest, enabled: () => isConfigured('chatwork') },
   { name: 'formsIndex', label: '書式の索引化', cron: '30 17 * * *', run: () => indexForms(), enabled: () => true },
   { name: 'caseSummary', label: '事件サマリーの週次更新', cron: '0 20 * * 0', run: async () => { let n = 0; for (const c of casesNeedingSummary(7)) { await generateCaseSummary(c.id); n++; } return { updated: n }; }, enabled: () => isConfigured('anthropic') },
+  { name: 'lineToken', label: 'LINE トークンの自動更新', cron: '15 18 * * *', run: refreshLineTokenIfNeeded, enabled: () => isConfigured('line') },
   { name: 'retryAttachments', label: '添付の再取得', cron: '40 */3 * * *', run: async () => ({ retried: await retryFailedAttachments() }), enabled: () => true },
 ];
 

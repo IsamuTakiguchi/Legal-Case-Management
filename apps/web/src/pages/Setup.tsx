@@ -47,11 +47,11 @@ const CONSOLE: Record<string, { label: string; url: string }[]> = {
 const STEPS: Record<string, string[]> = {
   general: ['アプリを公開している URL を入力します（Cloudflare Tunnel や Fly.io の URL）。', 'この URL を基に、下の Webhook URL とリダイレクト URI が決まります。'],
   anthropic: ['console.anthropic.com で API キーを発行して貼り付けます。', '「接続テスト」で短い応答が返れば完了です。'],
-  line: ['LINE Developers → チャネル基本設定の「チャネルシークレット」、Messaging API 設定の「チャネルアクセストークン（長期）」を貼り付けます。', '同じ画面の Webhook URL に下の URL を登録し「検証」→「Webhook の利用」を ON。', 'LINE Official Account Manager → 応答設定で「チャット」と「Webhook」を両方 ON。'],
+  line: ['LINE Developers → 該当チャネル →「チャネル基本設定」タブにある「チャネル ID」と「チャネルシークレット」の 2 つを貼り付けて保存。', '「接続テスト」を押すと、アクセストークンの発行と Webhook URL の登録・疎通確認まで自動で行います（トークンは期限前に自動更新）。', 'あとは LINE Developers の「Webhook の利用」を ON、LINE Official Account Manager → 応答設定で「チャット」を ON にするだけです。'],
   chatwork: ['Chatwork → サービス連携 → API Token を貼り付けます。', '（任意）サービス連携 → Webhook で下の URL を登録し、表示されたトークンを貼り付けると即時受信になります。'],
   google: ['①のリンクで 2 つの API をまとめて有効化（プロジェクトがなければその場で作成）。', '②で同意画面を作成: Workspace なら「内部」、個人 Gmail なら「外部」で作って「本番環境に公開」。', '③でクライアント（ウェブ アプリケーション）を作り、下のリダイレクト URI を貼り付け。表示された ID とシークレットをここに貼って保存 →「Google に接続」。'],
   microsoft: ['最短: 下の「簡易接続（アプリ登録なし）」を押し、表示されたコードを microsoft.com/devicelogin で入力して事務所の Microsoft アカウントでサインイン。', '簡易接続がテナントの設定で拒否される場合のみ、Entra でアプリ登録（リダイレクト URI、シークレット、Files.ReadWrite / User.Read / offline_access）を行い、下の欄に貼り付けます。'],
-  zoom: ['Zoom App Marketplace → Build App → Server-to-Server OAuth。Account ID / Client ID / Client Secret を貼り付け。', 'Scopes に meeting:write:admin と meeting:read:admin を追加して Activate。'],
+  zoom: ['任意です。未設定のときは Google 接続済みなら WEB 相談の確定時に Google Meet の URL を自動発行して送ります。', 'Zoom を使う場合: Zoom App Marketplace → Build App → Server-to-Server OAuth → Account ID / Client ID / Client Secret を貼り付け → Scopes に meeting:write:admin と meeting:read:admin を追加して Activate。'],
 };
 
 export default function Setup() {

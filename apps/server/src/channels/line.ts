@@ -2,6 +2,7 @@ import { env, isConfigured } from '../config.js';
 import { hmacSha256Base64, safeEqual } from '../crypto.js';
 import type { ChannelAdapter, InboundMessage, OutboundFile, SendResult } from './types.js';
 import { logger } from '../logger.js';
+import { lineAccessToken } from '../services/lineSetup.js';
 
 const API = 'https://api.line.me/v2/bot';
 const DATA_API = 'https://api-data.line.me/v2/bot';
@@ -35,8 +36,8 @@ export function verifyLineSignature(rawBody: Buffer, signature: string | undefin
   return safeEqual(hmacSha256Base64(secret, rawBody), signature);
 }
 
-function authHeaders(): Record<string, string> {
-  return { Authorization: `Bearer ${env().LINE_CHANNEL_ACCESS_TOKEN}` };
+async function authHeaders(): Promise<Record<string, string>> {
+  return { Authorization: `Bearer ${await lineAccessToken()}` };
 }
 
 export function lineThreadId(ev: LineEvent): string | null {
@@ -102,7 +103,7 @@ export function normalizeLineEvent(ev: LineEvent): InboundMessage | null {
 }
 
 export async function getLineProfile(userId: string): Promise<{ displayName: string; pictureUrl?: string } | null> {
-  const res = await fetch(`${API}/profile/${encodeURIComponent(userId)}`, { headers: authHeaders() });
+  const res = await fetch(`${API}/profile/${encodeURIComponent(userId)}`, { headers: await authHeaders() });
   if (!res.ok) {
     logger.warn({ status: res.status, userId }, 'LINE プロフィール取得失敗');
     return null;
@@ -113,7 +114,7 @@ export async function getLineProfile(userId: string): Promise<{ displayName: str
 async function waitForContent(messageId: string): Promise<void> {
   // 動画・音声は変換完了を待つ
   for (let i = 0; i < 10; i++) {
-    const res = await fetch(`${DATA_API}/message/${messageId}/content/transcoding`, { headers: authHeaders() });
+    const res = await fetch(`${DATA_API}/message/${messageId}/content/transcoding`, { headers: await authHeaders() });
     if (!res.ok) return;
     const j = (await res.json()) as { status: string };
     if (j.status === 'succeeded') return;
@@ -138,7 +139,7 @@ export const lineAdapter: ChannelAdapter = {
     }
     if (!ref.messageId) throw new Error('LINE 添付の参照情報がありません');
     if (ref.type === 'video' || ref.type === 'audio') await waitForContent(ref.messageId);
-    const res = await fetch(`${DATA_API}/message/${ref.messageId}/content`, { headers: authHeaders() });
+    const res = await fetch(`${DATA_API}/message/${ref.messageId}/content`, { headers: await authHeaders() });
     if (!res.ok) throw new Error(`LINE コンテンツ取得失敗 ${res.status}`);
     return Buffer.from(await res.arrayBuffer());
   },
@@ -152,7 +153,7 @@ export const lineAdapter: ChannelAdapter = {
     const messages = chunks.map((t) => ({ type: 'text', text: t }));
     const res = await fetch(`${API}/message/push`, {
       method: 'POST',
-      headers: { ...authHeaders(), 'Content-Type': 'application/json', 'X-Line-Retry-Key': crypto.randomUUID() },
+      headers: { ...(await authHeaders()), 'Content-Type': 'application/json', 'X-Line-Retry-Key': crypto.randomUUID() },
       body: JSON.stringify({ to: opts.externalThreadId, messages }),
     });
     if (!res.ok) {

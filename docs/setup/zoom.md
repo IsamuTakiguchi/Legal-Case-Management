@@ -1,5 +1,7 @@
 # Zoom の設定（Server-to-Server OAuth）
 
+**Zoom の設定は任意です。** Google に接続済みであれば、WEB 相談の確定時に Google Meet の会議 URL をカレンダーの予定に自動で付け、その URL を依頼者へ送ります。Zoom を使いたい場合だけ以下を設定してください（設定すると Zoom が優先されます。設定画面の「WEB 会議の提供元」で切り替え可能）。
+
 ## 1. 権限の確認
 
 Server-to-Server OAuth アプリを作るには、Zoom アカウントのオーナー（または管理者）ロールで「Server-to-Server OAuth app」の権限が有効になっている必要があります。

@@ -6,17 +6,18 @@
 2. 設定 → Messaging API → 「Messaging API を利用する」→ プロバイダーを作成または選択
 3. 表示される **Channel ID** を控える
 
-## 2. トークンを取得
+## 2. チャネル ID とシークレットを貼る（これだけ）
 
 1. [LINE Developers Console](https://developers.line.biz/console/) で該当チャネルを開く
-2. 「チャネル基本設定」タブの **チャネルシークレット** → `.env` の `LINE_CHANNEL_SECRET`
-3. 「Messaging API 設定」タブの **チャネルアクセストークン（長期）** を発行 → `LINE_CHANNEL_ACCESS_TOKEN`
+2. 「チャネル基本設定」タブの **チャネル ID** と **チャネルシークレット** を、アプリの初期設定画面に貼り付けて保存
+3. 「接続テスト」を押す。アクセストークンの発行、Webhook URL の登録、疎通確認をアプリが自動で行います（トークンは 30 日有効で、期限前に自動更新します）
 
-## 3. Webhook を登録
+長期のチャネルアクセストークンを自分で発行して貼ることもできます（その場合は自動発行を使いません）。
 
-1. 「Messaging API 設定」→ Webhook URL に `https://<公開URL>/webhooks/line` を入力（アプリの設定画面にも表示されます）
-2. 「検証」を押して成功することを確認（アプリが起動している必要があります）
-3. **Webhook の利用** を ON
+## 3. 残る手動設定（2 か所の ON）
+
+1. LINE Developers →「Messaging API 設定」→ **Webhook の利用** を ON（API では切り替えられないため）
+2. 下の応答設定
 
 ## 4. 応答設定（重要）
 

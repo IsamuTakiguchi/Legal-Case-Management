@@ -43,8 +43,9 @@ export const CREDENTIAL_SERVICES: CredentialService[] = [
     label: 'LINE公式アカウント',
     doc: 'line.md',
     fields: [
-      { key: 'LINE_CHANNEL_SECRET', label: 'チャネルシークレット', secret: true },
-      { key: 'LINE_CHANNEL_ACCESS_TOKEN', label: 'チャネルアクセストークン（長期）', secret: true },
+      { key: 'LINE_CHANNEL_ID', label: 'チャネル ID（チャネル基本設定に表示）', secret: false },
+      { key: 'LINE_CHANNEL_SECRET', label: 'チャネルシークレット（同じ画面）', secret: true },
+      { key: 'LINE_CHANNEL_ACCESS_TOKEN', label: '長期アクセストークン（任意。空なら自動発行）', secret: true },
       { key: 'LINE_MONTHLY_PUSH_LIMIT', label: '月間送信上限（ライト 5000 / スタンダード 30000）', secret: false, placeholder: '5000' },
     ],
   },

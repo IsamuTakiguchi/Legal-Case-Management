@@ -5,6 +5,7 @@ import * as cw from '../channels/chatwork.js';
 import { calendarApi, gmailApi, isGoogleConnected } from '../integrations/google.js';
 import { isMsConnected, meProfile, listChildren } from '../integrations/onedrive.js';
 import { createZoomMeeting, deleteZoomMeeting } from '../integrations/zoom.js';
+import { lineAccessToken, registerLineWebhook } from './lineSetup.js';
 
 export interface TestResult {
   ok: boolean;
@@ -22,15 +23,17 @@ export async function testService(id: string): Promise<TestResult> {
         return { ok: true, message: `応答: ${text.slice(0, 40)}`, detail: { model: res.model } };
       }
       case 'line': {
-        if (!isConfigured('line')) return { ok: false, message: 'チャネルシークレット／アクセストークンが未設定です' };
-        const res = await fetch('https://api.line.me/v2/bot/info', { headers: { Authorization: `Bearer ${env().LINE_CHANNEL_ACCESS_TOKEN}` } });
+        if (!isConfigured('line')) return { ok: false, message: 'チャネル ID とチャネルシークレット（または長期トークン）が未設定です' };
+        const token = await lineAccessToken();
+        const res = await fetch('https://api.line.me/v2/bot/info', { headers: { Authorization: `Bearer ${token}` } });
         if (!res.ok) return { ok: false, message: `LINE API エラー ${res.status}: ${await res.text()}` };
         const j = (await res.json()) as { displayName?: string; basicId?: string; chatMode?: string; markAsReadMode?: string };
-        return {
-          ok: true,
-          message: `${j.displayName ?? ''}（${j.basicId ?? ''}）に接続できました。チャットモード: ${j.chatMode ?? '不明'}`,
-          detail: { ...j, hint: j.chatMode === 'bot' ? '応答設定で「チャット」を ON にすると管理画面からも手動返信できます' : undefined },
-        };
+        const wh = await registerLineWebhook().catch((err) => ({ registered: false, testDetail: String((err as Error).message ?? err) }) as Awaited<ReturnType<typeof registerLineWebhook>>);
+        const parts = [`${j.displayName ?? ''}（${j.basicId ?? ''}）に接続できました。`];
+        parts.push(wh.registered ? `Webhook URL を自動登録しました（${wh.testDetail ?? ''}）。` : `Webhook 未登録: ${wh.testDetail ?? ''}`);
+        if (wh.registered && wh.active === false) parts.push('LINE Developers の「Webhook の利用」を ON にしてください。');
+        if (j.chatMode === 'bot') parts.push('LINE Official Account Manager の応答設定で「チャット」を ON にすると管理画面からも手動返信できます。');
+        return { ok: true, message: parts.join(' '), detail: { ...j, webhook: wh } };
       }
       case 'chatwork': {
         if (!isConfigured('chatwork')) return { ok: false, message: 'API トークンが未設定です' };

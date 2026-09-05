@@ -21,6 +21,7 @@ export interface CalendarEventSummary {
   description?: string | null;
   status?: string | null;
   htmlLink?: string | null;
+  meetUrl?: string | null;
   tag: Partial<EventTag>;
 }
 
@@ -42,6 +43,7 @@ function toSummary(e: calendar_v3.Schema$Event): CalendarEventSummary | null {
     description: e.description,
     status: e.status,
     htmlLink: e.htmlLink,
+    meetUrl: e.hangoutLink ?? e.conferenceData?.entryPoints?.find((p) => p.entryPointType === 'video')?.uri ?? null,
     tag: {
       clientId: p.clientId ? Number(p.clientId) : undefined,
       caseId: p.caseId ? Number(p.caseId) : undefined,
@@ -92,6 +94,8 @@ export async function createEvent(opts: {
   location?: string | null;
   description?: string | null;
   tentative?: boolean;
+  /** Google Meet の会議リンクを自動作成する */
+  meet?: boolean;
   tag: EventTag;
 }): Promise<CalendarEventSummary> {
   const cal = calendarApi();
@@ -101,8 +105,10 @@ export async function createEvent(opts: {
   if (opts.tag.sessionId) priv.sessionId = String(opts.tag.sessionId);
   const res = await cal.events.insert({
     calendarId: calId(),
+    conferenceDataVersion: opts.meet ? 1 : 0,
     requestBody: {
       summary: opts.title,
+      ...(opts.meet ? { conferenceData: { createRequest: { requestId: `lcm-${Date.now()}`, conferenceSolutionKey: { type: 'hangoutsMeet' } } } } : {}),
       location: opts.location ?? undefined,
       description: opts.description ?? undefined,
       start: { dateTime: opts.startAt.toISOString(), timeZone: TZ },
