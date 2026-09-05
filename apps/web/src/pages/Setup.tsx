@@ -282,9 +282,9 @@ function GoogleGuide({ redirectUri }: { redirectUri: string }) {
 function Url({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <div className="flex items-center gap-2 rounded bg-slate-50 px-2 py-1 text-xs">
+    <div className="flex flex-wrap items-center gap-2 rounded bg-slate-50 px-2 py-1 text-xs">
       <span className="text-slate-500">{label}:</span>
-      <code className="select-all">{value}</code>
+      <code className="select-all break-all">{value}</code>
       <button
         className="btn btn-sm"
         onClick={() => {
