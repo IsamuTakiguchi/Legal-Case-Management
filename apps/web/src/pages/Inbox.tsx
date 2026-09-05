@@ -70,10 +70,14 @@ export default function Inbox() {
           {query.data?.map((c) => (
             <li key={c.id}>
               <Link to={`/inbox/${c.id}`} className={`flex items-start gap-3 px-3 py-3 hover:bg-slate-50 md:px-4 ${c.unread ? 'bg-blue-50/40' : ''}`}>
-                <span className={`${channelBadge(c.channel)} mt-0.5 hidden w-20 shrink-0 justify-center md:inline-flex`}>{channelLabel(c.channel)}</span>
+                <span className="hidden shrink-0 md:block">
+                  <span className={`${channelBadge(c.channel)} mt-0.5 w-20 justify-center`}>{channelLabel(c.channel)}</span>
+                </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className={`${channelBadge(c.channel)} shrink-0 md:hidden`}>{channelLabel(c.channel)}</span>
+                    <span className="shrink-0 md:hidden">
+                      <span className={channelBadge(c.channel)}>{channelLabel(c.channel)}</span>
+                    </span>
                     <span className={`min-w-0 truncate ${c.unread ? 'font-bold' : 'font-medium'}`}>{c.client?.name ?? c.counterpartName ?? c.counterpartAddress ?? '（不明）'}</span>
                     <span className="ml-auto shrink-0 whitespace-nowrap text-xs text-slate-400">{fmtRelative(c.lastMessageAt)}</span>
                   </div>
