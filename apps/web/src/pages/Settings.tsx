@@ -347,6 +347,19 @@ export default function Settings() {
       )}
 
       <section className="card">
+        <h2 className="mb-1 font-semibold">ログイン</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          Google のクライアント ID を設定すると、ログイン画面に「Google アカウントでログイン」が出ます。許可するアドレスが空のときは「Google に接続」したアカウント
+          {s?.google.account ? `（${s.google.account}）` : ''}だけがログインできます。パスワードでのログインも引き続き使えます。
+        </p>
+        <label className="label">Google ログインを許可するメールアドレス（複数は改行）</label>
+        <textarea className="input" rows={2} value={form.login_google_emails ?? ''} onChange={(e) => setForm({ ...form, login_google_emails: e.target.value })} placeholder={s?.google.account ?? 'example@gmail.com'} />
+        <button className="btn btn-primary mt-3" onClick={() => save.mutate()} disabled={save.isPending}>
+          保存
+        </button>
+      </section>
+
+      <section className="card">
         <h2 className="mb-3 font-semibold">パスワード変更</h2>
         <div className="flex flex-wrap items-end gap-2">
           <div>

@@ -1,7 +1,7 @@
 import { and, eq, gt, inArray, lt, desc } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import * as cal from '../integrations/calendar.js';
-import { classifyEventTitle, titleMentionsClient, isNonClientTitle, formatJaDateTime, familyName, type EventKind, type NextHearingInput } from '@lcm/shared';
+import { classifyEventTitle, titleMentionsClient, isNonClientTitle, formatJaDateTime, familyName, type EventKind, type NextHearingInput, OPEN_CASE_STATUSES } from '@lcm/shared';
 import { upsertAlert, resolveAlert, resolveAlertsByKeyPrefix } from './alerts.js';
 import { storage } from '../integrations/storage.js';
 import { clientFolder } from './attachments.js';
@@ -32,7 +32,10 @@ export async function syncCalendar(): Promise<{ synced: number }> {
       if (hit) clientId = hit.c.id;
     }
     if (clientId && !caseId) {
-      const active = d.select().from(schema.cases).where(and(eq(schema.cases.clientId, clientId), eq(schema.cases.status, 'active'))).orderBy(desc(schema.cases.updatedAt)).get();
+      // 進行事件 → 残務処理 → 相談 の優先順で割り当てる
+      const open = d.select().from(schema.cases).where(and(eq(schema.cases.clientId, clientId), inArray(schema.cases.status, OPEN_CASE_STATUSES))).orderBy(desc(schema.cases.updatedAt)).all();
+      const rank: Record<string, number> = { active: 0, wrapup: 1, consultation: 2 };
+      const active = open.sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9))[0];
       if (active) caseId = active.id;
     }
     if (e.tag.kind === undefined && e.status === 'tentative' && kind !== 'hold') kind = 'hold';
@@ -57,7 +60,7 @@ export async function syncCalendar(): Promise<{ synced: number }> {
   const cached = d.select().from(schema.calendarEvents).where(and(gt(schema.calendarEvents.startAt, from.toISOString()), lt(schema.calendarEvents.startAt, to.toISOString()))).all();
   for (const c of cached) if (!seen.has(c.googleEventId)) d.delete(schema.calendarEvents).where(eq(schema.calendarEvents.id, c.id)).run();
   // 事件の次回期日キャッシュ更新
-  const cases = d.select().from(schema.cases).where(eq(schema.cases.status, 'active')).all();
+  const cases = d.select().from(schema.cases).where(inArray(schema.cases.status, OPEN_CASE_STATUSES)).all();
   for (const c of cases) {
     const next = d
       .select()

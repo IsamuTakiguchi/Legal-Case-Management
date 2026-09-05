@@ -131,7 +131,7 @@ export default function Forms() {
 }
 
 function DraftPanel({ templateIds, caseId, onClose }: { templateIds: number[]; caseId: number | null; onClose: () => void }) {
-  const cases = useQuery({ queryKey: ['cases', 'active'], queryFn: () => api.get<{ id: number; title: string; clientName: string }[]>('/cases?status=active') });
+  const cases = useQuery({ queryKey: ['cases', 'open'], queryFn: () => api.get<{ id: number; title: string; clientName: string }[]>('/cases?status=open') });
   const [selCase, setSelCase] = useState<string>(caseId ? String(caseId) : '');
   const [title, setTitle] = useState('');
   const [instruction, setInstruction] = useState('');

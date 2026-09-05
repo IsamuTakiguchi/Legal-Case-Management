@@ -2,7 +2,7 @@ import { and, eq, desc, gt, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/index.js';
 import { generateStructured, generateText } from '../integrations/anthropic.js';
-import { formatJaDateTime, type CaseInput, type CaseNoteInput, WAITING_FOR, CASE_NOTE_KIND_LABEL, type CaseNoteKind } from '@lcm/shared';
+import { formatJaDateTime, type CaseInput, type CaseNoteInput, WAITING_FOR, CASE_NOTE_KIND_LABEL, type CaseNoteKind, OPEN_CASE_STATUSES } from '@lcm/shared';
 import { createTask } from './tasks.js';
 
 export type CaseRow = typeof schema.cases.$inferSelect;
@@ -62,7 +62,9 @@ export function updateCase(id: number, patch: Partial<CaseInput & { caseType: st
 export function listCases(filter: { clientId?: number; status?: string }) {
   const conds = [];
   if (filter.clientId) conds.push(eq(schema.cases.clientId, filter.clientId));
-  if (filter.status) conds.push(eq(schema.cases.status, filter.status));
+  // 'open' は終了以外（相談・進行事件・残務処理）
+  if (filter.status === 'open') conds.push(inArray(schema.cases.status, OPEN_CASE_STATUSES));
+  else if (filter.status) conds.push(eq(schema.cases.status, filter.status));
   return db()
     .select({ c: schema.cases, clientName: schema.clients.name, caseTypeLabel: schema.caseTypes.label, hasCreditors: schema.caseTypes.hasCreditors })
     .from(schema.cases)
@@ -200,13 +202,21 @@ export async function generateCaseSummary(id: number): Promise<string> {
   return md;
 }
 
+/** 終了以外の事件。進行事件 → 残務処理 → 相談 の順（メッセージや予定の自動割当に使う） */
 export function activeCasesForClient(clientId: number) {
-  return db().select().from(schema.cases).where(and(eq(schema.cases.clientId, clientId), eq(schema.cases.status, 'active'))).orderBy(desc(schema.cases.updatedAt)).all();
+  const order: Record<string, number> = { active: 0, wrapup: 1, consultation: 2 };
+  return db()
+    .select()
+    .from(schema.cases)
+    .where(and(eq(schema.cases.clientId, clientId), inArray(schema.cases.status, OPEN_CASE_STATUSES)))
+    .orderBy(desc(schema.cases.updatedAt))
+    .all()
+    .sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9));
 }
 
 export function casesNeedingSummary(days = 7) {
   const cutoff = new Date(Date.now() - days * 86400_000).toISOString();
-  return db().select().from(schema.cases).where(eq(schema.cases.status, 'active')).all().filter((c) => !c.summaryGeneratedAt || c.summaryGeneratedAt < cutoff).filter((c) => c.updatedAt > (c.summaryGeneratedAt ?? '') || !c.summaryGeneratedAt);
+  return db().select().from(schema.cases).where(inArray(schema.cases.status, ['active', 'wrapup'])).all().filter((c) => !c.summaryGeneratedAt || c.summaryGeneratedAt < cutoff).filter((c) => c.updatedAt > (c.summaryGeneratedAt ?? '') || !c.summaryGeneratedAt);
 }
 
 export { gt };

@@ -76,7 +76,7 @@ export const caseInputSchema = z.object({
   title: z.string().min(1),
   courtName: z.string().optional().nullable(),
   caseNumber: z.string().optional().nullable(),
-  status: z.enum(['active', 'closed']).default('active'),
+  status: z.enum(['consultation', 'active', 'wrapup', 'closed']).default('active'),
 });
 export type CaseInput = z.infer<typeof caseInputSchema>;
 
@@ -140,6 +140,18 @@ export const nextHearingInputSchema = z.object({
   location: z.string().optional(),
 });
 export type NextHearingInput = z.infer<typeof nextHearingInputSchema>;
+
+/** 事件の進捗区分 */
+export const CASE_STATUSES = ['consultation', 'active', 'wrapup', 'closed'] as const;
+export type CaseStatus = (typeof CASE_STATUSES)[number];
+export const CASE_STATUS_LABEL: Record<CaseStatus, string> = {
+  consultation: '相談',
+  active: '進行事件',
+  wrapup: '残務処理',
+  closed: '終了事件',
+};
+/** 終了以外（受任前の相談を含む） */
+export const OPEN_CASE_STATUSES: CaseStatus[] = ['consultation', 'active', 'wrapup'];
 
 export const CASE_NOTE_KINDS = ['phone', 'meeting', 'court', 'memo', 'progress', 'policy'] as const;
 export type CaseNoteKind = (typeof CASE_NOTE_KINDS)[number];

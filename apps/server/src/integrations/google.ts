@@ -28,6 +28,26 @@ export function googleAuthUrl(state: string): string {
   return newClient().generateAuthUrl({ access_type: 'offline', prompt: 'consent', scope: GOOGLE_SCOPES, state });
 }
 
+/** ログイン用（メールアドレスの確認だけ。Gmail 等の権限は求めない） */
+export function googleLoginUrl(state: string): string {
+  return newClient().generateAuthUrl({ scope: ['openid', 'email'], prompt: 'select_account', state });
+}
+
+/** ログイン用コールバック: トークンは保存せず、確認済みメールアドレスだけ返す */
+export async function verifyGoogleLogin(code: string): Promise<string | null> {
+  const client = newClient();
+  const { tokens } = await client.getToken(code);
+  if (tokens.id_token) {
+    const ticket = await client.verifyIdToken({ idToken: tokens.id_token, audience: env().GOOGLE_CLIENT_ID });
+    const p = ticket.getPayload();
+    if (p?.email && p.email_verified) return p.email.toLowerCase();
+    return null;
+  }
+  client.setCredentials(tokens);
+  const me = await google.oauth2({ version: 'v2', auth: client }).userinfo.get();
+  return me.data.email && me.data.verified_email ? me.data.email.toLowerCase() : null;
+}
+
 export function loadGoogleTokens(): Credentials | null {
   const row = db().select().from(schema.oauthTokens).where(eq(schema.oauthTokens.provider, 'google')).get();
   if (!row) return null;
