@@ -6,7 +6,7 @@ services:
     runtime: docker
     plan: starter
     region: singapore
-    branch: claude/unified-communication-manager-cidsxx
+    branch: main
     dockerfilePath: ./Dockerfile
     healthCheckPath: /healthz
     disk:

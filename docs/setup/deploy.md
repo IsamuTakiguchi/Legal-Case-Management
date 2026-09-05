@@ -19,7 +19,7 @@ Dockerfile をそのまま使います（`railway.json` がビルド方法とヘ
 
 1. [Railway](https://railway.com/) にログインし、GitHub を連携
 2. **New Project → Deploy from GitHub repo** → このリポジトリを選択
-3. 作成されたサービスを開き、**Settings → Source → Branch** を `claude/unified-communication-manager-cidsxx` にする（既定ブランチのままだと空のビルドになります）
+3. 作成されたサービスを開き、**Settings → Source → Branch** が `main` になっていることを確認
 4. **Variables** に `APP_PASSWORD` = ログイン用パスワード（自分で決める）を追加。これ以外の変数は不要です（`PORT` `DATA_DIR` `TZ` は Dockerfile で設定済み、`SESSION_SECRET` は初回起動時に自動生成して Volume に保存、公開 URL は Railway の `RAILWAY_PUBLIC_DOMAIN` から自動認識）
 5. サービスを右クリック → **Add Volume** → Mount Path を `/data` にする
 6. **Settings → Networking → Generate Domain** → ポートを `8787` にする。`https://xxxx.up.railway.app` の URL が付きます
@@ -35,7 +35,7 @@ Dockerfile をそのまま使います（`railway.json` がビルド方法とヘ
 ## B. Render.com
 
 1. [Render](https://dashboard.render.com/) にアカウントを作成し、GitHub を連携
-2. New → **Blueprint** → このリポジトリを選択 → ブランチ `claude/unified-communication-manager-cidsxx` を指定（`render.yaml` を自動で読み込みます）
+2. New → **Blueprint** → このリポジトリを選択 → ブランチ `main` を指定（`render.yaml` を自動で読み込みます）
 3. `APP_PASSWORD`（ログイン用パスワード）だけ入力して Apply
 4. 数分でビルドが終わり、`https://legal-case-management-xxxx.onrender.com` の URL が付きます。これが公開 URL で、アプリはこの URL を自動で認識します
 5. その URL を開いてログイン → 「初期設定」からキーを登録
@@ -46,7 +46,7 @@ Dockerfile をそのまま使います（`railway.json` がビルド方法とヘ
 
 最短手順:
 
-1. リポジトリを取得（ブランチ `claude/unified-communication-manager-cidsxx`）
+1. リポジトリを取得（ブランチ `main`）
 2. 起動スクリプトを実行（ログイン用パスワードを聞かれます）
    - Windows: PowerShell で `scripts\setup.ps1`
    - Mac / Linux: `bash scripts/setup.sh`
