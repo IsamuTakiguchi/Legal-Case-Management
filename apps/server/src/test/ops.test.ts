@@ -300,6 +300,27 @@ describe('Gmail の取込範囲', () => {
     setSetting('gmail_categories', 'all');
     db().delete(schema.conversations).where(inArray(schema.conversations.id, [promo.id, main.id])).run();
   });
+
+  it('区分の無い取込済み会話は保存済みラベルから判定し直せる', async () => {
+    const { recategorizeConversations } = await import('../channels/gmail.js');
+    const { listConversations } = await import('../services/inbox.js');
+    const now = new Date().toISOString();
+    const promo = db().insert(schema.conversations).values({ channel: 'gmail', externalThreadId: 'old-promo', subject: 'セール', lastMessageAt: now, lastInboundAt: now, meta: { counterpartEmail: 'shop@example.com' } }).returning().get();
+    const main = db().insert(schema.conversations).values({ channel: 'gmail', externalThreadId: 'old-main', subject: '相談', lastMessageAt: now, lastInboundAt: now, meta: {} }).returning().get();
+    db().insert(schema.messages).values({ conversationId: promo.id, channel: 'gmail', externalId: 'old-promo-1', direction: 'in', sentAt: now, raw: { labelIds: ['INBOX', 'CATEGORY_PROMOTIONS'] } }).run();
+    db().insert(schema.messages).values({ conversationId: main.id, channel: 'gmail', externalId: 'old-main-1', direction: 'in', sentAt: now, raw: { labelIds: ['INBOX', 'CATEGORY_PERSONAL'] } }).run();
+    const r = await recategorizeConversations();
+    expect(r.checked).toBeGreaterThanOrEqual(2);
+    expect((db().select().from(schema.conversations).where(eq(schema.conversations.id, promo.id)).get()!.meta as { category?: string }).category).toBe('promotions');
+    expect((db().select().from(schema.conversations).where(eq(schema.conversations.id, main.id)).get()!.meta as { category?: string }).category).toBe('primary');
+    setSetting('gmail_categories', 'primary');
+    const ids = listConversations({ channel: 'gmail' }).map((c) => c.id);
+    expect(ids).not.toContain(promo.id);
+    expect(ids).toContain(main.id);
+    setSetting('gmail_categories', 'all');
+    db().delete(schema.messages).where(inArray(schema.messages.conversationId, [promo.id, main.id])).run();
+    db().delete(schema.conversations).where(inArray(schema.conversations.id, [promo.id, main.id])).run();
+  });
 });
 
 describe('Google ログインの許可アドレス', () => {

@@ -18,6 +18,8 @@ import { and, eq } from 'drizzle-orm';
 import { runBackup, listLocalBackups, localBackupPath, remoteBackupFolder } from '../services/backup.js';
 import { seedDemoData, clearDemoData, demoStatus } from '../services/demo.js';
 import fs from 'node:fs';
+import { recategorizeConversations } from '../channels/gmail.js';
+import { logger } from '../logger.js';
 
 export const settingsRoutes = new Hono();
 
@@ -34,12 +36,20 @@ settingsRoutes.get('/settings', (c) => {
 
 settingsRoutes.put('/settings', async (c) => {
   const body = z.record(z.string(), z.string()).parse(await c.req.json());
+  const before = allSettings();
   for (const [k, v] of Object.entries(body)) {
     if (!EDITABLE.includes(k)) continue;
     setSetting(k, v);
   }
+  // 「メインだけ」に切り替えたら、区分の無い取込済み会話を裏で判定し直す
+  if (body.gmail_categories === 'primary' && before.gmail_categories !== 'primary') {
+    setImmediate(() => recategorizeConversations().catch((err) => logger.warn({ err }, 'Gmail 会話の再判定に失敗')));
+  }
   return c.json({ ok: true });
 });
+
+/** 取込済みの Gmail 会話の区分（メイン／プロモーション等）を判定し直す */
+settingsRoutes.post('/gmail/recategorize', async (c) => c.json(await recategorizeConversations({ all: c.req.query('all') === '1' })));
 
 settingsRoutes.get('/settings/templates', (c) => c.json(listTemplates()));
 settingsRoutes.put('/settings/templates', async (c) => {

@@ -1,6 +1,9 @@
 import type { gmail_v1 } from 'googleapis';
 import { gmailApi, isGoogleConnected } from '../integrations/google.js';
 import type { ChannelAdapter, InboundMessage, SendResult } from './types.js';
+import { db, schema } from '../db/index.js';
+import { eq, asc } from 'drizzle-orm';
+import { logger } from '../logger.js';
 
 type GmailMessage = gmail_v1.Schema$Message;
 type Part = gmail_v1.Schema$MessagePart;
@@ -187,3 +190,45 @@ export const gmailAdapter: ChannelAdapter = {
     return { externalId: res.data.id ?? `out_${Date.now()}`, externalThreadId: res.data.threadId ?? opts.externalThreadId, sentAt: new Date().toISOString() };
   },
 };
+
+/**
+ * 取込済みの Gmail 会話に受信トレイのタブ（区分）を付け直す。
+ * 区分機能より前に取り込んだ会話には区分が無いので、「メインだけ」に設定してもそのままでは一覧から外れない。
+ * まず保存済みのラベルから判定し、無ければ Gmail API でスレッドのラベルを取りに行く。
+ */
+export async function recategorizeConversations(opts: { all?: boolean } = {}): Promise<{ checked: number; updated: number; nonPrimary: number; fetched: number }> {
+  const d = db();
+  const convs = d.select().from(schema.conversations).where(eq(schema.conversations.channel, 'gmail')).all();
+  const targets = convs.filter((c) => opts.all || !(c.meta as { category?: string }).category);
+  let updated = 0;
+  let fetched = 0;
+  let nonPrimary = 0;
+  const connected = isGoogleConnected();
+  const gmail = connected ? gmailApi() : null;
+  const inboundLabels = (labelSets: (string[] | undefined)[]) => labelSets.find((l) => l && !l.includes('SENT')) ?? labelSets.find((l) => l);
+  for (const conv of targets) {
+    const msgs = d.select({ raw: schema.messages.raw }).from(schema.messages).where(eq(schema.messages.conversationId, conv.id)).orderBy(asc(schema.messages.sentAt)).all();
+    let labels = inboundLabels(msgs.map((m) => (m.raw as { labelIds?: string[] } | null)?.labelIds));
+    if (!labels && gmail && !conv.externalThreadId.startsWith('new:')) {
+      try {
+        const res = await gmail.users.threads.get({ userId: 'me', id: conv.externalThreadId, format: 'minimal' });
+        fetched++;
+        labels = inboundLabels((res.data.messages ?? []).map((m) => m.labelIds ?? undefined));
+      } catch (err) {
+        const code = (err as { code?: number }).code;
+        if (code !== 404) logger.warn({ err, conversationId: conv.id }, 'Gmail スレッドのラベル取得に失敗');
+        continue;
+      }
+    }
+    if (!labels) continue;
+    const category = gmailCategory(labels);
+    if (category !== 'primary') nonPrimary++;
+    const meta = conv.meta as Record<string, unknown>;
+    if (meta.category !== category) {
+      d.update(schema.conversations).set({ meta: { ...meta, category } }).where(eq(schema.conversations.id, conv.id)).run();
+      updated++;
+    }
+  }
+  logger.info({ checked: targets.length, updated, nonPrimary, fetched }, 'Gmail 会話の区分を再判定しました');
+  return { checked: targets.length, updated, nonPrimary, fetched };
+}
