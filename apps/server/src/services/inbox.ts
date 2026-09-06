@@ -223,3 +223,21 @@ export function setNeedsReply(id: number, needsReply: boolean) {
 export function archiveConversation(id: number, archived: boolean) {
   db().update(schema.conversations).set({ archived }).where(eq(schema.conversations.id, id)).run();
 }
+
+export type BulkConversationAction = 'resolve' | 'archive' | 'unarchive' | 'read';
+
+/** 受信箱の一括操作。resolve=対応済み（要返信を外して既読に）、archive=アーカイブ（既読・要返信解除も） */
+export function bulkUpdateConversations(ids: number[], action: BulkConversationAction): number {
+  if (ids.length === 0) return 0;
+  const patch =
+    action === 'resolve'
+      ? { needsReply: false, unread: 0 }
+      : action === 'archive'
+        ? { archived: true, needsReply: false, unread: 0 }
+        : action === 'unarchive'
+          ? { archived: false }
+          : { unread: 0 };
+  const r = db().update(schema.conversations).set(patch).where(inArray(schema.conversations.id, ids)).run();
+  return r.changes;
+}
+

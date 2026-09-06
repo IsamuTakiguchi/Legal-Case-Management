@@ -1,6 +1,6 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { channelBadge, channelLabel, fmtRelative } from '../lib/format';
 
@@ -33,6 +33,31 @@ export default function Inbox() {
     else next.delete(k);
     setParams(next);
   };
+  const qc = useQueryClient();
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [msg, setMsg] = useState('');
+  // 絞り込みを変えたら選択を解除
+  useEffect(() => setSelected(new Set()), [filter.channel, filter.needsReply, filter.unlinked, filter.q, filter.archived, filter.outbound]);
+  const ids = query.data?.map((c) => c.id) ?? [];
+  const allSelected = ids.length > 0 && ids.every((id) => selected.has(id));
+  const toggle = (id: number) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const bulk = useMutation({
+    mutationFn: (action: 'resolve' | 'archive' | 'unarchive' | 'read') => api.post<{ updated: number }>('/conversations/bulk', { ids: [...selected], action }),
+    onSuccess: (r, action) => {
+      setSelected(new Set());
+      qc.invalidateQueries({ queryKey: ['conversations'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      const label = action === 'resolve' ? '対応済みにしました' : action === 'archive' ? 'アーカイブしました' : action === 'unarchive' ? 'アーカイブを解除しました' : '既読にしました';
+      setMsg(`${r.updated} 件を${label}`);
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -66,13 +91,49 @@ export default function Inbox() {
           </form>
         </div>
       </div>
+      {(query.data?.length ?? 0) > 0 && (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <label className="flex items-center gap-1">
+            <input type="checkbox" checked={allSelected} onChange={(e) => setSelected(e.target.checked ? new Set(ids) : new Set())} /> すべて選択
+          </label>
+          {selected.size > 0 ? (
+            <>
+              <span className="text-slate-600">{selected.size} 件を選択中</span>
+              {filter.archived !== '1' && (
+                <>
+                  <button className="btn btn-sm" onClick={() => bulk.mutate('resolve')} disabled={bulk.isPending} title="要返信を外して既読にします">
+                    対応済みにする
+                  </button>
+                  <button className="btn btn-sm" onClick={() => bulk.mutate('archive')} disabled={bulk.isPending} title="受信箱から外します（「アーカイブ」で見られます）">
+                    アーカイブ
+                  </button>
+                </>
+              )}
+              {filter.archived === '1' && (
+                <button className="btn btn-sm" onClick={() => bulk.mutate('unarchive')} disabled={bulk.isPending}>
+                  アーカイブを解除
+                </button>
+              )}
+              <button className="btn btn-sm text-slate-500" onClick={() => setSelected(new Set())}>
+                選択解除
+              </button>
+            </>
+          ) : (
+            <span className="text-xs text-slate-400">チェックを付けると、まとめて対応済み・アーカイブにできます</span>
+          )}
+          {msg && <span className="ml-auto text-xs text-slate-600">{msg}</span>}
+        </div>
+      )}
       <div className="card p-0">
         {query.isLoading && <div className="p-4 text-slate-500">読み込み中…</div>}
         {query.data?.length === 0 && <div className="p-4 text-slate-500">会話はありません。設定画面で各チャネルを接続してください。</div>}
         <ul className="divide-y divide-slate-100">
           {query.data?.map((c) => (
-            <li key={c.id}>
-              <Link to={`/inbox/${c.id}`} className={`flex items-start gap-3 px-3 py-3 hover:bg-slate-50 md:px-4 ${c.unread ? 'bg-blue-50/40' : ''}`}>
+            <li key={c.id} className={`flex items-start ${selected.has(c.id) ? 'bg-blue-50' : ''}`}>
+              <label className="flex shrink-0 cursor-pointer items-center self-stretch px-2 md:px-3" title="選択">
+                <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)} />
+              </label>
+              <Link to={`/inbox/${c.id}`} className={`flex min-w-0 flex-1 items-start gap-3 py-3 pr-3 hover:bg-slate-50 md:pr-4 ${c.unread ? 'bg-blue-50/40' : ''}`}>
                 <span className="hidden shrink-0 md:block">
                   <span className={`${channelBadge(c.channel)} mt-0.5 w-20 justify-center`}>{channelLabel(c.channel)}</span>
                 </span>

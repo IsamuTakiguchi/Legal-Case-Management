@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { eq, desc } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { listConversations, getConversation, markRead, setNeedsReply, archiveConversation } from '../services/inbox.js';
+import { listConversations, getConversation, markRead, setNeedsReply, archiveConversation, bulkUpdateConversations } from '../services/inbox.js';
 import { linkConversationToClient, suggestClients } from '../services/identity.js';
 import { assignConversationAttachments } from '../services/attachments.js';
 import { sendToConversation } from '../services/send.js';
@@ -29,6 +29,12 @@ inboxRoutes.get('/conversations', (c) => {
       inboundOnly: q.outbound !== '1',
     }),
   );
+});
+
+/** 一括操作（対応済み・アーカイブ・アーカイブ解除・既読） */
+inboxRoutes.post('/conversations/bulk', async (c) => {
+  const body = z.object({ ids: z.array(z.number().int()).min(1).max(500), action: z.enum(['resolve', 'archive', 'unarchive', 'read']) }).parse(await c.req.json());
+  return c.json({ updated: bulkUpdateConversations(body.ids, body.action) });
 });
 
 inboxRoutes.get('/conversations/:id', (c) => {

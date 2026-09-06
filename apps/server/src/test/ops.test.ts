@@ -324,6 +324,26 @@ describe('受信箱の表示範囲', () => {
   });
 });
 
+describe('受信箱の一括操作', () => {
+  it('対応済み・アーカイブ・解除をまとめて適用できる', async () => {
+    const { bulkUpdateConversations, listConversations } = await import('../services/inbox.js');
+    const now = new Date().toISOString();
+    const a = db().insert(schema.conversations).values({ channel: 'gmail', externalThreadId: 'bulk-a', lastMessageAt: now, lastInboundAt: now, needsReply: true, unread: 2 }).returning().get();
+    const b = db().insert(schema.conversations).values({ channel: 'gmail', externalThreadId: 'bulk-b', lastMessageAt: now, lastInboundAt: now, needsReply: true, unread: 1 }).returning().get();
+    expect(bulkUpdateConversations([a.id, b.id], 'resolve')).toBe(2);
+    const a1 = db().select().from(schema.conversations).where(eq(schema.conversations.id, a.id)).get()!;
+    expect(a1.needsReply).toBe(false);
+    expect(a1.unread).toBe(0);
+    expect(bulkUpdateConversations([b.id], 'archive')).toBe(1);
+    expect(listConversations({ channel: 'gmail' }).map((c) => c.id)).not.toContain(b.id);
+    expect(listConversations({ channel: 'gmail', archived: true }).map((c) => c.id)).toContain(b.id);
+    expect(bulkUpdateConversations([b.id], 'unarchive')).toBe(1);
+    expect(listConversations({ channel: 'gmail' }).map((c) => c.id)).toContain(b.id);
+    expect(bulkUpdateConversations([], 'archive')).toBe(0);
+    db().delete(schema.conversations).where(inArray(schema.conversations.id, [a.id, b.id])).run();
+  });
+});
+
 describe('Gmail の取込範囲', () => {
   it('ラベルからタブを判定し、「メインだけ」なら一覧から除外する', async () => {
     const { gmailCategory } = await import('../channels/gmail.js');
