@@ -44,29 +44,64 @@ export function guessCaseType(name: string): string {
 
 const SKIP_FOLDERS = /^(_|\.|書式|テンプレ|事務所|その他|旧|過去|archive)/i;
 
-/** 並び順用の先頭かな（「や 山田太郎」「や_山田太郎」「や山田太郎」の「や」）を取り出す */
-const KANA_PREFIX = /^([ぁ-んァ-ヶ]{1,3})(?:[\s　_＿\-－.．]+|(?=[^ぁ-んァ-ヶ\s　]))/;
+/**
+ * 並び順用の先頭かなを取り出す。対応する形:
+ *   「や 山田太郎」「や_山田太郎」（かな 1〜3 文字＋区切り）
+ *   「し塩見海斗　損害賠償請求（交通事故）」（ひらがな 1 文字＋氏名、区切りなし）
+ */
+const KANA_PREFIX_SEP = /^([ぁ-んァ-ヶ]{1,3})[\s　_＿\-－.．]+(?=\S)/;
+const KANA_PREFIX_TIGHT = /^([ぁ-ん])(?=[^ぁ-ん\s　])/;
 
-export function parseFolderName(folder: string): { name: string; kanaPrefix: string | null } {
-  const trimmed = folder.trim();
-  const m = trimmed.match(KANA_PREFIX);
-  // 先頭かなの後に何も無い（全部かなの名前）場合はプレフィックスとみなさない
-  if (m && trimmed.slice(m[0].length).trim()) return { name: guessNameFromFolder(trimmed.slice(m[0].length)), kanaPrefix: m[1] };
-  return { name: guessNameFromFolder(trimmed), kanaPrefix: null };
+export interface ParsedFolderName {
+  name: string;
+  kanaPrefix: string | null;
+  /** 氏名の後ろに空白区切りで付いた事件名（例: 損害賠償請求（交通事故）） */
+  caseTitle: string | null;
 }
 
-/** 既存フォルダ名の付け方（かな＋区切り＋氏名）を推定してフォーマットにする。例: "{kana} {name}" */
+export function parseFolderName(folder: string): ParsedFolderName {
+  const trimmed = folder.trim();
+  const m = trimmed.match(KANA_PREFIX_SEP) ?? trimmed.match(KANA_PREFIX_TIGHT);
+  if (m && trimmed.slice(m[0].length).trim()) {
+    const rest = trimmed.slice(m[0].length).trim();
+    // かな付きの形では、最初の空白より後ろは事件名とみなす
+    const sp = rest.search(/[\s　]/);
+    if (sp > 0) {
+      const namePart = rest.slice(0, sp);
+      const title = rest.slice(sp).trim();
+      return { name: guessNameFromFolder(namePart), kanaPrefix: m[1], caseTitle: title || null };
+    }
+    return { name: guessNameFromFolder(rest), kanaPrefix: m[1], caseTitle: null };
+  }
+  return { name: guessNameFromFolder(trimmed), kanaPrefix: null, caseTitle: null };
+}
+
+/**
+ * 既存フォルダ名の付け方を推定してフォーマットにする。
+ * 例: "{kana} {name}"、"{kana}{name}　{case}"（かな＋氏名＋全角空白＋事件名）
+ */
 export function detectFolderNameFormat(names: string[]): string {
   const seps: Record<string, number> = {};
+  const caseSeps: Record<string, number> = {};
   let hit = 0;
+  let withCase = 0;
   for (const n of names) {
-    const m = n.trim().match(/^[ぁ-んァ-ヶ]{1,3}([\s　_＿\-－.．]*)(?=[^ぁ-んァ-ヶ\s　])/);
+    const t = n.trim();
+    const m = t.match(/^[ぁ-んァ-ヶ]{1,3}([\s　_＿\-－.．]+)(?=\S)/) ?? t.match(/^[ぁ-ん]()(?=[^ぁ-ん\s　])/);
     if (!m) continue;
     hit++;
     seps[m[1]] = (seps[m[1]] ?? 0) + 1;
+    const rest = t.slice(m[0].length);
+    const cs = rest.match(/([\s　]+)\S/);
+    if (cs) {
+      withCase++;
+      caseSeps[cs[1]] = (caseSeps[cs[1]] ?? 0) + 1;
+    }
   }
   if (names.length === 0 || hit / names.length < 0.5) return '';
-  const sep = Object.entries(seps).sort((a, b) => b[1] - a[1])[0]?.[0] ?? ' ';
+  const top = (o: Record<string, number>, fallback: string) => Object.entries(o).sort((a, b) => b[1] - a[1])[0]?.[0] ?? fallback;
+  const sep = top(seps, ' ');
+  if (withCase / hit >= 0.5) return `{kana}${sep}{name}${top(caseSeps, '　')}{case}`;
   return `{kana}${sep}{name}`;
 }
 
@@ -92,14 +127,14 @@ export async function onedriveCandidates(): Promise<ImportCandidate[]> {
     for (const i of items) {
       if (!i.isFolder || SKIP_FOLDERS.test(i.name)) continue;
       if (!parent && parents.length === 1 && [...statusByParent.keys()].includes(i.name)) continue;
-      const { name, kanaPrefix } = parseFolderName(i.name);
+      const { name, kanaPrefix, caseTitle: parsedTitle } = parseFolderName(i.name);
       const folderPath = parent ? `${parent}/${i.name}` : i.name;
       const existing = clients.find((c) => c.onedriveFolderPath === folderPath || c.onedriveFolderPath === i.name || c.name.replace(/[\s　]/g, '') === name.replace(/[\s　]/g, ''));
       const status = statusByParent.get(parent) ?? null;
       // 区分外フォルダ（顧問等）は「進行事件・企業法務」として事件を作る
       const isAdvisory = !status && /顧問/.test(parent);
       const caseStatus: CaseStatus | null = status ?? (isAdvisory ? 'active' : null);
-      const caseType = isAdvisory ? 'corporate' : guessCaseType(i.name);
+      const caseType = isAdvisory ? 'corporate' : guessCaseType(parsedTitle ?? i.name);
       const label = status ? CASE_STATUS_LABEL[status] : parent || null;
       out.push({
         source: 'onedrive',
@@ -108,7 +143,7 @@ export async function onedriveCandidates(): Promise<ImportCandidate[]> {
         existingClientId: existing?.id ?? null,
         note: [label, i.modifiedAt ? `更新 ${i.modifiedAt.slice(0, 10)}` : null].filter(Boolean).join(' / ') || undefined,
         caseStatus,
-        caseTitle: caseStatus ? i.name : null,
+        caseTitle: caseStatus ? (parsedTitle ?? i.name) : null,
         caseType: caseStatus ? caseType : null,
         kana: kanaPrefix,
       });

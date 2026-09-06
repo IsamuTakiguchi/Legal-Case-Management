@@ -82,17 +82,29 @@ export function clientEffectiveStatus(clientId: number): CaseStatus {
  * 新規フォルダの名前。設定 client_folder_name_format（例: "{kana} {name}"）に従い、
  * {kana} は読み（kana）の先頭 1 文字。読みが無ければ氏名だけにする。
  */
-export function clientFolderName(client: { name: string; kana?: string | null }): string {
+export function clientFolderName(client: { name: string; kana?: string | null }, caseTitle?: string | null): string {
   const fmt = getSetting('client_folder_name_format').trim();
   const head = (client.kana ?? '').trim().charAt(0);
   if (!fmt || !fmt.includes('{name}')) return client.name;
   if (fmt.includes('{kana}') && !head) return client.name;
-  return fmt.replace('{kana}', head).replace('{name}', client.name).trim();
+  let out = fmt.replace('{kana}', head).replace('{name}', client.name);
+  if (out.includes('{case}')) {
+    // 事件名が無ければ「{case}」とその前の区切りを落とす
+    out = caseTitle?.trim() ? out.replace('{case}', caseTitle.trim()) : out.replace(/[\s　_＿\-－.．]*\{case\}/, '');
+  }
+  return out.trim();
+}
+
+/** 依頼者の代表的な事件名（進行事件 → 残務処理 → 相談 → 終了事件 の順で最新） */
+function primaryCaseTitle(clientId: number): string | null {
+  const cases = db().select({ title: schema.cases.title, status: schema.cases.status, updatedAt: schema.cases.updatedAt }).from(schema.cases).where(eq(schema.cases.clientId, clientId)).all();
+  if (cases.length === 0) return null;
+  return cases.sort((a, b) => (STATUS_RANK[a.status as CaseStatus] ?? 9) - (STATUS_RANK[b.status as CaseStatus] ?? 9) || b.updatedAt.localeCompare(a.updatedAt))[0]?.title ?? null;
 }
 
 /** 新規に依頼者フォルダを作るときの相対パス */
 export function defaultClientFolderRel(client: { id?: number; name: string; kana?: string | null }): string {
-  const folderName = clientFolderName(client);
+  const folderName = clientFolderName(client, client.id ? primaryCaseTitle(client.id) : null);
   const map = statusFolderMap();
   if (!Object.keys(map).length) return folderName;
   const status = client.id ? clientEffectiveStatus(client.id) : 'consultation';

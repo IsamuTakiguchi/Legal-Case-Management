@@ -74,14 +74,14 @@ export function listCases(filter: { clientId?: number; status?: string }) {
   if (filter.status === 'open') conds.push(inArray(schema.cases.status, OPEN_CASE_STATUSES));
   else if (filter.status) conds.push(eq(schema.cases.status, filter.status));
   return db()
-    .select({ c: schema.cases, clientName: schema.clients.name, caseTypeLabel: schema.caseTypes.label, hasCreditors: schema.caseTypes.hasCreditors })
+    .select({ c: schema.cases, clientName: schema.clients.name, clientKana: schema.clients.kana, caseTypeLabel: schema.caseTypes.label, hasCreditors: schema.caseTypes.hasCreditors })
     .from(schema.cases)
     .innerJoin(schema.clients, eq(schema.clients.id, schema.cases.clientId))
     .leftJoin(schema.caseTypes, eq(schema.caseTypes.key, schema.cases.caseType))
     .where(conds.length ? and(...conds) : undefined)
     .orderBy(desc(schema.cases.updatedAt))
     .all()
-    .map((r) => ({ ...r.c, clientName: r.clientName, caseTypeLabel: r.caseTypeLabel ?? r.c.caseType, hasCreditors: !!r.hasCreditors }));
+    .map((r) => ({ ...r.c, clientName: r.clientName, clientKana: r.clientKana, caseTypeLabel: r.caseTypeLabel ?? r.c.caseType, hasCreditors: !!r.hasCreditors }));
 }
 
 export function getCase(id: number) {

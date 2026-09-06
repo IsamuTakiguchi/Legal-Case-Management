@@ -3,6 +3,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { CHANNEL_LABEL } from '@lcm/shared';
+import { useSort, readingKey, SortHeader, type SortOption } from '../lib/sort';
+
+const CLIENT_SORTS: SortOption<ClientRow>[] = [
+  { key: 'reading', label: 'あいうえお順', value: (c) => readingKey(c.kana, c.name) },
+  { key: 'name', label: '氏名', value: (c) => c.name },
+  { key: 'folder', label: 'フォルダ', value: (c) => c.onedriveFolderPath ?? null },
+  { key: 'updated', label: '更新が新しい順', value: (c) => c.updatedAt ?? null, desc: true },
+];
 
 export interface ClientRow {
   id: number;
@@ -16,6 +24,7 @@ export interface ClientRow {
   onedriveFolderPath: string | null;
   preferredChannel: string | null;
   notes: string | null;
+  updatedAt?: string;
 }
 
 export default function Clients() {
@@ -43,11 +52,20 @@ export default function Clients() {
     },
   });
   const toggle = (id: number) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+  const sort = useSort('clients', CLIENT_SORTS, 'reading');
+  const rows = sort.apply(list.data ?? []);
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-xl font-bold">依頼者</h1>
         <input className="input md:ml-auto md:w-64" placeholder="名前・かなで検索" value={q} onChange={(e) => setQ(e.target.value)} />
+        <select className="input w-auto" value={sort.key} onChange={(e) => sort.setKey(e.target.value)} aria-label="並べ替え">
+          {CLIENT_SORTS.map((o) => (
+            <option key={o.key} value={o.key}>
+              並べ替え: {o.label}
+            </option>
+          ))}
+        </select>
         <button className="btn" onClick={() => setShowImport(!showImport)}>
           一括登録（フォルダ / Chatwork）
         </button>
@@ -81,13 +99,17 @@ export default function Clients() {
               <th className="px-3 py-2">
                 <input type="checkbox" checked={!!list.data?.length && selected.length === list.data.length} onChange={(e) => setSelected(e.target.checked ? (list.data ?? []).map((c) => c.id) : [])} aria-label="すべて選択" />
               </th>
-              <th className="px-4 py-2">氏名</th>
+              <th className="px-4 py-2">
+                <SortHeader label="氏名" sortKey="reading" current={sort.key} desc={sort.desc} onClick={sort.setKey} />
+              </th>
               <th className="px-4 py-2">連絡手段</th>
-              <th className="px-4 py-2">フォルダ</th>
+              <th className="px-4 py-2">
+                <SortHeader label="フォルダ" sortKey="folder" current={sort.key} desc={sort.desc} onClick={sort.setKey} />
+              </th>
             </tr>
           </thead>
           <tbody>
-            {list.data?.map((c) => (
+            {rows.map((c) => (
               <tr key={c.id} className="border-t border-slate-100 hover:bg-slate-50">
                 <td className="px-3 py-2">
                   <input type="checkbox" checked={selected.includes(c.id)} onChange={() => toggle(c.id)} aria-label={`${c.name} を選択`} />

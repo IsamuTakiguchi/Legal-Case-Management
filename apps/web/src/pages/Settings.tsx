@@ -39,7 +39,7 @@ const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean }
   { key: 'unassigned_folder', label: '未振分フォルダ名（依頼者ルート直下）' },
   { key: 'forms_library_paths', label: '書式フォルダのパス（OneDrive ルートから・複数は改行）', multiline: true },
   { key: 'forms_index_client_subfolders', label: '依頼者フォルダ内で索引化するサブフォルダ（複数は改行）', multiline: true },
-  { key: 'client_folder_name_format', label: '新規依頼者フォルダの名前の形', hint: '{kana}=読みの頭文字、{name}=氏名。例: {kana} {name} → 「や 山田太郎」。空なら氏名のみ。既存フォルダから自動推定' },
+  { key: 'client_folder_name_format', label: '新規依頼者フォルダの名前の形', hint: '{kana}=読みの頭文字、{name}=氏名、{case}=事件名。例: {kana}{name}　{case} → 「し塩見海斗　損害賠償請求（交通事故）」。空なら氏名のみ。既存フォルダから自動推定' },
   { key: 'share_link_expiry_days', label: '共有リンクの有効期限（日）' },
   { key: 'morning_digest_hour', label: '朝ダイジェストの時刻（時・JST）' },
   { key: 'web_meeting_provider', label: 'WEB 会議の提供元（auto / zoom / meet）', hint: 'auto は Zoom 設定済みなら Zoom、なければ Google Meet' },
