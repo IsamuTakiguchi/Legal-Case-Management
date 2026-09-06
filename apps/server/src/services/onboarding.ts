@@ -31,11 +31,14 @@ export async function runOnboardingAfterGoogle(): Promise<void> {
         logger.warn({ err }, '送信済みメールの取込に失敗');
       }
       if (isConfigured('anthropic') && styleStats().total >= 5) {
-        try {
-          await generateStyleProfile('all');
-          result.profile = 'generated';
-        } catch (err) {
-          result.profileError = String(err);
+        // 全体と Gmail 専用の 2 つを作る（LINE・Chatwork はサンプルが溜まった時点で日次ジョブが作る）
+        for (const ch of ['all', 'gmail'] as const) {
+          try {
+            await generateStyleProfile(ch);
+            result[`profile_${ch}`] = 'generated';
+          } catch (err) {
+            result[`profile_${ch}_error`] = String(err);
+          }
         }
       }
       try {

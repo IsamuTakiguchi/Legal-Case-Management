@@ -78,7 +78,7 @@ export default function Settings() {
   const qc = useQueryClient();
   const status = useQuery({ queryKey: ['status'], queryFn: () => api.get<Status>('/status'), refetchInterval: 30_000 });
   const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.get<Record<string, string>>('/settings') });
-  const style = useQuery({ queryKey: ['style'], queryFn: () => api.get<{ stats: { total: number; byChannel: Record<string, number>; bySource: Record<string, number> }; profiles: Record<string, string> }>('/style') });
+  const style = useQuery({ queryKey: ['style'], queryFn: () => api.get<{ stats: { total: number; byChannel: Record<string, number>; bySource: Record<string, number>; profiles: { channel: string; generatedAt: string }[] }; profiles: Record<string, string> }>('/style') });
   const [form, setForm] = useState<Record<string, string>>({});
   useEffect(() => {
     if (settings.data) setForm(settings.data);
@@ -95,11 +95,18 @@ export default function Settings() {
     },
     onError: (e) => setMsg((e as Error).message),
   });
+  const [profileChannel, setProfileChannel] = useState<'all' | 'gmail' | 'line' | 'chatwork'>('gmail');
   const [profile, setProfile] = useState('');
   useEffect(() => {
-    if (style.data) setProfile(style.data.profiles.all ?? '');
-  }, [style.data]);
-  const saveProfile = useMutation({ mutationFn: () => api.put('/style/profile', { channel: 'all', markdown: profile }), onSuccess: () => setMsg('プロファイルを保存しました') });
+    if (style.data) setProfile(style.data.profiles[profileChannel] ?? '');
+  }, [style.data, profileChannel]);
+  const saveProfile = useMutation({ mutationFn: () => api.put('/style/profile', { channel: profileChannel, markdown: profile }), onSuccess: () => { setMsg('プロファイルを保存しました'); qc.invalidateQueries({ queryKey: ['style'] }); } });
+  const PROFILE_TABS: { key: 'all' | 'gmail' | 'line' | 'chatwork'; label: string }[] = [
+    { key: 'gmail', label: 'Gmail' },
+    { key: 'line', label: 'LINE' },
+    { key: 'chatwork', label: 'Chatwork' },
+    { key: 'all', label: '全体（共通）' },
+  ];
   const [importText, setImportText] = useState('');
   const [importChannel, setImportChannel] = useState('line');
   const [pw, setPw] = useState({ current: '', next: '' });
@@ -185,7 +192,10 @@ export default function Settings() {
       )}
 
       <section className="card">
-        <h2 className="mb-3 font-semibold">文体学習</h2>
+        <h2 className="mb-1 font-semibold">文体学習</h2>
+        <p className="mb-2 text-xs text-slate-500">
+          チャネルごとに文体を分けて学習します。返信の下書きは、そのチャネルのプロファイルと、そのチャネルで実際に送った文面だけを手本にします（サンプルが 5 件未満のチャネルは共通の分析で補います）。LINE と Chatwork のサンプルは、このアプリから送るたびに自動で増えます。プロファイルはサンプルが増えると毎晩自動で更新されます。
+        </p>
         <div className="mb-2 text-sm text-slate-600">
           サンプル {style.data?.stats.total ?? 0} 件（{Object.entries(style.data?.stats.byChannel ?? {}).map(([k, v]) => `${k}: ${v}`).join(' / ') || 'なし'}）
         </div>
@@ -196,17 +206,30 @@ export default function Settings() {
           <button className="btn btn-sm" onClick={() => styleAction.mutate({ url: '/style/import/chatwork' })} disabled={styleAction.isPending}>
             Chatwork の自分の発言を取込
           </button>
-          <button className="btn btn-primary btn-sm" onClick={() => styleAction.mutate({ url: '/style/profile', body: { channel: 'all' } })} disabled={styleAction.isPending}>
-            {styleAction.isPending ? '処理中…' : '文体プロファイルを生成'}
-          </button>
         </div>
         <div className="mt-3 grid gap-2 md:grid-cols-2">
           <div>
-            <label className="label">文体プロファイル（編集可）</label>
-            <textarea className="input min-h-48 font-mono text-xs" value={profile} onChange={(e) => setProfile(e.target.value)} />
-            <button className="btn btn-sm mt-1" onClick={() => saveProfile.mutate()}>
-              プロファイルを保存
-            </button>
+            <div className="mb-1 flex flex-wrap items-center gap-1">
+              {PROFILE_TABS.map((t) => (
+                <button key={t.key} type="button" className={`btn btn-sm ${profileChannel === t.key ? 'btn-primary' : ''}`} onClick={() => setProfileChannel(t.key)}>
+                  {t.label}
+                  <span className={profileChannel === t.key ? 'opacity-80' : 'text-slate-400'}>{t.key === 'all' ? style.data?.stats.total ?? 0 : style.data?.stats.byChannel[t.key] ?? 0}</span>
+                </button>
+              ))}
+            </div>
+            <label className="label">
+              {PROFILE_TABS.find((t) => t.key === profileChannel)?.label} の文体プロファイル（編集可）
+              {style.data?.stats.profiles?.find((p) => p.channel === profileChannel)?.generatedAt ? <span className="ml-1 text-slate-400">（生成 {fmtDateTime(style.data.stats.profiles.find((p) => p.channel === profileChannel)!.generatedAt)}）</span> : <span className="ml-1 text-orange-600">（未生成）</span>}
+            </label>
+            <textarea className="input min-h-48 font-mono text-xs" value={profile} onChange={(e) => setProfile(e.target.value)} placeholder="「生成」を押すと、このチャネルで送った文面から文体の特徴をまとめます" />
+            <div className="mt-1 flex flex-wrap gap-2">
+              <button className="btn btn-primary btn-sm" onClick={() => styleAction.mutate({ url: '/style/profile', body: { channel: profileChannel } })} disabled={styleAction.isPending || (profileChannel !== 'all' && (style.data?.stats.byChannel[profileChannel] ?? 0) < 5)}>
+                {styleAction.isPending ? '処理中…' : `${PROFILE_TABS.find((t) => t.key === profileChannel)?.label} のプロファイルを生成`}
+              </button>
+              <button className="btn btn-sm" onClick={() => saveProfile.mutate()}>
+                編集を保存
+              </button>
+            </div>
           </div>
           <div>
             <label className="label">過去の文面を手動で取込（空行区切りで複数）</label>

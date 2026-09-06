@@ -180,6 +180,26 @@ describe('Gmail 送信予約', () => {
   });
 });
 
+describe('チャネル別の文体サンプル', () => {
+  it('同じチャネルのサンプルが十分あれば他チャネルの文面を混ぜない', async () => {
+    const { addStyleSample, findSimilarSamples } = await import('../services/style.js');
+    for (let i = 0; i < 6; i++) addStyleSample({ channel: 'gmail', text: `お世話になっております。査定書の件、承知いたしました。メール${i}`, source: 'import', externalId: `g${i}` });
+    // LINE は 5 件未満 → Gmail の文面も手本に使う
+    for (let i = 0; i < 3; i++) addStyleSample({ channel: 'line', text: `査定書の件、承知しました。LINE${i}`, source: 'sent', externalId: `l${i}` });
+    const lineFew = findSimilarSamples('査定書の件', { channel: 'line', limit: 8 });
+    expect(lineFew.some((s) => s.channel === 'gmail')).toBe(true);
+    expect(lineFew[0].channel).toBe('line'); // 同一チャネルが優先
+    // LINE が 5 件以上 → LINE だけ
+    for (let i = 3; i < 6; i++) addStyleSample({ channel: 'line', text: `査定書の件、承知しました。LINE${i}`, source: 'sent', externalId: `l${i}` });
+    const lineMany = findSimilarSamples('査定書の件', { channel: 'line', limit: 8 });
+    expect(lineMany.length).toBeGreaterThan(0);
+    expect(lineMany.every((s) => s.channel === 'line')).toBe(true);
+    const gmail = findSimilarSamples('査定書の件', { channel: 'gmail', limit: 8 });
+    expect(gmail.every((s) => s.channel === 'gmail')).toBe(true);
+    db().delete(schema.styleSamples).run();
+  });
+});
+
 describe('受信箱の表示範囲', () => {
   it('inboundOnly なら自分の送信だけの会話を除く', async () => {
     const { listConversations } = await import('../services/inbox.js');

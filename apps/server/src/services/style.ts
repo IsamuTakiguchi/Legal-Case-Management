@@ -23,19 +23,33 @@ export function addStyleSample(s: { channel: Channel; text: string; contextText?
 }
 
 /** 過去返信の類似検索（FTS5 BM25、同一チャネル・同一依頼者を優先） */
+/** チャネルごとのサンプル数 */
+export function sampleCount(channel: Channel): number {
+  return db().select({ id: schema.styleSamples.id }).from(schema.styleSamples).where(eq(schema.styleSamples.channel, channel)).all().length;
+}
+
+/** このチャネル専用の文体として扱えるだけのサンプルがあるか（Gmail と LINE で文体を分ける運用に対応） */
+const STRICT_MIN = 5;
+
 export function findSimilarSamples(query: string, opts: { channel?: Channel; clientId?: number | null; limit?: number }): StyleSample[] {
   const limit = opts.limit ?? 8;
   const d = db();
   const results: StyleSample[] = [];
   const seen = new Set<number>();
+  // 同じチャネルのサンプルが十分あれば、他チャネルの文面は混ぜない（メールの文体が LINE に出ないように）
+  const strict = !!opts.channel && sampleCount(opts.channel) >= STRICT_MIN;
   const q = query.replace(/\s+/g, ' ').trim().slice(0, 300);
   if (q.length >= 3) {
     try {
       const hits = d
-        .all<{ rowid: number }>(sql`SELECT rowid FROM style_samples_fts WHERE style_samples_fts MATCH ${ftsOr(q)} ORDER BY bm25(style_samples_fts) LIMIT 40`)
+        .all<{ rowid: number }>(sql`SELECT rowid FROM style_samples_fts WHERE style_samples_fts MATCH ${ftsOr(q)} ORDER BY bm25(style_samples_fts) LIMIT 60`)
         .map((r) => r.rowid);
       if (hits.length) {
-        const rows = d.select().from(schema.styleSamples).where(inArray(schema.styleSamples.id, hits)).all();
+        const rows = d
+          .select()
+          .from(schema.styleSamples)
+          .where(strict ? and(inArray(schema.styleSamples.id, hits), eq(schema.styleSamples.channel, opts.channel!)) : inArray(schema.styleSamples.id, hits))
+          .all();
         const rank = new Map(hits.map((id, i) => [id, i]));
         rows.sort((a, b) => score(a, opts) - score(b, opts) || (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
         for (const r of rows) {
@@ -183,7 +197,11 @@ export async function draftReply(req: DraftRequest, ctx: DraftContext, clientId?
 
   const query = [req.instruction, lastInbound?.body ?? ''].join(' ');
   const samples = findSimilarSamples(query, { channel: ctx.channel, clientId, limit: 8 });
-  const profile = getStyleProfile(ctx.channel) || getStyleProfile('all');
+  const ownProfile = getStyleProfile(ctx.channel);
+  const profile = ownProfile || getStyleProfile('all');
+  const profileNote = ownProfile
+    ? ''
+    : `（${CHANNEL_LABEL[ctx.channel]} 専用の分析はまだありません。以下は全チャネル共通の分析なので、${CHANNEL_LABEL[ctx.channel]} の制約に合わせて長さと丁寧さを調整してください）\n`;
   const signature = ctx.channel === 'gmail' ? getSetting('signature_gmail') : '';
   const lawyer = getSetting('lawyer_name');
 
@@ -196,10 +214,10 @@ export async function draftReply(req: DraftRequest, ctx: DraftContext, clientId?
 ${CHANNEL_RULES[ctx.channel]}
 ${signature ? `\n【署名（メールの末尾に付ける）】\n${signature}` : ''}
 
-【本人の文体プロファイル】
-${profile || '（未生成。実例から推測してください）'}
+【本人の文体プロファイル（${CHANNEL_LABEL[ctx.channel]}）】
+${profileNote}${profile || '（未生成。実例から推測してください）'}
 
-【本人の過去の返信例】
+【本人の過去の返信例（${CHANNEL_LABEL[ctx.channel]}${samples.some((s) => s.channel !== ctx.channel) ? '、一部は他チャネル' : ''}）】
 ${samples.map((s, i) => `--- 例${i + 1} ---\n${s.text.slice(0, 900)}`).join('\n\n') || '（なし）'}`;
 
   const threadText = ctx.thread
@@ -310,6 +328,38 @@ export function importPlainText(channel: Channel, text: string): number {
     n++;
   }
   return n;
+}
+
+/**
+ * チャネル別プロファイルの自動更新。サンプルが 5 件以上あり、未生成か、生成後に 10 件以上増えていれば作り直す。
+ */
+export async function refreshStyleProfiles(): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const profiles = new Map(db().select().from(schema.styleProfiles).all().map((p) => [p.channel, p.generatedAt]));
+  for (const ch of ['all', 'gmail', 'line', 'chatwork'] as const) {
+    const rows = db()
+      .select({ createdAt: schema.styleSamples.createdAt })
+      .from(schema.styleSamples)
+      .where(ch === 'all' ? undefined : eq(schema.styleSamples.channel, ch))
+      .all();
+    if (rows.length < 5) {
+      out[ch] = `skip (${rows.length} 件)`;
+      continue;
+    }
+    const gen = profiles.get(ch);
+    const added = gen ? rows.filter((r) => r.createdAt > gen).length : rows.length;
+    if (gen && added < 10) {
+      out[ch] = `up to date (+${added})`;
+      continue;
+    }
+    try {
+      await generateStyleProfile(ch);
+      out[ch] = `generated (${rows.length} 件)`;
+    } catch (err) {
+      out[ch] = `error: ${String((err as Error).message ?? err).slice(0, 100)}`;
+    }
+  }
+  return out;
 }
 
 export function styleStats() {
