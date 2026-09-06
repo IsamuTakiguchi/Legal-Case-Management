@@ -110,17 +110,26 @@ describe('一括登録と削除', () => {
     const { clientFolderName } = await import('../services/clientFolders.js');
     const { setSetting: set } = await import('../services/settings.js');
     // 先頭かな（並び順用）は氏名から外し、読みの頭文字として保持
-    expect(parseFolderName('や 山田太郎')).toEqual({ name: '山田太郎', kanaPrefix: 'や' });
-    expect(parseFolderName('や_山田太郎_離婚')).toEqual({ name: '山田太郎', kanaPrefix: 'や' });
-    expect(parseFolderName('や山田太郎')).toEqual({ name: '山田太郎', kanaPrefix: 'や' });
-    expect(parseFolderName('す 株式会社スズキ商事')).toEqual({ name: '株式会社スズキ商事', kanaPrefix: 'す' });
-    expect(parseFolderName('山田太郎')).toEqual({ name: '山田太郎', kanaPrefix: null });
-    expect(parseFolderName('やまだ')).toEqual({ name: 'やまだ', kanaPrefix: null });
+    expect(parseFolderName('や 山田太郎')).toEqual({ name: '山田太郎', kanaPrefix: 'や', caseTitle: null });
+    expect(parseFolderName('や_山田太郎_離婚')).toEqual({ name: '山田太郎', kanaPrefix: 'や', caseTitle: null });
+    expect(parseFolderName('や山田太郎')).toEqual({ name: '山田太郎', kanaPrefix: 'や', caseTitle: null });
+    expect(parseFolderName('す 株式会社スズキ商事')).toEqual({ name: '株式会社スズキ商事', kanaPrefix: 'す', caseTitle: null });
+    expect(parseFolderName('山田太郎')).toEqual({ name: '山田太郎', kanaPrefix: null, caseTitle: null });
+    expect(parseFolderName('やまだ')).toEqual({ name: 'やまだ', kanaPrefix: null, caseTitle: null });
+    // 事務所の形式: ひらがな 1 文字＋氏名＋全角空白＋事件名
+    expect(parseFolderName('し塩見海斗　損害賠償請求（交通事故）')).toEqual({ name: '塩見海斗', kanaPrefix: 'し', caseTitle: '損害賠償請求（交通事故）' });
+    expect(parseFolderName('か株式会社カトウ　破産申立')).toEqual({ name: '株式会社カトウ', kanaPrefix: 'か', caseTitle: '破産申立' });
+    expect(parseFolderName('や山田花子 離婚調停')).toEqual({ name: '山田花子', kanaPrefix: 'や', caseTitle: '離婚調停' });
+    expect(guessCaseType('損害賠償請求（交通事故）')).toBe('traffic');
     expect(detectFolderNameFormat(['や 山田太郎', 'さ 佐藤花子', 'た_田中', '株式会社ABC'])).toBe('{kana} {name}');
+    expect(detectFolderNameFormat(['し塩見海斗　損害賠償請求（交通事故）', 'か株式会社カトウ　破産申立', 'や山田花子'])).toBe('{kana}{name}　{case}');
     expect(detectFolderNameFormat(['山田太郎', '佐藤花子'])).toBe('');
     set('client_folder_name_format', '{kana} {name}');
     expect(clientFolderName({ name: '山田太郎', kana: 'やまだ たろう' })).toBe('や 山田太郎');
     expect(clientFolderName({ name: '山田太郎', kana: null })).toBe('山田太郎');
+    set('client_folder_name_format', '{kana}{name}　{case}');
+    expect(clientFolderName({ name: '塩見海斗', kana: 'しおみ' }, '損害賠償請求（交通事故）')).toBe('し塩見海斗　損害賠償請求（交通事故）');
+    expect(clientFolderName({ name: '塩見海斗', kana: 'しおみ' }, null)).toBe('し塩見海斗');
     set('client_folder_name_format', '');
     expect(clientFolderName({ name: '山田太郎', kana: 'や' })).toBe('山田太郎');
     expect(guessCaseType('山田太郎_離婚調停')).toBe('divorce');
