@@ -12,7 +12,7 @@ export const fileRoutes = new Hono();
 
 fileRoutes.get('/attachments', (c) => {
   const q = c.req.query();
-  return c.json(listAttachments({ status: q.status || undefined, clientId: q.clientId ? Number(q.clientId) : undefined, limit: q.limit ? Number(q.limit) : undefined }));
+  return c.json(listAttachments({ status: q.status || undefined, clientId: q.clientId ? Number(q.clientId) : undefined, channel: q.channel || undefined, limit: q.limit ? Number(q.limit) : undefined }));
 });
 
 fileRoutes.post('/attachments/:id/assign', async (c) => {

@@ -22,7 +22,8 @@ const STATUS_BADGE: Record<string, string> = { stored: 'badge-gray', failed: 'ba
 export default function Files() {
   const qc = useQueryClient();
   const [status, setStatus] = useState('held');
-  const list = useQuery({ queryKey: ['attachments', status], queryFn: () => api.get<Att[]>(`/attachments${status ? `?status=${status}` : ''}`) });
+  const [channel, setChannel] = useState('');
+  const list = useQuery({ queryKey: ['attachments', status, channel], queryFn: () => api.get<Att[]>(`/attachments?status=${status}&channel=${channel}`) });
   const clients = useQuery({ queryKey: ['clients'], queryFn: () => api.get<{ id: number; name: string }[]>('/clients') });
   const refresh = () => qc.invalidateQueries({ queryKey: ['attachments'] });
   const [msg, setMsg] = useState('');
@@ -36,7 +37,13 @@ export default function Files() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-xl font-bold">受信ファイル</h1>
-        <select className="input ml-auto w-auto" value={status} onChange={(e) => setStatus(e.target.value)}>
+        <select className="input ml-auto w-auto" value={channel} onChange={(e) => setChannel(e.target.value)}>
+          <option value="">全チャネル</option>
+          <option value="line">LINE公式</option>
+          <option value="chatwork">Chatwork</option>
+          <option value="gmail">Gmail</option>
+        </select>
+        <select className="input w-auto" value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="held">未保存（保存するか選ぶ）</option>
           <option value="unassigned">振り分け待ち</option>
           <option value="failed">失敗</option>
@@ -47,7 +54,7 @@ export default function Files() {
       </div>
       {status === 'held' && (
         <p className="text-xs text-slate-500">
-          受信したままで OneDrive には保存していないファイルです。必要なものだけ「保存」を押してください（依頼者が分かっている会話なら、その依頼者の受領資料フォルダに入ります）。要らないものは「不要」で一覧から外れます。設定 → 基本設定 → 「受信ファイルの扱い」で自動保存の範囲を変えられます。
+          受信したままで OneDrive には保存していないファイルです。必要なものだけ「保存」を押してください（依頼者が分かっている会話なら、その依頼者の受領資料フォルダに入ります）。要らないものは「不要」で一覧から外れます。LINE の画像・ファイルは LINE 側の保持期間が短いため、受信時にアプリ内へ控えを取ってあります。設定 → 基本設定 → 「受信ファイルの扱い」で自動保存の範囲を変えられます。
         </p>
       )}
       {msg && <div className="text-xs text-red-600">{msg}</div>}
