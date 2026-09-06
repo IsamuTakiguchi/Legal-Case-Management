@@ -6,6 +6,7 @@ import { calendarApi, gmailApi, isGoogleConnected } from '../integrations/google
 import { isMsConnected, meProfile, listChildren } from '../integrations/onedrive.js';
 import { createZoomMeeting, deleteZoomMeeting } from '../integrations/zoom.js';
 import { lineAccessToken, registerLineWebhook } from './lineSetup.js';
+import { statusFolderMap, guessStatusFolders } from './clientFolders.js';
 
 export interface TestResult {
   ok: boolean;
@@ -53,15 +54,26 @@ export async function testService(id: string): Promise<TestResult> {
         if (!(await isMsConnected())) return { ok: false, message: '設定は保存済みです。「Microsoft に接続」を押してサインインしてください' };
         const me = await meProfile();
         let rootOk = true;
-        let children = 0;
+        let children: { name: string; folder?: unknown }[] = [];
         try {
-          children = (await listChildren(env().ONEDRIVE_CLIENT_ROOT)).length;
+          children = await listChildren(env().ONEDRIVE_CLIENT_ROOT);
         } catch {
           rootOk = false;
         }
+        const map = statusFolderMap();
+        const layout = Object.keys(map).length ? `区分フォルダ: ${Object.values(map).join('・')}` : null;
+        const folderNames = children.filter((i) => i.folder).map((i) => i.name);
+        const looksLikeLayout = !layout && Object.keys(guessStatusFolders(folderNames).map).length >= 2;
         return {
           ok: true,
-          message: `${me.userPrincipalName ?? me.mail ?? ''} に接続できました。依頼者ルート ${env().ONEDRIVE_CLIENT_ROOT}: ${rootOk ? `${children} 件` : '見つかりません（初回保存時に作成されます）'}`,
+          message: [
+            `${me.userPrincipalName ?? me.mail ?? ''} に接続できました。`,
+            `依頼者ルート ${env().ONEDRIVE_CLIENT_ROOT}: ${rootOk ? `フォルダ ${folderNames.length} 件` : '見つかりません（初回保存時に作成されます）'}`,
+            layout,
+            looksLikeLayout ? '相談・進行事件などの区分フォルダがあるようです。下の「区分フォルダの設定」で対応付けてください' : null,
+          ]
+            .filter(Boolean)
+            .join(' '),
         };
       }
       case 'zoom': {

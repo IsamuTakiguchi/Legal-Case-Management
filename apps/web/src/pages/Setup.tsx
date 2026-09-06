@@ -175,6 +175,7 @@ export default function Setup() {
               )}
               {s.id === 'microsoft' && !state?.connected && <DeviceConnect mode={d.state.microsoft.mode} onDone={() => { qc.invalidateQueries({ queryKey: ['setup'] }); qc.invalidateQueries({ queryKey: ['status'] }); }} />}
               {s.id === 'microsoft' && state?.connected && d.state.microsoft.mode === 'device' && <span className="text-xs text-slate-500">簡易接続（アプリ登録なし）で接続中</span>}
+              {s.id === 'microsoft' && state?.connected && <StatusFolderLayout rootKey={values.ONEDRIVE_CLIENT_ROOT ?? ''} />}
               {s.id === 'microsoft' && state?.connected && (
                 <FolderPicker
                   current={values.ONEDRIVE_CLIENT_ROOT ?? ''}
@@ -288,6 +289,105 @@ function GoogleGuide({ redirectUri }: { redirectUri: string }) {
           {st.note && <div className="ml-6 mt-1 text-slate-500">{st.note}</div>}
         </div>
       ))}
+    </div>
+  );
+}
+
+const STATUS_KEYS = ['consultation', 'active', 'wrapup', 'closed'] as const;
+const STATUS_LABEL: Record<(typeof STATUS_KEYS)[number], string> = { consultation: '相談', active: '進行事件', wrapup: '残務処理', closed: '終了事件' };
+
+/** 依頼者ルート直下の「0.相談／1.進行事件／…」を事件の区分に対応付ける */
+function StatusFolderLayout({ rootKey }: { rootKey: string }) {
+  const qc = useQueryClient();
+  const q = useQuery({
+    queryKey: ['onedrive-layout', rootKey],
+    queryFn: () => api.get<{ root: string; folders: { name: string; childCount: number }[]; current: Record<string, string>; extras: string[]; guess: { map: Record<string, string>; extras: string[] } }>('/setup/onedrive/layout'),
+  });
+  const [map, setMap] = useState<Record<string, string>>({});
+  const [extras, setExtras] = useState<string[]>([]);
+  const [touched, setTouched] = useState(false);
+  const [msg, setMsg] = useState('');
+  useEffect(() => {
+    if (!q.data || touched) return;
+    const hasCurrent = Object.keys(q.data.current).length > 0;
+    setMap(hasCurrent ? q.data.current : q.data.guess.map);
+    setExtras(hasCurrent ? q.data.extras : q.data.guess.extras.filter((n) => !/^_/.test(n)));
+  }, [q.data, touched]);
+  const save = useMutation({
+    mutationFn: () => api.put<{ ok: boolean; resolved: { scanned: number; updated: number; missing: string[] } }>('/setup/onedrive/layout', { map, extras }),
+    onSuccess: (r) => {
+      setMsg(`保存しました。区分フォルダ内のフォルダ ${r.resolved.scanned} 件を確認し、依頼者 ${r.resolved.updated} 名のフォルダを対応付けました${r.resolved.missing.length ? `（見つからない依頼者: ${r.resolved.missing.slice(0, 5).join('、')}${r.resolved.missing.length > 5 ? ' ほか' : ''}）` : ''}`);
+      qc.invalidateQueries({ queryKey: ['onedrive-layout'] });
+      qc.invalidateQueries({ queryKey: ['setup'] });
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
+  if (!q.data) return null;
+  const folderNames = q.data.folders.map((f) => f.name);
+  const looksFlat = Object.keys(q.data.guess.map).length === 0 && Object.keys(q.data.current).length === 0;
+  const used = new Set(Object.values(map));
+  return (
+    <div className="w-full rounded border border-slate-200 bg-slate-50 p-3 text-xs">
+      <div className="mb-1 font-semibold">区分フォルダの設定</div>
+      <div className="mb-2 text-slate-600">
+        依頼者ルート <code>{q.data.root}</code> の直下に「相談／進行事件／残務処理／終了事件」のような区分フォルダがあり、その中に依頼者フォルダが並ぶ運用の場合に、事件の区分と対応付けます。事件の区分を変えると依頼者フォルダを自動でその区分へ移動します。
+        {looksFlat && ' 現在は区分フォルダが見つからないため、ルート直下を依頼者フォルダとして扱います（この設定は不要です）。'}
+      </div>
+      <div className="grid gap-2 md:grid-cols-2">
+        {STATUS_KEYS.map((k) => (
+          <label key={k} className="flex items-center gap-2">
+            <span className="w-20 shrink-0 text-slate-600">{STATUS_LABEL[k]}</span>
+            <select
+              className="input"
+              value={map[k] ?? ''}
+              onChange={(e) => {
+                setTouched(true);
+                setMap((m) => {
+                  const next = { ...m };
+                  if (e.target.value) next[k] = e.target.value;
+                  else delete next[k];
+                  return next;
+                });
+              }}
+            >
+              <option value="">（対応するフォルダなし）</option>
+              {folderNames.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </label>
+        ))}
+      </div>
+      {folderNames.filter((n) => !used.has(n) && !/^_/.test(n)).length > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 text-slate-600">区分には当たらないが依頼者フォルダを含むフォルダ（顧問先など）。チェックしたものは依頼者の検索対象になり、区分の変更では動かしません。</div>
+          <div className="flex flex-wrap gap-2">
+            {folderNames
+              .filter((n) => !used.has(n) && !/^_/.test(n))
+              .map((n) => (
+                <label key={n} className="flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1">
+                  <input
+                    type="checkbox"
+                    checked={extras.includes(n)}
+                    onChange={(e) => {
+                      setTouched(true);
+                      setExtras((x) => (e.target.checked ? [...x, n] : x.filter((y) => y !== n)));
+                    }}
+                  />
+                  {n}
+                </label>
+              ))}
+          </div>
+        </div>
+      )}
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button type="button" className="btn btn-primary btn-sm" onClick={() => save.mutate()} disabled={save.isPending}>
+          {save.isPending ? '保存中…' : '区分を保存して依頼者フォルダを対応付ける'}
+        </button>
+        {msg && <span className="text-slate-700">{msg}</span>}
+      </div>
     </div>
   );
 }
