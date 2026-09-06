@@ -4,12 +4,14 @@ import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { fmtDateTime, fmtRelative } from '../lib/format';
 import { CASE_STATUSES, CASE_STATUS_LABEL, type CaseStatus } from '@lcm/shared';
+import { useSort, readingKey, SortHeader, type SortOption } from '../lib/sort';
 
 interface CaseRow {
   id: number;
   title: string;
   clientId: number;
   clientName: string;
+  clientKana: string | null;
   caseType: string;
   caseTypeLabel: string;
   hasCreditors: boolean;
@@ -28,6 +30,14 @@ const STATUS_BADGE: Record<string, string> = {
   closed: 'badge-gray',
 };
 
+const CASE_SORTS: SortOption<CaseRow>[] = [
+  { key: 'client', label: '依頼者のあいうえお順', value: (c) => readingKey(c.clientKana, c.clientName) },
+  { key: 'title', label: '事件名', value: (c) => c.title },
+  { key: 'type', label: '類型', value: (c) => c.caseTypeLabel },
+  { key: 'hearing', label: '次回期日が近い順', value: (c) => c.nextHearingAt ?? null },
+  { key: 'updated', label: '更新が新しい順', value: (c) => c.updatedAt, desc: true },
+];
+
 export function CaseStatusBadge({ status }: { status: string }) {
   return <span className={`badge ${STATUS_BADGE[status] ?? 'badge-gray'}`}>{CASE_STATUS_LABEL[status as CaseStatus] ?? status}</span>;
 }
@@ -35,12 +45,23 @@ export function CaseStatusBadge({ status }: { status: string }) {
 export default function Cases() {
   const [status, setStatus] = useState<string>('active');
   const all = useQuery({ queryKey: ['cases', 'all'], queryFn: () => api.get<CaseRow[]>('/cases') });
-  const rows = (all.data ?? []).filter((c) => !status || c.status === status);
+  const sort = useSort('cases', CASE_SORTS, 'client');
+  const rows = sort.apply((all.data ?? []).filter((c) => !status || c.status === status));
   const counts: Record<string, number> = {};
   for (const c of all.data ?? []) counts[c.status] = (counts[c.status] ?? 0) + 1;
+  const H = (label: string, key: string) => <SortHeader label={label} sortKey={key} current={sort.key} desc={sort.desc} onClick={sort.setKey} />;
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-bold">事件</h1>
+      <div className="flex flex-wrap items-center gap-2">
+        <h1 className="text-xl font-bold">事件</h1>
+        <select className="input ml-auto w-auto" value={sort.key} onChange={(e) => sort.setKey(e.target.value)} aria-label="並べ替え">
+          {CASE_SORTS.map((o) => (
+            <option key={o.key} value={o.key}>
+              並べ替え: {o.label}
+            </option>
+          ))}
+        </select>
+      </div>
       <div className="flex flex-wrap gap-1">
         {CASE_STATUSES.map((s) => (
           <button key={s} type="button" className={`btn btn-sm ${status === s ? 'btn-primary' : ''}`} onClick={() => setStatus(s)}>
@@ -55,13 +76,13 @@ export default function Cases() {
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-left text-xs text-slate-500">
             <tr>
-              <th className="px-4 py-2">事件名</th>
-              <th className="px-4 py-2">依頼者</th>
+              <th className="px-4 py-2">{H('事件名', 'title')}</th>
+              <th className="px-4 py-2">{H('依頼者', 'client')}</th>
               <th className="px-4 py-2">区分</th>
-              <th className="px-4 py-2">類型</th>
+              <th className="px-4 py-2">{H('類型', 'type')}</th>
               <th className="px-4 py-2">段階</th>
-              <th className="px-4 py-2">次回期日</th>
-              <th className="px-4 py-2">更新</th>
+              <th className="px-4 py-2">{H('次回期日', 'hearing')}</th>
+              <th className="px-4 py-2">{H('更新', 'updated')}</th>
             </tr>
           </thead>
           <tbody>
