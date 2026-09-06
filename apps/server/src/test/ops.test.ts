@@ -200,6 +200,43 @@ describe('チャネル別の文体サンプル', () => {
   });
 });
 
+describe('受信ファイルの扱い', () => {
+  it('client_only では依頼者不明の添付を保存せず「未保存」に、manual ではすべて「未保存」にする', async () => {
+    const { processAttachment, ignoreAttachment, attachmentPolicy } = await import('../services/attachments.js');
+    const now = new Date().toISOString();
+    const client = db().insert(schema.clients).values({ name: '添付テスト太郎', kana: 'てんぷてすとたろう' }).returning().get();
+    const convNoClient = db().insert(schema.conversations).values({ channel: 'chatwork', externalThreadId: 'att-no-client', lastMessageAt: now, lastInboundAt: now }).returning().get();
+    const convClient = db().insert(schema.conversations).values({ channel: 'chatwork', externalThreadId: 'att-client', clientId: client.id, lastMessageAt: now, lastInboundAt: now }).returning().get();
+    const m1 = db().insert(schema.messages).values({ conversationId: convNoClient.id, channel: 'chatwork', externalId: 'att-m1', direction: 'in', sentAt: now }).returning().get();
+    const m2 = db().insert(schema.messages).values({ conversationId: convClient.id, channel: 'chatwork', externalId: 'att-m2', direction: 'in', sentAt: now }).returning().get();
+    const a1 = db().insert(schema.attachments).values({ messageId: m1.id, filename: 'chirashi.pdf', channelRef: { fileId: 'x' } }).returning().get();
+    const a2 = db().insert(schema.attachments).values({ messageId: m2.id, filename: 'shiryo.pdf', channelRef: { fileId: 'y' } }).returning().get();
+    const status = (id: number) => db().select().from(schema.attachments).where(eq(schema.attachments.id, id)).get()!.status;
+
+    expect(attachmentPolicy()).toBe('client_only');
+    await processAttachment(a1.id);
+    expect(status(a1.id)).toBe('held');
+    expect(db().select().from(schema.alerts).all().some((al) => al.dedupeKey === `unassigned_file:${a1.id}`)).toBe(false);
+
+    setSetting('attachment_policy', 'manual');
+    expect(attachmentPolicy()).toBe('manual');
+    await processAttachment(a2.id);
+    expect(status(a2.id)).toBe('held');
+    expect(db().select().from(schema.attachments).where(eq(schema.attachments.id, a2.id)).get()!.clientId).toBe(client.id);
+
+    await ignoreAttachment(a1.id);
+    expect(status(a1.id)).toBe('ignored');
+    await processAttachment(a1.id, { force: true });
+    expect(status(a1.id)).toBe('ignored');
+
+    setSetting('attachment_policy', 'client_only');
+    db().delete(schema.attachments).where(inArray(schema.attachments.id, [a1.id, a2.id])).run();
+    db().delete(schema.messages).where(inArray(schema.messages.id, [m1.id, m2.id])).run();
+    db().delete(schema.conversations).where(inArray(schema.conversations.id, [convNoClient.id, convClient.id])).run();
+    db().delete(schema.clients).where(eq(schema.clients.id, client.id)).run();
+  });
+});
+
 describe('受信箱の表示範囲', () => {
   it('inboundOnly なら自分の送信だけの会話を除く', async () => {
     const { listConversations } = await import('../services/inbox.js');

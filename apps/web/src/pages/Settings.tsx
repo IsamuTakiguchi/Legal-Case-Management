@@ -42,6 +42,16 @@ const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean; 
   { key: 'waiting_followup_business_days', label: '返信待ちのフォロー期限（営業日）' },
   { key: 'scheduling_stale_business_days', label: '日程調整の停滞判定（営業日）' },
   { key: 'holidays', label: '休業日（YYYY-MM-DD をカンマ区切り）', multiline: true },
+  {
+    key: 'attachment_policy',
+    label: '受信ファイルの扱い',
+    hint: '「未保存」のファイルは受信ファイル画面と会話画面から保存または不要にできます',
+    options: [
+      { value: 'client_only', label: '依頼者が分かるものだけ自動保存（不明なものは未保存のまま）' },
+      { value: 'manual', label: '自動保存しない（保存するものだけ選ぶ）' },
+      { value: 'auto', label: 'すべて自動保存（不明なものは _未振分 へ）' },
+    ],
+  },
   { key: 'attachment_subfolder', label: '受領ファイルの保存サブフォルダ' },
   { key: 'court_docs_subfolder', label: '提出書面のサブフォルダ' },
   { key: 'draft_subfolder', label: 'AI 下書きの保存サブフォルダ' },

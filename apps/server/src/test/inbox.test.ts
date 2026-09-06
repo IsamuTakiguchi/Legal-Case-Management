@@ -18,6 +18,7 @@ const { createTask, checkOverdueWaitingTasks } = await import('../services/tasks
 const { openAlerts } = await import('../services/alerts.js');
 const { addStyleSample, findSimilarSamples } = await import('../services/style.js');
 const { eq } = await import('drizzle-orm');
+const { setSetting } = await import('../services/settings.js');
 
 beforeAll(() => {
   openTestDatabase();
@@ -52,9 +53,17 @@ describe('受信→紐付け→添付振り分け', () => {
     expect(r.conversation.clientId).toBeNull();
     expect(openAlerts('unlinked_contact').length).toBe(1);
     const att = db().select().from(schema.attachments).get()!;
+    // 既定（依頼者が分かるものだけ自動保存）では依頼者不明の添付は保存せず「未保存」
     await processAttachment(att.id);
+    expect(db().select().from(schema.attachments).where(eq(schema.attachments.id, att.id)).get()!.status).toBe('held');
+    expect(openAlerts('unassigned_file').length).toBe(0);
+    // 「すべて自動保存」なら _未振分 に保存して要確認に出す
+    setSetting('attachment_policy', 'auto');
+    await processAttachment(att.id);
+    setSetting('attachment_policy', 'client_only');
     const after = db().select().from(schema.attachments).where(eq(schema.attachments.id, att.id)).get()!;
     expect(after.status).toBe('unassigned');
+    expect(openAlerts('unassigned_file').length).toBe(1);
     expect(after.storedPath).toContain('_未振分');
     expect(after.storedPath).toContain('20260901_gmail_資料.pdf');
     expect(fs.existsSync(path.join(tmp, 'clients', after.storedPath!))).toBe(true);
