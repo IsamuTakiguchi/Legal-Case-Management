@@ -8,7 +8,7 @@ import { storage } from '../integrations/storage.js';
 import { clientFolder } from '../services/attachments.js';
 import { listCaseTypes, upsertCaseType, createCase, updateCase, listCases, getCase, caseTimeline, addCaseNote, deleteCaseNote, generateCaseSummary, structureNote } from '../services/cases.js';
 import * as creditors from '../services/creditors.js';
-import { onedriveCandidates, chatworkCandidates, applyImport } from '../services/clientImport.js';
+import { onedriveCandidates, chatworkCandidates, applyImport, deleteClient } from '../services/clientImport.js';
 import { clientFolderParents } from '../services/clientFolders.js';
 import { joinPath } from '../integrations/onedrive.js';
 
@@ -90,9 +90,32 @@ clientRoutes.get('/clients/import/candidates', async (c) => {
 
 clientRoutes.post('/clients/import', async (c) => {
   const rows = z
-    .array(z.object({ name: z.string(), folderPath: z.string().optional().nullable(), chatworkRoomId: z.number().int().optional().nullable(), existingClientId: z.number().int().optional().nullable() }))
+    .array(
+      z.object({
+        name: z.string(),
+        folderPath: z.string().optional().nullable(),
+        chatworkRoomId: z.number().int().optional().nullable(),
+        existingClientId: z.number().int().optional().nullable(),
+        caseStatus: z.enum(['consultation', 'active', 'wrapup', 'closed']).optional().nullable(),
+        caseTitle: z.string().optional().nullable(),
+        caseType: z.string().optional().nullable(),
+      }),
+    )
     .parse(await c.req.json());
   return c.json(applyImport(rows));
+});
+
+clientRoutes.delete('/clients/:id', (c) => {
+  const ok = deleteClient(Number(c.req.param('id')));
+  return ok ? c.json({ ok: true }) : c.json({ error: 'not found' }, 404);
+});
+
+/** 一括削除（誤って登録した依頼者の後始末用） */
+clientRoutes.post('/clients/bulk-delete', async (c) => {
+  const body = z.object({ ids: z.array(z.number().int()).min(1).max(500) }).parse(await c.req.json());
+  let deleted = 0;
+  for (const id of body.ids) if (deleteClient(id)) deleted++;
+  return c.json({ deleted });
 });
 
 // ---- 事件類型 ----

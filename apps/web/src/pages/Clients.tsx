@@ -33,11 +33,21 @@ export default function Clients() {
       nav(`/clients/${c.id}`);
     },
   });
+  const [selected, setSelected] = useState<number[]>([]);
+  const bulkDelete = useMutation({
+    mutationFn: () => api.post<{ deleted: number }>('/clients/bulk-delete', { ids: selected }),
+    onSuccess: () => {
+      setSelected([]);
+      qc.invalidateQueries({ queryKey: ['clients'] });
+      qc.invalidateQueries({ queryKey: ['cases'] });
+    },
+  });
+  const toggle = (id: number) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-xl font-bold">依頼者</h1>
-        <input className="input ml-auto w-64" placeholder="名前・かなで検索" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input className="input md:ml-auto md:w-64" placeholder="名前・かなで検索" value={q} onChange={(e) => setQ(e.target.value)} />
         <button className="btn" onClick={() => setShowImport(!showImport)}>
           一括登録（フォルダ / Chatwork）
         </button>
@@ -45,12 +55,32 @@ export default function Clients() {
           ＋ 新規依頼者
         </button>
       </div>
+      {selected.length > 0 && (
+        <div className="card flex flex-wrap items-center gap-2 border-red-200 bg-red-50 text-sm">
+          <span>{selected.length} 件を選択中</span>
+          <button
+            className="btn btn-danger btn-sm"
+            onClick={() => {
+              if (confirm(`選択した ${selected.length} 件の依頼者を削除します。事件・ノート・タスクも削除されます（会話とファイルは残り、紐付けだけ外れます）。よろしいですか？`)) bulkDelete.mutate();
+            }}
+            disabled={bulkDelete.isPending}
+          >
+            選択した依頼者を削除
+          </button>
+          <button className="btn btn-sm" onClick={() => setSelected([])}>
+            選択解除
+          </button>
+        </div>
+      )}
       {showImport && <BulkImport onDone={() => { setShowImport(false); qc.invalidateQueries({ queryKey: ['clients'] }); }} />}
       {showNew && <ClientForm initial={{ name: params.get('new') ?? '', emails: params.get('email') ? [params.get('email')!] : [] }} onSubmit={(b) => create.mutate(b)} onCancel={() => setShowNew(false)} busy={create.isPending} />}
       <div className="card p-0">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-left text-xs text-slate-500">
             <tr>
+              <th className="px-3 py-2">
+                <input type="checkbox" checked={!!list.data?.length && selected.length === list.data.length} onChange={(e) => setSelected(e.target.checked ? (list.data ?? []).map((c) => c.id) : [])} aria-label="すべて選択" />
+              </th>
               <th className="px-4 py-2">氏名</th>
               <th className="px-4 py-2">連絡手段</th>
               <th className="px-4 py-2">フォルダ</th>
@@ -59,6 +89,9 @@ export default function Clients() {
           <tbody>
             {list.data?.map((c) => (
               <tr key={c.id} className="border-t border-slate-100 hover:bg-slate-50">
+                <td className="px-3 py-2">
+                  <input type="checkbox" checked={selected.includes(c.id)} onChange={() => toggle(c.id)} aria-label={`${c.name} を選択`} />
+                </td>
                 <td className="px-4 py-2">
                   <Link to={`/clients/${c.id}`} className="font-medium text-blue-700 hover:underline">
                     {c.name}
@@ -76,7 +109,7 @@ export default function Clients() {
             ))}
             {list.data?.length === 0 && (
               <tr>
-                <td className="px-4 py-4 text-slate-500" colSpan={3}>
+                <td className="px-4 py-4 text-slate-500" colSpan={4}>
                   依頼者がまだ登録されていません
                 </td>
               </tr>
@@ -161,7 +194,12 @@ interface Candidate {
   chatworkRoomId?: number;
   existingClientId?: number | null;
   note?: string;
+  caseStatus?: string | null;
+  caseTitle?: string | null;
+  caseType?: string | null;
 }
+
+const CASE_STATUS_JA: Record<string, string> = { consultation: '相談', active: '進行事件', wrapup: '残務処理', closed: '終了事件' };
 
 function BulkImport({ onDone }: { onDone: () => void }) {
   const [source, setSource] = useState<'onedrive' | 'chatwork'>('onedrive');
@@ -175,14 +213,22 @@ function BulkImport({ onDone }: { onDone: () => void }) {
     },
     onError: (e) => setMsg((e as Error).message),
   });
+  const [withCases, setWithCases] = useState(true);
   const apply = useMutation({
-    mutationFn: () => api.post<{ created: number; updated: number }>('/clients/import', rows.filter((r) => r.checked).map(({ name, folderPath, chatworkRoomId, existingClientId }) => ({ name, folderPath, chatworkRoomId, existingClientId }))),
+    mutationFn: () =>
+      api.post<{ created: number; updated: number; casesCreated: number }>(
+        '/clients/import',
+        rows
+          .filter((r) => r.checked)
+          .map(({ name, folderPath, chatworkRoomId, existingClientId, caseStatus, caseTitle, caseType }) => ({ name, folderPath, chatworkRoomId, existingClientId, caseStatus: withCases ? caseStatus : null, caseTitle, caseType })),
+      ),
     onSuccess: (r) => {
-      setMsg(`登録 ${r.created} 件、既存の更新 ${r.updated} 件`);
+      setMsg(`依頼者 ${r.created} 件を登録、既存 ${r.updated} 件を更新、事件 ${r.casesCreated} 件を作成しました`);
       onDone();
     },
     onError: (e) => setMsg((e as Error).message),
   });
+  const hasStatus = rows.some((r) => r.caseStatus);
   return (
     <div className="card space-y-2 text-sm">
       <div className="flex flex-wrap items-center gap-2">
@@ -201,6 +247,12 @@ function BulkImport({ onDone }: { onDone: () => void }) {
         )}
       </div>
       <div className="text-xs text-slate-500">フォルダ名やルーム名から氏名を推定します。氏名は登録前に編集できます。既に登録済みの依頼者にはフォルダ／ルームだけを紐付けます。</div>
+      {hasStatus && (
+        <label className="flex items-center gap-2 text-xs">
+          <input type="checkbox" checked={withCases} onChange={(e) => setWithCases(e.target.checked)} />
+          区分フォルダ（相談／進行事件／残務処理／終了事件）に合わせて、フォルダ名を事件名にした事件も同時に作る（事件がまだ無い依頼者のみ）
+        </label>
+      )}
       {msg && <div className="text-xs text-slate-700">{msg}</div>}
       {rows.length > 0 && (
         <div className="max-h-80 overflow-y-auto rounded border border-slate-200">
@@ -212,6 +264,7 @@ function BulkImport({ onDone }: { onDone: () => void }) {
                 </th>
                 <th className="px-2 py-1">氏名（編集可）</th>
                 <th className="px-2 py-1">{source === 'onedrive' ? 'フォルダ' : 'ルーム'}</th>
+                {hasStatus && <th className="px-2 py-1">区分</th>}
                 <th className="px-2 py-1">状態</th>
               </tr>
             </thead>
@@ -225,6 +278,7 @@ function BulkImport({ onDone }: { onDone: () => void }) {
                     <input className="input py-0.5" value={r.name} onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} />
                   </td>
                   <td className="px-2 py-1 text-slate-600">{r.folderPath ?? r.note}</td>
+                  {hasStatus && <td className="px-2 py-1 text-slate-600">{r.caseStatus ? CASE_STATUS_JA[r.caseStatus] ?? r.caseStatus : <span className="text-slate-400">（事件は作らない）</span>}</td>}
                   <td className="px-2 py-1">{r.existingClientId ? <span className="badge badge-gray">登録済（紐付けのみ）</span> : <span className="badge badge-blue">新規</span>}</td>
                 </tr>
               ))}
