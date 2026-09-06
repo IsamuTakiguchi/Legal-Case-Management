@@ -87,7 +87,7 @@ export default function Tasks() {
         </label>
         <button className="btn btn-primary">追加</button>
       </form>
-      <div className="card p-0">
+      <div className="card overflow-x-auto p-0">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-left text-xs text-slate-500">
             <tr>
@@ -103,7 +103,7 @@ export default function Tasks() {
               const over = t.followUpAt && new Date(t.followUpAt).getTime() < now && t.status !== 'done' && t.status !== 'open';
               return (
                 <tr key={t.id} className={`border-t border-slate-100 ${over ? 'bg-orange-50' : ''}`}>
-                  <td className="px-3 py-2">
+                  <td className="w-px whitespace-nowrap px-3 py-2">
                     <select className="input w-auto py-0.5 text-xs" value={t.status} onChange={(e) => update.mutate({ id: t.id, patch: { status: e.target.value } })}>
                       {TASK_STATUSES.map((s) => (
                         <option key={s} value={s}>
@@ -112,7 +112,7 @@ export default function Tasks() {
                       ))}
                     </select>
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="min-w-[14rem] px-3 py-2">
                     {t.conversationId ? (
                       <Link to={`/inbox/${t.conversationId}`} className="font-medium hover:underline">
                         {t.title}
@@ -123,18 +123,18 @@ export default function Tasks() {
                     {t.chatworkTaskId && <span className="badge badge-chatwork ml-1">CW</span>}
                     {t.note && <div className="line-clamp-1 text-xs text-slate-500">{t.note}</div>}
                   </td>
-                  <td className="px-3 py-2">{t.clientId ? <Link to={`/clients/${t.clientId}`} className="hover:underline">{t.clientName}</Link> : ''}</td>
-                  <td className="px-3 py-2 text-xs text-slate-600">
+                  <td className="whitespace-nowrap px-3 py-2">{t.clientId ? <Link to={`/clients/${t.clientId}`} className="hover:underline">{t.clientName}</Link> : ''}</td>
+                  <td className="w-px whitespace-nowrap px-3 py-2 text-xs text-slate-600">
                     {t.waitingSince && <div>{fmtRelative(t.waitingSince)}から待ち</div>}
                     {t.status !== 'open' && t.status !== 'done' && (
-                      <div className="flex items-center gap-1">
+                      <div className="flex flex-wrap items-center gap-1">
                         <span className={over ? 'font-semibold text-orange-600' : ''}>期限 {fmtDate(t.followUpAt)}</span>
                         <input type="datetime-local" className="input w-auto py-0 text-xs" value={toLocalInput(t.followUpAt)} onChange={(e) => update.mutate({ id: t.id, patch: { followUpAt: fromLocalInput(e.target.value) } })} />
                       </div>
                     )}
                     {t.dueAt && t.status === 'open' && <div>期日 {fmtDate(t.dueAt)}</div>}
                   </td>
-                  <td className="px-3 py-2 text-right">
+                  <td className="w-px whitespace-nowrap px-3 py-2 text-right">
                     {(t.status === 'waiting_client' || t.status === 'waiting_other') && (
                       <div className="flex justify-end gap-1">
                         {t.conversationId && (
