@@ -69,9 +69,11 @@ export async function pollGmail(): Promise<{ ingested: number; skipped?: number;
     let latest = startHistoryId;
     const ids = new Set<string>();
     do {
-      const res = await gmail.users.history.list({ userId: 'me', startHistoryId, historyTypes: ['messageAdded'], pageToken, maxResults: 200 });
+      // labelAdded も見る: 送信予約が実際に送られると SENT ラベルが付くので、その時点で取り込む
+      const res = await gmail.users.history.list({ userId: 'me', startHistoryId, historyTypes: ['messageAdded', 'labelAdded'], pageToken, maxResults: 200 });
       for (const h of res.data.history ?? []) {
         for (const a of h.messagesAdded ?? []) if (a.message?.id) ids.add(a.message.id);
+        for (const l of h.labelsAdded ?? []) if (l.message?.id && (l.labelIds ?? []).includes('SENT')) ids.add(l.message.id);
       }
       if (res.data.historyId) latest = String(res.data.historyId);
       pageToken = res.data.nextPageToken ?? undefined;

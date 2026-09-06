@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { allSettings, setSetting, SETTING_DEFAULTS } from '../services/settings.js';
+import { allSettings, setSetting, SETTING_DEFAULTS, getSyncState } from '../services/settings.js';
 import { listTemplates, saveTemplates } from '../services/templates.js';
 import { isConfigured, env } from '../config.js';
 import { isGoogleConnected, googleAccount } from '../integrations/google.js';
@@ -54,7 +54,14 @@ settingsRoutes.get('/status', async (c) => {
   return c.json({
     publicBaseUrl: e.PUBLIC_BASE_URL,
     storage: storage().kind,
-    line: { configured: isConfigured('line'), webhookUrl: `${e.PUBLIC_BASE_URL}/webhooks/line`, quota: isConfigured('line') ? lineQuotaStatus() : null },
+    line: {
+      configured: isConfigured('line'),
+      webhookUrl: `${e.PUBLIC_BASE_URL}/webhooks/line`,
+      quota: isConfigured('line') ? lineQuotaStatus() : null,
+      lastWebhookAt: getSyncState('line_last_webhook_at'),
+      lastEventAt: getSyncState('line_last_event_at'),
+      lastError: getSyncState('line_last_webhook_error'),
+    },
     chatwork: { configured: isConfigured('chatwork'), webhookUrl: `${e.PUBLIC_BASE_URL}/webhooks/chatwork`, webhookTokenSet: !!e.CHATWORK_WEBHOOK_TOKEN },
     google: { configured: isConfigured('google'), connected: isGoogleConnected(), account: googleAccount(), redirectUri: `${e.PUBLIC_BASE_URL}/api/auth/google/callback` },
     microsoft: { configured: isConfigured('microsoft'), connected: await isMsConnected(), account: msAccount(), redirectUri: `${e.PUBLIC_BASE_URL}/api/auth/microsoft/callback` },

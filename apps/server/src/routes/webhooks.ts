@@ -6,6 +6,7 @@ import { ingestMessage } from '../services/inbox.js';
 import { logger } from '../logger.js';
 import { db, schema } from '../db/index.js';
 import { eq, and } from 'drizzle-orm';
+import { setSyncState } from '../services/settings.js';
 
 export const webhookRoutes = new Hono();
 
@@ -14,6 +15,7 @@ webhookRoutes.post('/line', async (c) => {
   const raw = Buffer.from(await c.req.arrayBuffer());
   if (!verifyLineSignature(raw, c.req.header('x-line-signature'))) {
     logger.warn('LINE webhook の署名が不正');
+    setSyncState('line_last_webhook_error', `${new Date().toISOString()} 署名が不正（チャネルシークレットが違う可能性）`);
     return c.text('invalid signature', 401);
   }
   let body: { events?: LineEvent[] };
@@ -23,6 +25,9 @@ webhookRoutes.post('/line', async (c) => {
     return c.text('bad json', 400);
   }
   const events = body.events ?? [];
+  // 疎通確認用に最終受信時刻を記録（LINE の「検証」ボタンは events が空で届く）
+  setSyncState('line_last_webhook_at', new Date().toISOString());
+  if (events.length) setSyncState('line_last_event_at', new Date().toISOString());
   setImmediate(() => {
     void (async () => {
       for (const ev of events) {

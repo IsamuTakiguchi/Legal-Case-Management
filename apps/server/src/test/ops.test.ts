@@ -165,6 +165,21 @@ describe('一括登録と削除', () => {
   });
 });
 
+describe('Gmail 送信予約', () => {
+  it('自分発で SENT も INBOX も無いメッセージ（送信予約）は取り込まない', async () => {
+    const { normalizeGmailMessage } = await import('../channels/gmail.js');
+    const base = {
+      id: 'm1',
+      threadId: 't1',
+      internalDate: String(Date.now()),
+      payload: { headers: [{ name: 'From', value: 'Me <me@example.com>' }, { name: 'To', value: 'client@example.com' }, { name: 'Subject', value: 'x' }], body: { data: Buffer.from('hello').toString('base64') }, mimeType: 'text/plain' },
+    };
+    expect(normalizeGmailMessage({ ...base, labelIds: [] }, ['me@example.com'])).toBeNull();
+    expect(normalizeGmailMessage({ ...base, labelIds: ['SENT'] }, ['me@example.com'])?.direction).toBe('out');
+    expect(normalizeGmailMessage({ ...base, labelIds: ['INBOX'] }, ['me@example.com'])?.direction).toBe('out');
+  });
+});
+
 describe('Gmail の取込範囲', () => {
   it('ラベルからタブを判定し、「メインだけ」なら一覧から除外する', async () => {
     const { gmailCategory } = await import('../channels/gmail.js');

@@ -68,6 +68,8 @@ export function normalizeGmailMessage(msg: GmailMessage, myAddresses: string[]):
   const from = parseAddress(header(msg, 'From'));
   const to = header(msg, 'To') ?? '';
   const isMine = labels.includes('SENT') || (from.email !== null && myAddresses.includes(from.email));
+  // 自分発で SENT でも INBOX でもないものは送信予約（まだ送られていない）なので取り込まない。送信された時点で SENT が付き、そのときに取り込む
+  if (isMine && !labels.includes('SENT') && !labels.includes('INBOX')) return null;
   const category = gmailCategory(labels);
   const { text, attachments } = extractBodyAndAttachments(msg);
   const sentAt = msg.internalDate ? new Date(Number(msg.internalDate)).toISOString() : new Date().toISOString();

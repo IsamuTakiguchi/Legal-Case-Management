@@ -6,7 +6,7 @@ import { fmtDateTime } from '../lib/format';
 interface Status {
   publicBaseUrl: string;
   storage: string;
-  line: { configured: boolean; webhookUrl: string; quota: { used: number; limit: number } | null };
+  line: { configured: boolean; webhookUrl: string; quota: { used: number; limit: number } | null; lastWebhookAt: string | null; lastEventAt: string | null; lastError: string | null };
   chatwork: { configured: boolean; webhookUrl: string; webhookTokenSet: boolean };
   google: { configured: boolean; connected: boolean; account: string | null; redirectUri: string };
   microsoft: { configured: boolean; connected: boolean; account: string | null; redirectUri: string };
@@ -162,6 +162,18 @@ export default function Settings() {
             </Conn>
             <Conn ok={s.line.configured} label="LINE公式アカウント" detail={s.line.configured ? `今月の送信 ${s.line.quota?.used ?? 0} / ${s.line.quota?.limit ?? 0}` : '.env に LINE_CHANNEL_SECRET / ACCESS_TOKEN を設定'}>
               <div className="text-xs text-slate-500">Webhook URL: {s.line.webhookUrl}</div>
+              {s.line.configured && (
+                <div className="mt-1 text-xs">
+                  <div className={s.line.lastEventAt ? 'text-green-700' : 'text-orange-700'}>
+                    {s.line.lastEventAt
+                      ? `最後にメッセージを受信: ${fmtDateTime(s.line.lastEventAt)}`
+                      : s.line.lastWebhookAt
+                        ? `Webhook の疎通は確認済み（${fmtDateTime(s.line.lastWebhookAt)}）。まだメッセージは届いていません`
+                        : 'Webhook をまだ一度も受信していません。LINE Developers の「Webhook の利用」と、Official Account Manager 応答設定の「Webhook」が ON か確認してください'}
+                  </div>
+                  {s.line.lastError && <div className="text-red-600">直近のエラー: {s.line.lastError}</div>}
+                </div>
+              )}
             </Conn>
             <Conn ok={s.chatwork.configured} label="Chatwork" detail={s.chatwork.configured ? (s.chatwork.webhookTokenSet ? 'API・Webhook 設定済' : 'Webhook トークン未設定（ポーリングのみ）') : '.env に CHATWORK_API_TOKEN を設定'}>
               <div className="text-xs text-slate-500">Webhook URL: {s.chatwork.webhookUrl}</div>
