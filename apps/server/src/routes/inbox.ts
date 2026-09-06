@@ -25,6 +25,8 @@ inboxRoutes.get('/conversations', (c) => {
       q: q.q || undefined,
       archived: q.archived === '1',
       limit: q.limit ? Number(q.limit) : undefined,
+      // 既定では相手からの受信がある会話だけ（自分の送信だけの会話は outbound=1 のときだけ表示）
+      inboundOnly: q.outbound !== '1',
     }),
   );
 });

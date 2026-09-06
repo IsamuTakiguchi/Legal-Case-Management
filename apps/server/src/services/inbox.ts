@@ -1,4 +1,4 @@
-import { and, eq, desc, sql, inArray, isNull } from 'drizzle-orm';
+import { and, eq, desc, sql, inArray, isNull, isNotNull } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import type { InboundMessage } from '../channels/types.js';
 import { findClientByIdentity, raiseUnlinkedContact } from './identity.js';
@@ -135,10 +135,13 @@ export function listConversations(filter: {
   q?: string;
   limit?: number;
   archived?: boolean;
+  /** true なら相手からの受信が 1 件も無い会話（自分の送信だけ）を除く */
+  inboundOnly?: boolean;
 }) {
   const d = db();
   const conds = [];
   if (filter.clientId) conds.push(eq(schema.conversations.clientId, filter.clientId));
+  if (filter.inboundOnly) conds.push(isNotNull(schema.conversations.lastInboundAt));
   if (filter.channel) conds.push(eq(schema.conversations.channel, filter.channel));
   if (filter.needsReply) conds.push(eq(schema.conversations.needsReply, true));
   if (filter.unlinked) conds.push(isNull(schema.conversations.clientId));
