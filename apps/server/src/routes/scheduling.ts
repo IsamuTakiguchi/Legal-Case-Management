@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { proposeSlotsSchema, confirmSlotSchema, nextHearingInputSchema, EVENT_KINDS } from '@lcm/shared';
 import { proposeSlots, confirmSlot, cancelSession, listSessions, findFreeSlots, extractChosenSlot } from '../services/scheduling.js';
-import { syncCalendar, checkPostEvents, resolveNextHearing, listCourtDocs, upcomingEvents, relinkEvent } from '../services/court.js';
+import { syncCalendar, checkPostEvents, resolveNextHearing, listCourtDocs, upcomingEvents, relinkEvent, listCalendarEvents, createCalendarEvent, editCalendarEvent, removeCalendarEvent } from '../services/court.js';
 import { createZoomMeeting } from '../integrations/zoom.js';
 import { db, schema } from '../db/index.js';
 import { eq } from 'drizzle-orm';
@@ -48,10 +48,42 @@ schedulingRoutes.post('/calendar/sync', async (c) => {
 
 schedulingRoutes.get('/calendar/upcoming', (c) => c.json(upcomingEvents(Number(c.req.query('days') ?? '14'))));
 
+const eventBody = z.object({
+  title: z.string().min(1),
+  startAt: z.string(),
+  endAt: z.string(),
+  kind: z.enum(EVENT_KINDS),
+  clientId: z.number().int().nullable().optional(),
+  caseId: z.number().int().nullable().optional(),
+  location: z.string().nullable().optional(),
+  description: z.string().nullable().optional(),
+  tentative: z.boolean().optional(),
+});
+
+/** 期間内の予定（from/to は ISO。省略時は今日から 4 週間） */
+schedulingRoutes.get('/calendar/events', (c) => {
+  const q = c.req.query();
+  const from = q.from ? new Date(q.from) : new Date();
+  const to = q.to ? new Date(q.to) : new Date(from.getTime() + 28 * 86400_000);
+  return c.json(listCalendarEvents(from, to, { clientId: q.clientId ? Number(q.clientId) : undefined, caseId: q.caseId ? Number(q.caseId) : undefined }));
+});
+
+schedulingRoutes.post('/calendar/events', async (c) => c.json(await createCalendarEvent(eventBody.parse(await c.req.json()))));
+
 schedulingRoutes.put('/calendar/events/:id', async (c) => {
-  const body = z.object({ clientId: z.number().int().nullable().optional(), caseId: z.number().int().nullable().optional(), kind: z.enum(EVENT_KINDS).optional() }).parse(await c.req.json());
-  relinkEvent(Number(c.req.param('id')), body);
-  return c.json(db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, Number(c.req.param('id')))).get());
+  const body = eventBody.partial().parse(await c.req.json());
+  const id = Number(c.req.param('id'));
+  // 紐付けだけの変更（依頼者・事件・種別）は Google 側を触らない
+  if (body.title === undefined && body.startAt === undefined && body.endAt === undefined && body.location === undefined && body.description === undefined && body.tentative === undefined) {
+    relinkEvent(id, { clientId: body.clientId, caseId: body.caseId, kind: body.kind });
+    return c.json(db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, id)).get());
+  }
+  return c.json(await editCalendarEvent(id, body));
+});
+
+schedulingRoutes.delete('/calendar/events/:id', async (c) => {
+  await removeCalendarEvent(Number(c.req.param('id')));
+  return c.json({ ok: true });
 });
 
 schedulingRoutes.post('/court/next-hearing', async (c) => c.json(await resolveNextHearing(nextHearingInputSchema.parse(await c.req.json()))));

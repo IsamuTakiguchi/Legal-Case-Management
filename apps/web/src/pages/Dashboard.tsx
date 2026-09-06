@@ -50,7 +50,12 @@ export default function Dashboard() {
       </div>
       <div className="grid gap-4 md:grid-cols-2">
         <section className="card">
-          <h2 className="mb-2 font-semibold">今日の予定</h2>
+          <h2 className="mb-2 flex items-center font-semibold">
+            今日の予定
+            <Link to="/calendar" className="ml-auto text-xs font-normal text-blue-700 hover:underline">
+              予定の一覧・登録 →
+            </Link>
+          </h2>
           {d.todaysEvents.length === 0 && <div className="text-sm text-slate-500">予定はありません</div>}
           <ul className="space-y-1 text-sm">
             {d.todaysEvents.map((e) => (

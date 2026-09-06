@@ -124,13 +124,17 @@ export async function createEvent(opts: {
 
 export async function updateEvent(
   eventId: string,
-  patch: { title?: string; description?: string; location?: string; startAt?: Date; endAt?: Date; tentative?: boolean },
+  patch: { title?: string; description?: string; location?: string; startAt?: Date; endAt?: Date; tentative?: boolean; tag?: EventTag },
 ) {
   const cal = calendarApi();
+  const priv: Record<string, string> | undefined = patch.tag
+    ? { kind: patch.tag.kind, app: 'lcm', clientId: patch.tag.clientId ? String(patch.tag.clientId) : '', caseId: patch.tag.caseId ? String(patch.tag.caseId) : '' }
+    : undefined;
   await cal.events.patch({
     calendarId: calId(),
     eventId,
     requestBody: {
+      ...(priv ? { extendedProperties: { private: priv } } : {}),
       ...(patch.title !== undefined ? { summary: patch.title } : {}),
       ...(patch.description !== undefined ? { description: patch.description } : {}),
       ...(patch.location !== undefined ? { location: patch.location } : {}),

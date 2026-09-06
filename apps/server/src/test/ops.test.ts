@@ -237,6 +237,38 @@ describe('受信ファイルの扱い', () => {
   });
 });
 
+describe('予定の登録・編集・削除', () => {
+  it('Google 未接続ならアプリ内に保存し、同期で消されず、期日は事件の次回期日に反映される', async () => {
+    const { createCalendarEvent, editCalendarEvent, removeCalendarEvent, listCalendarEvents, isLocalEventId } = await import('../services/court.js');
+    const client = db().insert(schema.clients).values({ name: '予定テスト花子', kana: 'よていてすとはなこ' }).returning().get();
+    const kase = db().insert(schema.cases).values({ clientId: client.id, title: '予定テスト事件', caseType: 'civil', status: 'active' }).returning().get();
+    const start = new Date(Date.now() + 3 * 86400_000);
+    const end = new Date(start.getTime() + 3600_000);
+    const ev = await createCalendarEvent({ title: '予定テスト 第1回弁論', startAt: start.toISOString(), endAt: end.toISOString(), kind: 'hearing', clientId: client.id, caseId: kase.id, location: '奈良地方裁判所' });
+    expect(isLocalEventId(ev.googleEventId)).toBe(true);
+    expect(db().select().from(schema.cases).where(eq(schema.cases.id, kase.id)).get()!.nextHearingAt).toBe(start.toISOString());
+
+    const listed = listCalendarEvents(new Date(), new Date(Date.now() + 7 * 86400_000), { clientId: client.id });
+    expect(listed.map((e) => e.id)).toContain(ev.id);
+    expect(listed.find((e) => e.id === ev.id)!.caseTitle).toBe('予定テスト事件');
+    expect(listed.find((e) => e.id === ev.id)!.local).toBe(true);
+
+    await expect(createCalendarEvent({ title: 'x', startAt: end.toISOString(), endAt: start.toISOString(), kind: 'other' })).rejects.toThrow('終了は開始より後');
+
+    const later = new Date(start.getTime() + 86400_000);
+    const edited = await editCalendarEvent(ev.id, { startAt: later.toISOString(), endAt: new Date(later.getTime() + 1800_000).toISOString(), title: '予定テスト 第1回弁論（変更）' });
+    expect(edited!.title).toBe('予定テスト 第1回弁論（変更）');
+    expect(db().select().from(schema.cases).where(eq(schema.cases.id, kase.id)).get()!.nextHearingAt).toBe(later.toISOString());
+
+    await removeCalendarEvent(ev.id);
+    expect(db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, ev.id)).get()).toBeUndefined();
+    expect(db().select().from(schema.cases).where(eq(schema.cases.id, kase.id)).get()!.nextHearingAt).toBeNull();
+
+    db().delete(schema.cases).where(eq(schema.cases.id, kase.id)).run();
+    db().delete(schema.clients).where(eq(schema.clients.id, client.id)).run();
+  });
+});
+
 describe('受信箱の表示範囲', () => {
   it('inboundOnly なら自分の送信だけの会話を除く', async () => {
     const { listConversations } = await import('../services/inbox.js');
