@@ -175,6 +175,19 @@ export default function Setup() {
               )}
               {s.id === 'microsoft' && !state?.connected && <DeviceConnect mode={d.state.microsoft.mode} onDone={() => { qc.invalidateQueries({ queryKey: ['setup'] }); qc.invalidateQueries({ queryKey: ['status'] }); }} />}
               {s.id === 'microsoft' && state?.connected && d.state.microsoft.mode === 'device' && <span className="text-xs text-slate-500">簡易接続（アプリ登録なし）で接続中</span>}
+              {s.id === 'microsoft' && state?.connected && (
+                <FolderPicker
+                  current={values.ONEDRIVE_CLIENT_ROOT ?? ''}
+                  onPick={(p) => {
+                    setValues((v) => ({ ...v, ONEDRIVE_CLIENT_ROOT: p }));
+                    api.put('/setup', { ONEDRIVE_CLIENT_ROOT: p }).then(() => {
+                      setSaved(s.id);
+                      qc.invalidateQueries({ queryKey: ['setup'] });
+                      test.mutate('microsoft');
+                    });
+                  }}
+                />
+              )}
               {saved === s.id && <span className="text-xs text-green-700">保存しました</span>}
               {r && <span className={`text-xs ${r.ok ? 'text-green-700' : 'text-red-600'}`}>{r.message}</span>}
             </div>
@@ -275,6 +288,65 @@ function GoogleGuide({ redirectUri }: { redirectUri: string }) {
           {st.note && <div className="ml-6 mt-1 text-slate-500">{st.note}</div>}
         </div>
       ))}
+    </div>
+  );
+}
+
+/** OneDrive のフォルダをクリックで辿り、依頼者フォルダの親を選ぶ */
+function FolderPicker({ current, onPick }: { current: string; onPick: (path: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [path, setPath] = useState('/');
+  const q = useQuery({
+    queryKey: ['onedrive-folders', path],
+    queryFn: () => api.get<{ path: string; folders: { name: string; path: string; childCount: number }[]; fileCount: number }>(`/setup/onedrive/folders?path=${encodeURIComponent(path)}`),
+    enabled: open,
+  });
+  const crumbs = path === '/' ? [] : path.replace(/^\/+/, '').split('/');
+  return (
+    <div className="w-full">
+      <button type="button" className="btn btn-sm" onClick={() => { setPath(current && current !== '/' ? current.replace(/\/[^/]*$/, '') || '/' : '/'); setOpen((v) => !v); }}>
+        {open ? 'フォルダ選択を閉じる' : 'フォルダをクリックで選ぶ'}
+      </button>
+      {open && (
+        <div className="mt-2 rounded border border-slate-200 bg-slate-50 p-3 text-xs">
+          <div className="mb-2 text-slate-600">依頼者ごとのフォルダ（山田太郎、株式会社○○ など）が並んでいる場所まで開いて、「ここにする」を押してください。</div>
+          <div className="mb-2 flex flex-wrap items-center gap-1">
+            <button type="button" className="text-blue-700 hover:underline" onClick={() => setPath('/')}>
+              マイファイル
+            </button>
+            {crumbs.map((c, i) => (
+              <span key={i} className="flex items-center gap-1">
+                <span className="text-slate-400">/</span>
+                <button type="button" className="text-blue-700 hover:underline" onClick={() => setPath('/' + crumbs.slice(0, i + 1).join('/'))}>
+                  {c}
+                </button>
+              </span>
+            ))}
+          </div>
+          {q.isLoading && <div className="text-slate-500">読み込み中…</div>}
+          {q.error && <div className="text-red-600">{(q.error as Error).message}</div>}
+          {q.data && (
+            <ul className="max-h-64 divide-y divide-slate-200 overflow-auto rounded border border-slate-200 bg-white">
+              {q.data.folders.map((f) => (
+                <li key={f.path} className="flex items-center gap-2 px-2 py-1.5">
+                  <button type="button" className="flex-1 text-left hover:underline" onClick={() => setPath(f.path)}>
+                    📁 {f.name} <span className="text-slate-400">（{f.childCount}）</span>
+                  </button>
+                </li>
+              ))}
+              {q.data.folders.length === 0 && <li className="px-2 py-2 text-slate-500">この中にフォルダはありません</li>}
+            </ul>
+          )}
+          {q.data && (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => { onPick(path); setOpen(false); }}>
+                ここにする: <code className="ml-1">{path}</code>
+              </button>
+              <span className="text-slate-500">この中のフォルダ {q.data.folders.length} 件が依頼者フォルダとして扱われます</span>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

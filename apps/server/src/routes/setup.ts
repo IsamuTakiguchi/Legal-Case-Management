@@ -5,7 +5,7 @@ import { testService } from '../services/connectionTest.js';
 import { resetIntegrationCaches } from '../integrations/reset.js';
 import { env, isConfigured } from '../config.js';
 import { isGoogleConnected } from '../integrations/google.js';
-import { isMsConnected } from '../integrations/onedrive.js';
+import { isMsConnected, listChildren, joinPath } from '../integrations/onedrive.js';
 
 export const setupRoutes = new Hono();
 
@@ -38,3 +38,15 @@ setupRoutes.put('/setup', async (c) => {
 });
 
 setupRoutes.post('/setup/test/:service', async (c) => c.json(await testService(c.req.param('service'))));
+
+/** OneDrive のフォルダ一覧（依頼者ルートを画面で選ぶため） */
+setupRoutes.get('/setup/onedrive/folders', async (c) => {
+  if (!(await isMsConnected())) return c.json({ error: 'OneDrive が未接続です' }, 400);
+  const path = (c.req.query('path') || '/').replace(/\/+$/, '') || '/';
+  const items = await listChildren(path);
+  const folders = items
+    .filter((i) => i.folder)
+    .map((i) => ({ name: i.name, path: joinPath(path, i.name), childCount: i.folder?.childCount ?? 0 }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'ja'));
+  return c.json({ path, folders, fileCount: items.length - folders.length });
+});
