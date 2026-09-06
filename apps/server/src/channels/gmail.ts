@@ -68,6 +68,7 @@ export function normalizeGmailMessage(msg: GmailMessage, myAddresses: string[]):
   const from = parseAddress(header(msg, 'From'));
   const to = header(msg, 'To') ?? '';
   const isMine = labels.includes('SENT') || (from.email !== null && myAddresses.includes(from.email));
+  const category = gmailCategory(labels);
   const { text, attachments } = extractBodyAndAttachments(msg);
   const sentAt = msg.internalDate ? new Date(Number(msg.internalDate)).toISOString() : new Date().toISOString();
   const counterpart = isMine ? parseAddress(to.split(',')[0] ?? null) : from;
@@ -83,9 +84,21 @@ export function normalizeGmailMessage(msg: GmailMessage, myAddresses: string[]):
     body: text,
     attachments,
     identity: { channel: 'gmail', email: counterpart.email, displayName: counterpart.name },
-    raw: { labelIds: labels, messageId: header(msg, 'Message-ID'), to, cc: header(msg, 'Cc') },
-    threadMeta: { counterpartEmail: counterpart.email, counterpartName: counterpart.name },
+    raw: { labelIds: labels, messageId: header(msg, 'Message-ID'), to, cc: header(msg, 'Cc'), category },
+    threadMeta: { counterpartEmail: counterpart.email, counterpartName: counterpart.name, category },
   };
+}
+
+export type GmailCategory = 'primary' | 'promotions' | 'social' | 'updates' | 'forums';
+export const NON_PRIMARY_CATEGORIES: GmailCategory[] = ['promotions', 'social', 'updates', 'forums'];
+
+/** Gmail の受信トレイのタブ（メイン／プロモーション／ソーシャル／新着／フォーラム）をラベルから判定 */
+export function gmailCategory(labels: string[]): GmailCategory {
+  if (labels.includes('CATEGORY_PROMOTIONS')) return 'promotions';
+  if (labels.includes('CATEGORY_SOCIAL')) return 'social';
+  if (labels.includes('CATEGORY_UPDATES')) return 'updates';
+  if (labels.includes('CATEGORY_FORUMS')) return 'forums';
+  return 'primary';
 }
 
 function encodeRfc2047(s: string): string {

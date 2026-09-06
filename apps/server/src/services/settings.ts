@@ -38,6 +38,8 @@ http://www.noboriohji.com/access/`,
   client_extra_folders: '',
   /** 新規依頼者フォルダの名前の形。{kana}=読みの頭文字、{name}=氏名、{case}=事件名。例: "{kana}{name}　{case}"。空なら氏名のみ。既存フォルダから自動推定 */
   client_folder_name_format: '',
+  /** Gmail の取込範囲: all（すべて）| primary（受信トレイの「メイン」タブだけ。プロモーション・ソーシャル・新着・フォーラムは除外） */
+  gmail_categories: 'all',
   /** Google でログインできるメールアドレス（カンマ／改行区切り）。空なら「Google に接続」したアカウント */
   login_google_emails: '',
   backup_folder: '_システム/バックアップ',

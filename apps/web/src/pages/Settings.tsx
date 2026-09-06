@@ -21,7 +21,16 @@ interface BackupInfo {
   remoteFolder: string;
 }
 
-const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean }[] = [
+const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean; options?: { value: string; label: string }[] }[] = [
+  {
+    key: 'gmail_categories',
+    label: 'Gmail の取込範囲',
+    hint: '「メインだけ」にすると、Gmail がプロモーション・ソーシャル・新着・フォーラムに分類した受信メールを受信箱に出しません',
+    options: [
+      { value: 'all', label: 'すべて（Gmail の全タブ）' },
+      { value: 'primary', label: 'メインだけ' },
+    ],
+  },
   { key: 'lawyer_name', label: '弁護士名' },
   { key: 'office_name', label: '事務所名' },
   { key: 'office_location', label: '事務所所在地（カレンダーの場所欄）' },
@@ -208,8 +217,23 @@ export default function Settings() {
         <div className="grid gap-3 md:grid-cols-2">
           {FIELDS.map((f) => (
             <div key={f.key} className={f.multiline ? 'md:col-span-2' : ''}>
-              <label className="label">{f.label}</label>
-              {f.multiline ? <textarea className="input" rows={3} value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} /> : <input className="input" value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} />}
+              <label className="label">
+                {f.label}
+                {f.hint && <span className="ml-1 font-normal text-slate-400">（{f.hint}）</span>}
+              </label>
+              {f.options ? (
+                <select className="input" value={form[f.key] ?? f.options[0].value} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}>
+                  {f.options.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              ) : f.multiline ? (
+                <textarea className="input" rows={3} value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} />
+              ) : (
+                <input className="input" value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} />
+              )}
             </div>
           ))}
         </div>

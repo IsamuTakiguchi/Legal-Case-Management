@@ -165,6 +165,26 @@ describe('一括登録と削除', () => {
   });
 });
 
+describe('Gmail の取込範囲', () => {
+  it('ラベルからタブを判定し、「メインだけ」なら一覧から除外する', async () => {
+    const { gmailCategory } = await import('../channels/gmail.js');
+    const { listConversations } = await import('../services/inbox.js');
+    expect(gmailCategory(['INBOX', 'CATEGORY_PERSONAL'])).toBe('primary');
+    expect(gmailCategory(['INBOX', 'CATEGORY_PROMOTIONS'])).toBe('promotions');
+    expect(gmailCategory(['SENT'])).toBe('primary');
+    const promo = db().insert(schema.conversations).values({ channel: 'gmail', externalThreadId: 'promo-1', subject: 'セール', lastMessageAt: new Date().toISOString(), meta: { category: 'promotions' } }).returning().get();
+    const main = db().insert(schema.conversations).values({ channel: 'gmail', externalThreadId: 'main-1', subject: '相談', lastMessageAt: new Date().toISOString(), meta: { category: 'primary' } }).returning().get();
+    setSetting('gmail_categories', 'all');
+    expect(listConversations({ channel: 'gmail' }).map((c) => c.id)).toEqual(expect.arrayContaining([promo.id, main.id]));
+    setSetting('gmail_categories', 'primary');
+    const ids = listConversations({ channel: 'gmail' }).map((c) => c.id);
+    expect(ids).toContain(main.id);
+    expect(ids).not.toContain(promo.id);
+    setSetting('gmail_categories', 'all');
+    db().delete(schema.conversations).where(inArray(schema.conversations.id, [promo.id, main.id])).run();
+  });
+});
+
 describe('Google ログインの許可アドレス', () => {
   it('設定が空なら接続アカウント、設定があればその一覧（小文字化・区切り対応）', () => {
     setSetting('login_google_emails', '');

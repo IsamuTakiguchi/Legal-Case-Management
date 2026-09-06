@@ -6,6 +6,8 @@ import { processAttachment } from './attachments.js';
 import { logger } from '../logger.js';
 import { onInboundForTasks } from './tasks.js';
 import { linkGmailMessageToCreditor } from './creditors.js';
+import { getSetting } from './settings.js';
+import { NON_PRIMARY_CATEGORIES, type GmailCategory } from '../channels/gmail.js';
 
 export type ConversationRow = typeof schema.conversations.$inferSelect;
 export type MessageRow = typeof schema.messages.$inferSelect;
@@ -148,6 +150,10 @@ export function listConversations(filter: {
     .orderBy(desc(schema.conversations.lastMessageAt))
     .limit(filter.limit ?? 200)
     .all();
+  // Gmail は「メインだけ」の設定なら、取込済みのプロモーション等の会話も一覧から外す
+  if (getSetting('gmail_categories') === 'primary') {
+    rows = rows.filter((r) => r.channel !== 'gmail' || !NON_PRIMARY_CATEGORIES.includes(((r.meta as { category?: string }).category ?? 'primary') as GmailCategory));
+  }
   if (filter.q) {
     const ids = d
       .all<{ rowid: number }>(sql`SELECT rowid FROM messages_fts WHERE messages_fts MATCH ${ftsQuery(filter.q)} LIMIT 500`)
