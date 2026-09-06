@@ -36,6 +36,8 @@ http://www.noboriohji.com/access/`,
   client_status_folders: '',
   /** 区分に対応しないが依頼者フォルダを含むフォルダ（改行区切り。例: 4.その他（顧問等）） */
   client_extra_folders: '',
+  /** 新規依頼者フォルダの名前の形。{kana}=読みの頭文字、{name}=氏名。例: "{kana} {name}"。空なら氏名のみ。既存フォルダから自動推定 */
+  client_folder_name_format: '',
   /** Google でログインできるメールアドレス（カンマ／改行区切り）。空なら「Google に接続」したアカウント */
   login_google_emails: '',
   backup_folder: '_システム/バックアップ',

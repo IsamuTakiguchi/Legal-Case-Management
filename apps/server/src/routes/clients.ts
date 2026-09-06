@@ -99,6 +99,7 @@ clientRoutes.post('/clients/import', async (c) => {
         caseStatus: z.enum(['consultation', 'active', 'wrapup', 'closed']).optional().nullable(),
         caseTitle: z.string().optional().nullable(),
         caseType: z.string().optional().nullable(),
+        kana: z.string().optional().nullable(),
       }),
     )
     .parse(await c.req.json());

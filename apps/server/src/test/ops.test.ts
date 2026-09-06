@@ -106,7 +106,23 @@ describe('依頼者フォルダの区分レイアウト', () => {
 
 describe('一括登録と削除', () => {
   it('区分付き候補から依頼者と事件を作り、削除で関連も消える', async () => {
-    const { applyImport, guessCaseType, deleteClient } = await import('../services/clientImport.js');
+    const { applyImport, guessCaseType, deleteClient, parseFolderName, detectFolderNameFormat } = await import('../services/clientImport.js');
+    const { clientFolderName } = await import('../services/clientFolders.js');
+    const { setSetting: set } = await import('../services/settings.js');
+    // 先頭かな（並び順用）は氏名から外し、読みの頭文字として保持
+    expect(parseFolderName('や 山田太郎')).toEqual({ name: '山田太郎', kanaPrefix: 'や' });
+    expect(parseFolderName('や_山田太郎_離婚')).toEqual({ name: '山田太郎', kanaPrefix: 'や' });
+    expect(parseFolderName('や山田太郎')).toEqual({ name: '山田太郎', kanaPrefix: 'や' });
+    expect(parseFolderName('す 株式会社スズキ商事')).toEqual({ name: '株式会社スズキ商事', kanaPrefix: 'す' });
+    expect(parseFolderName('山田太郎')).toEqual({ name: '山田太郎', kanaPrefix: null });
+    expect(parseFolderName('やまだ')).toEqual({ name: 'やまだ', kanaPrefix: null });
+    expect(detectFolderNameFormat(['や 山田太郎', 'さ 佐藤花子', 'た_田中', '株式会社ABC'])).toBe('{kana} {name}');
+    expect(detectFolderNameFormat(['山田太郎', '佐藤花子'])).toBe('');
+    set('client_folder_name_format', '{kana} {name}');
+    expect(clientFolderName({ name: '山田太郎', kana: 'やまだ たろう' })).toBe('や 山田太郎');
+    expect(clientFolderName({ name: '山田太郎', kana: null })).toBe('山田太郎');
+    set('client_folder_name_format', '');
+    expect(clientFolderName({ name: '山田太郎', kana: 'や' })).toBe('山田太郎');
     expect(guessCaseType('山田太郎_離婚調停')).toBe('divorce');
     expect(guessCaseType('株式会社ABC 破産')).toBe('bankruptcy_corp');
     expect(guessCaseType('佐藤 交通事故')).toBe('traffic');

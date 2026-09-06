@@ -21,6 +21,8 @@ export interface ImportCandidate {
   caseTitle?: string | null;
   /** フォルダ名から推定した事件類型 */
   caseType?: string | null;
+  /** フォルダ名先頭の並び順用かな（読みの頭文字として保存） */
+  kana?: string | null;
 }
 
 /** フォルダ名から事件類型を推定する */
@@ -41,6 +43,32 @@ export function guessCaseType(name: string): string {
 }
 
 const SKIP_FOLDERS = /^(_|\.|書式|テンプレ|事務所|その他|旧|過去|archive)/i;
+
+/** 並び順用の先頭かな（「や 山田太郎」「や_山田太郎」「や山田太郎」の「や」）を取り出す */
+const KANA_PREFIX = /^([ぁ-んァ-ヶ]{1,3})(?:[\s　_＿\-－.．]+|(?=[^ぁ-んァ-ヶ\s　]))/;
+
+export function parseFolderName(folder: string): { name: string; kanaPrefix: string | null } {
+  const trimmed = folder.trim();
+  const m = trimmed.match(KANA_PREFIX);
+  // 先頭かなの後に何も無い（全部かなの名前）場合はプレフィックスとみなさない
+  if (m && trimmed.slice(m[0].length).trim()) return { name: guessNameFromFolder(trimmed.slice(m[0].length)), kanaPrefix: m[1] };
+  return { name: guessNameFromFolder(trimmed), kanaPrefix: null };
+}
+
+/** 既存フォルダ名の付け方（かな＋区切り＋氏名）を推定してフォーマットにする。例: "{kana} {name}" */
+export function detectFolderNameFormat(names: string[]): string {
+  const seps: Record<string, number> = {};
+  let hit = 0;
+  for (const n of names) {
+    const m = n.trim().match(/^[ぁ-んァ-ヶ]{1,3}([\s　_＿\-－.．]*)(?=[^ぁ-んァ-ヶ\s　])/);
+    if (!m) continue;
+    hit++;
+    seps[m[1]] = (seps[m[1]] ?? 0) + 1;
+  }
+  if (names.length === 0 || hit / names.length < 0.5) return '';
+  const sep = Object.entries(seps).sort((a, b) => b[1] - a[1])[0]?.[0] ?? ' ';
+  return `{kana}${sep}{name}`;
+}
 
 /** 「山田太郎_離婚」「山田 太郎（相続）」などのフォルダ名から氏名らしい部分を取り出す */
 export function guessNameFromFolder(folder: string): string {
@@ -64,7 +92,7 @@ export async function onedriveCandidates(): Promise<ImportCandidate[]> {
     for (const i of items) {
       if (!i.isFolder || SKIP_FOLDERS.test(i.name)) continue;
       if (!parent && parents.length === 1 && [...statusByParent.keys()].includes(i.name)) continue;
-      const name = guessNameFromFolder(i.name);
+      const { name, kanaPrefix } = parseFolderName(i.name);
       const folderPath = parent ? `${parent}/${i.name}` : i.name;
       const existing = clients.find((c) => c.onedriveFolderPath === folderPath || c.onedriveFolderPath === i.name || c.name.replace(/[\s　]/g, '') === name.replace(/[\s　]/g, ''));
       const status = statusByParent.get(parent) ?? null;
@@ -82,6 +110,7 @@ export async function onedriveCandidates(): Promise<ImportCandidate[]> {
         caseStatus,
         caseTitle: caseStatus ? i.name : null,
         caseType: caseStatus ? caseType : null,
+        kana: kanaPrefix,
       });
     }
   }
@@ -103,7 +132,7 @@ export async function chatworkCandidates(): Promise<ImportCandidate[]> {
 }
 
 export function applyImport(
-  rows: { name: string; folderPath?: string | null; chatworkRoomId?: number | null; existingClientId?: number | null; caseStatus?: CaseStatus | null; caseTitle?: string | null; caseType?: string | null }[],
+  rows: { name: string; folderPath?: string | null; chatworkRoomId?: number | null; existingClientId?: number | null; caseStatus?: CaseStatus | null; caseTitle?: string | null; caseType?: string | null; kana?: string | null }[],
 ): { created: number; updated: number; casesCreated: number } {
   let created = 0;
   let updated = 0;
@@ -116,13 +145,15 @@ export function applyImport(
       const patch: Partial<typeof schema.clients.$inferInsert> = { updatedAt: now };
       if (r.folderPath) patch.onedriveFolderPath = r.folderPath;
       if (r.chatworkRoomId) patch.chatworkRoomId = r.chatworkRoomId;
+      const cur = db().select({ kana: schema.clients.kana }).from(schema.clients).where(eq(schema.clients.id, r.existingClientId)).get();
+      if (r.kana && !cur?.kana) patch.kana = r.kana;
       db().update(schema.clients).set(patch).where(eq(schema.clients.id, r.existingClientId)).run();
       clientId = r.existingClientId;
       updated++;
     } else {
       const row = db()
         .insert(schema.clients)
-        .values({ name: r.name.trim(), aliases: [], emails: [], onedriveFolderPath: r.folderPath ?? null, chatworkRoomId: r.chatworkRoomId ?? null, preferredChannel: r.chatworkRoomId ? 'chatwork' : null })
+        .values({ name: r.name.trim(), kana: r.kana ?? null, aliases: [], emails: [], onedriveFolderPath: r.folderPath ?? null, chatworkRoomId: r.chatworkRoomId ?? null, preferredChannel: r.chatworkRoomId ? 'chatwork' : null })
         .returning()
         .get();
       clientId = row.id;
