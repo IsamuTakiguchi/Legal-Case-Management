@@ -104,6 +104,37 @@ describe('依頼者フォルダの区分レイアウト', () => {
   });
 });
 
+describe('一括登録と削除', () => {
+  it('区分付き候補から依頼者と事件を作り、削除で関連も消える', async () => {
+    const { applyImport, guessCaseType, deleteClient } = await import('../services/clientImport.js');
+    expect(guessCaseType('山田太郎_離婚調停')).toBe('divorce');
+    expect(guessCaseType('株式会社ABC 破産')).toBe('bankruptcy_corp');
+    expect(guessCaseType('佐藤 交通事故')).toBe('traffic');
+    expect(guessCaseType('鈴木')).toBe('general_civil');
+    const r = applyImport([
+      { name: '山田太郎', folderPath: '1.進行事件/山田太郎_離婚調停', caseStatus: 'active', caseTitle: '山田太郎_離婚調停', caseType: 'divorce' },
+      { name: '田中一郎', folderPath: '3.終了事件/田中一郎', caseStatus: 'closed', caseTitle: '田中一郎' },
+      { name: '鈴木', folderPath: '鈴木' },
+    ]);
+    expect(r).toEqual({ created: 3, updated: 0, casesCreated: 2 });
+    const yamada = db().select().from(schema.clients).where(eq(schema.clients.name, '山田太郎')).get()!;
+    const cases = db().select().from(schema.cases).where(eq(schema.cases.clientId, yamada.id)).all();
+    expect(cases).toHaveLength(1);
+    expect(cases[0].status).toBe('active');
+    expect(cases[0].caseType).toBe('divorce');
+    // 再実行しても事件は増えない
+    applyImport([{ name: '山田太郎', folderPath: '1.進行事件/山田太郎_離婚調停', existingClientId: yamada.id, caseStatus: 'active', caseTitle: '山田太郎_離婚調停' }]);
+    expect(db().select().from(schema.cases).where(eq(schema.cases.clientId, yamada.id)).all()).toHaveLength(1);
+    expect(deleteClient(yamada.id)).toBe(true);
+    expect(db().select().from(schema.cases).where(eq(schema.cases.clientId, yamada.id)).all()).toHaveLength(0);
+    expect(deleteClient(yamada.id)).toBe(false);
+    for (const n of ['田中一郎', '鈴木']) {
+      const c = db().select().from(schema.clients).where(eq(schema.clients.name, n)).get();
+      if (c) deleteClient(c.id);
+    }
+  });
+});
+
 describe('Google ログインの許可アドレス', () => {
   it('設定が空なら接続アカウント、設定があればその一覧（小文字化・区切り対応）', () => {
     setSetting('login_google_emails', '');

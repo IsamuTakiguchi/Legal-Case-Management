@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { channelBadge, channelLabel, fmtDateTime, fmtBytes } from '../lib/format';
 import { ClientForm, type ClientRow } from './Clients';
@@ -18,6 +18,7 @@ interface Detail extends ClientRow {
 export default function ClientDetail() {
   const { id } = useParams();
   const qc = useQueryClient();
+  const nav = useNavigate();
   const [edit, setEdit] = useState(false);
   const [newCase, setNewCase] = useState(false);
   const [sub, setSub] = useState('');
@@ -51,6 +52,19 @@ export default function ClientDetail() {
         {c.kana && <span className="text-sm text-slate-500">{c.kana}</span>}
         <button className="btn btn-sm ml-auto" onClick={() => setEdit(!edit)}>
           編集
+        </button>
+        <button
+          className="btn btn-sm text-red-600"
+          onClick={() => {
+            if (confirm(`「${c.name}」を削除します。事件・ノート・タスクも削除されます（会話とファイルは残り、紐付けだけ外れます）。よろしいですか？`)) {
+              api.del(`/clients/${c.id}`).then(() => {
+                qc.invalidateQueries({ queryKey: ['clients'] });
+                nav('/clients');
+              });
+            }
+          }}
+        >
+          削除
         </button>
       </div>
       {edit && <ClientForm initial={c} onSubmit={(b) => update.mutate(b)} onCancel={() => setEdit(false)} busy={update.isPending} />}
