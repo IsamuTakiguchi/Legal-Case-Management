@@ -5,6 +5,7 @@ import { isMsConnected, moveItem, getItemByPath, joinPath } from '../integration
 import { getSetting, setSetting } from './settings.js';
 import { logger } from '../logger.js';
 import { CASE_STATUSES, CASE_STATUS_LABEL, type CaseStatus } from '@lcm/shared';
+import { parseFolderName, detectFolderNameFormat } from './clientImport.js';
 
 /**
  * 依頼者フォルダの区分レイアウト。
@@ -77,13 +78,26 @@ export function clientEffectiveStatus(clientId: number): CaseStatus {
   return cases.map((c) => c.status as CaseStatus).sort((a, b) => (STATUS_RANK[a] ?? 9) - (STATUS_RANK[b] ?? 9))[0] ?? 'consultation';
 }
 
+/**
+ * 新規フォルダの名前。設定 client_folder_name_format（例: "{kana} {name}"）に従い、
+ * {kana} は読み（kana）の先頭 1 文字。読みが無ければ氏名だけにする。
+ */
+export function clientFolderName(client: { name: string; kana?: string | null }): string {
+  const fmt = getSetting('client_folder_name_format').trim();
+  const head = (client.kana ?? '').trim().charAt(0);
+  if (!fmt || !fmt.includes('{name}')) return client.name;
+  if (fmt.includes('{kana}') && !head) return client.name;
+  return fmt.replace('{kana}', head).replace('{name}', client.name).trim();
+}
+
 /** 新規に依頼者フォルダを作るときの相対パス */
-export function defaultClientFolderRel(client: { id?: number; name: string }): string {
+export function defaultClientFolderRel(client: { id?: number; name: string; kana?: string | null }): string {
+  const folderName = clientFolderName(client);
   const map = statusFolderMap();
-  if (!Object.keys(map).length) return client.name;
+  if (!Object.keys(map).length) return folderName;
   const status = client.id ? clientEffectiveStatus(client.id) : 'consultation';
   const parent = map[status] ?? map.consultation ?? map.active;
-  return parent ? `${parent}/${client.name}` : client.name;
+  return parent ? `${parent}/${folderName}` : folderName;
 }
 
 function splitRel(rel: string): { parent: string; name: string } {
@@ -103,15 +117,25 @@ export async function resolveAllClientFolders(): Promise<{ scanned: number; upda
   if (st.kind === 'onedrive' && !(await isMsConnected())) return { scanned: 0, updated: 0, missing: [] };
   const root = st.clientRoot();
   const index = new Map<string, string>(); // フォルダ名（空白除去） → 区分/名前
+  const byBareName = new Map<string, string>(); // 先頭かなを除いた氏名 → 区分/名前
+  const allNames: string[] = [];
   let scanned = 0;
   for (const parent of parents) {
     const items = await st.list(joinPath(root, parent)).catch(() => []);
     for (const i of items) {
       if (!i.isFolder) continue;
       scanned++;
+      allNames.push(i.name);
       const key = i.name.replace(/[\s　]/g, '');
       if (!index.has(key)) index.set(key, `${parent}/${i.name}`);
+      const bare = parseFolderName(i.name).name.replace(/[\s　]/g, '');
+      if (bare && !byBareName.has(bare)) byBareName.set(bare, `${parent}/${i.name}`);
     }
+  }
+  // 既存フォルダの付け方（「や 山田太郎」など）を覚えておき、新規作成時に合わせる
+  if (!getSetting('client_folder_name_format')) {
+    const fmt = detectFolderNameFormat(allNames);
+    if (fmt) setSetting('client_folder_name_format', fmt);
   }
   let updated = 0;
   const missing: string[] = [];
@@ -130,7 +154,7 @@ export async function resolveAllClientFolders(): Promise<{ scanned: number; upda
       continue;
     }
     const key = (cur || c.name).replace(/[\s　]/g, '');
-    const found = index.get(key);
+    const found = index.get(key) ?? byBareName.get(key) ?? byBareName.get(parseFolderName(cur || c.name).name.replace(/[\s　]/g, ''));
     if (found) {
       db().update(schema.clients).set({ onedriveFolderPath: found, updatedAt: now }).where(eq(schema.clients.id, c.id)).run();
       updated++;

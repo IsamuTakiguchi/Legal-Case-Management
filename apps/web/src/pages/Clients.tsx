@@ -197,6 +197,7 @@ interface Candidate {
   caseStatus?: string | null;
   caseTitle?: string | null;
   caseType?: string | null;
+  kana?: string | null;
 }
 
 const CASE_STATUS_JA: Record<string, string> = { consultation: '相談', active: '進行事件', wrapup: '残務処理', closed: '終了事件' };
@@ -220,7 +221,7 @@ function BulkImport({ onDone }: { onDone: () => void }) {
         '/clients/import',
         rows
           .filter((r) => r.checked)
-          .map(({ name, folderPath, chatworkRoomId, existingClientId, caseStatus, caseTitle, caseType }) => ({ name, folderPath, chatworkRoomId, existingClientId, caseStatus: withCases ? caseStatus : null, caseTitle, caseType })),
+          .map(({ name, folderPath, chatworkRoomId, existingClientId, caseStatus, caseTitle, caseType, kana }) => ({ name, folderPath, chatworkRoomId, existingClientId, caseStatus: withCases ? caseStatus : null, caseTitle, caseType, kana })),
       ),
     onSuccess: (r) => {
       setMsg(`依頼者 ${r.created} 件を登録、既存 ${r.updated} 件を更新、事件 ${r.casesCreated} 件を作成しました`);
