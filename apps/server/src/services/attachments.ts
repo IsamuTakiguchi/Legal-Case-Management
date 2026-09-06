@@ -1,5 +1,7 @@
 import { eq, desc, and } from 'drizzle-orm';
 import path from 'node:path';
+import fs from 'node:fs';
+import { dataDir } from '../config.js';
 import { db, schema } from '../db/index.js';
 import { storage } from '../integrations/storage.js';
 import { joinPath } from '../integrations/onedrive.js';
@@ -42,6 +44,56 @@ export function attachmentPolicy(): AttachmentPolicy {
   return v === 'auto' || v === 'manual' ? v : 'client_only';
 }
 
+// ---- 受信時の一時取り込み（LINE はコンテンツの保持期間が短いので、未保存でもアプリ内に控えを置く） ----
+
+/** 受信時にアプリ内へ控えを取っておくチャネル */
+const STAGE_CHANNELS: Channel[] = ['line'];
+
+function stageDir(): string {
+  return path.join(dataDir(), 'attachments');
+}
+
+function stagedFileOf(att: { id: number; channelRef: Record<string, unknown> }): string | null {
+  const name = (att.channelRef as { stagedFile?: string }).stagedFile;
+  if (!name) return null;
+  const p = path.join(stageDir(), name);
+  return fs.existsSync(p) ? p : null;
+}
+
+function removeStaged(att: { id: number; channelRef: Record<string, unknown> }) {
+  const p = stagedFileOf(att);
+  if (!p) return;
+  try {
+    fs.unlinkSync(p);
+  } catch (err) {
+    logger.warn({ err, attachmentId: att.id }, '控えファイルの削除に失敗');
+  }
+  const ref = { ...(att.channelRef as Record<string, unknown>) };
+  delete ref.stagedFile;
+  db().update(schema.attachments).set({ channelRef: ref }).where(eq(schema.attachments.id, att.id)).run();
+}
+
+/** チャネルから取得して DATA_DIR/attachments に控えを置く。既にあればそのまま */
+async function stageAttachment(att: { id: number; channelRef: Record<string, unknown>; filename: string }, channel: Channel): Promise<void> {
+  if (stagedFileOf(att)) return;
+  const data = await adapterFor(channel).fetchAttachment({ ref: att.channelRef });
+  fs.mkdirSync(stageDir(), { recursive: true });
+  const name = `${att.id}${path.extname(att.filename).toLowerCase()}`;
+  fs.writeFileSync(path.join(stageDir(), name), data);
+  db()
+    .update(schema.attachments)
+    .set({ channelRef: { ...att.channelRef, stagedFile: name }, size: data.length })
+    .where(eq(schema.attachments.id, att.id))
+    .run();
+}
+
+/** 添付の中身を取得（控えがあれば控えから、なければチャネルから） */
+async function attachmentBytes(att: { id: number; channelRef: Record<string, unknown> }, channel: Channel): Promise<Buffer> {
+  const staged = stagedFileOf(att);
+  if (staged) return fs.readFileSync(staged);
+  return adapterFor(channel).fetchAttachment({ ref: att.channelRef });
+}
+
 /** 添付を取得して依頼者フォルダ（または未振分）に保存。force=true なら設定に関わらず保存する */
 export async function processAttachment(attachmentId: number, opts: { force?: boolean } = {}): Promise<void> {
   const d = db();
@@ -55,13 +107,21 @@ export async function processAttachment(attachmentId: number, opts: { force?: bo
   if (!opts.force) {
     const policy = attachmentPolicy();
     if (policy === 'manual' || (policy === 'client_only' && !client)) {
-      d.update(schema.attachments).set({ status: 'held', clientId: client?.id ?? null, error: null }).where(eq(schema.attachments.id, att.id)).run();
+      let error: string | null = null;
+      if (STAGE_CHANNELS.includes(msg.channel as Channel)) {
+        try {
+          await stageAttachment(att, msg.channel as Channel);
+        } catch (err) {
+          logger.warn({ err, attachmentId: att.id }, '受信ファイルの控えの取得に失敗');
+          error = `受信時の取り込みに失敗: ${String((err as Error).message ?? err)}`;
+        }
+      }
+      d.update(schema.attachments).set({ status: 'held', clientId: client?.id ?? null, error }).where(eq(schema.attachments.id, att.id)).run();
       return;
     }
   }
   try {
-    const adapter = adapterFor(msg.channel as Channel);
-    const data = await adapter.fetchAttachment({ ref: att.channelRef });
+    const data = await attachmentBytes(att, msg.channel as Channel);
     const filename = storedFilename(msg.channel as Channel, msg.sentAt, att.filename);
     const folder = client ? joinPath(clientFolder(client), getSetting('attachment_subfolder')) : unassignedFolder();
     const stored = await storage().put(folder, filename, data);
@@ -85,6 +145,7 @@ export async function processAttachment(attachmentId: number, opts: { force?: bo
         payload: { attachmentId: att.id, conversationId: msg.conversationId },
       });
     }
+    removeStaged(att);
     logger.info({ attachmentId: att.id, path: stored.path }, '添付を保存しました');
   } catch (err) {
     logger.error({ err, attachmentId }, '添付の取得・保存に失敗');
@@ -138,6 +199,7 @@ export async function ignoreAttachment(attachmentId: number): Promise<void> {
       .remove({ itemId: att.driveItemId, path: att.storedPath })
       .catch((err) => logger.warn({ err, id: attachmentId }, '未振分ファイルの削除に失敗'));
   }
+  removeStaged(att);
   d.update(schema.attachments).set({ status: 'ignored', storedPath: null, driveItemId: null, error: null }).where(eq(schema.attachments.id, attachmentId)).run();
   resolveAlertsByKeyPrefix(`unassigned_file:${attachmentId}`);
 }
@@ -150,7 +212,7 @@ export async function fetchAttachmentData(attachmentId: number): Promise<{ data:
   if (att.storedPath) return { data: await storage().get({ itemId: att.driveItemId, path: att.storedPath }), filename: att.filename, mime: att.mime };
   const msg = d.select().from(schema.messages).where(eq(schema.messages.id, att.messageId)).get();
   if (!msg) throw new Error('メッセージが見つかりません');
-  const data = await adapterFor(msg.channel as Channel).fetchAttachment({ ref: att.channelRef });
+  const data = await attachmentBytes(att, msg.channel as Channel);
   return { data, filename: att.filename, mime: att.mime };
 }
 
@@ -182,10 +244,11 @@ export async function retryFailedAttachments(): Promise<number> {
   return n;
 }
 
-export function listAttachments(filter: { status?: string; clientId?: number; limit?: number }) {
+export function listAttachments(filter: { status?: string; clientId?: number; channel?: string; limit?: number }) {
   const d = db();
   const conds = [];
   if (filter.status) conds.push(eq(schema.attachments.status, filter.status));
+  if (filter.channel) conds.push(eq(schema.messages.channel, filter.channel));
   if (filter.clientId) conds.push(eq(schema.attachments.clientId, filter.clientId));
   const rows = d
     .select({

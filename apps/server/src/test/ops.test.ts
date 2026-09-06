@@ -235,6 +235,48 @@ describe('受信ファイルの扱い', () => {
     db().delete(schema.conversations).where(inArray(schema.conversations.id, [convNoClient.id, convClient.id])).run();
     db().delete(schema.clients).where(eq(schema.clients.id, client.id)).run();
   });
+
+  it('LINE の添付は未保存でも受信時にアプリ内へ控えを取り、保存時はそこから使う', async () => {
+    const { processAttachment, saveAttachment, fetchAttachmentData, listAttachments } = await import('../services/attachments.js');
+    const { setAdapter } = await import('../channels/registry.js');
+    let fetches = 0;
+    setAdapter('line', {
+      channel: 'line',
+      isConfigured: () => true,
+      fetchAttachment: async () => {
+        fetches++;
+        return Buffer.from('LINE-IMAGE');
+      },
+      send: async () => ({ externalId: 'x', externalThreadId: 'y', sentAt: new Date().toISOString() }),
+    });
+    const now = new Date().toISOString();
+    const conv = db().insert(schema.conversations).values({ channel: 'line', externalThreadId: 'line-stage', lastMessageAt: now, lastInboundAt: now }).returning().get();
+    const m = db().insert(schema.messages).values({ conversationId: conv.id, channel: 'line', externalId: 'line-stage-1', direction: 'in', sentAt: now, body: '[画像]' }).returning().get();
+    const a = db().insert(schema.attachments).values({ messageId: m.id, filename: 'image_1.jpg', mime: 'image/jpeg', channelRef: { messageId: '1', type: 'image' } }).returning().get();
+    await processAttachment(a.id);
+    const held = db().select().from(schema.attachments).where(eq(schema.attachments.id, a.id)).get()!;
+    expect(held.status).toBe('held');
+    expect((held.channelRef as { stagedFile?: string }).stagedFile).toBeTruthy();
+    expect(fs.existsSync(path.join(tmp, 'attachments', (held.channelRef as { stagedFile: string }).stagedFile))).toBe(true);
+    expect(fetches).toBe(1);
+    expect((await fetchAttachmentData(a.id)).data.toString()).toBe('LINE-IMAGE');
+    expect(fetches).toBe(1); // 控えから読むので再取得しない
+    expect(listAttachments({ status: 'held', channel: 'line' }).map((x) => x.id)).toContain(a.id);
+    expect(listAttachments({ status: 'held', channel: 'gmail' }).map((x) => x.id)).not.toContain(a.id);
+
+    const client = db().insert(schema.clients).values({ name: 'LINE控え太郎', kana: 'らいんひかえたろう' }).returning().get();
+    await saveAttachment(a.id, client.id);
+    const stored = db().select().from(schema.attachments).where(eq(schema.attachments.id, a.id)).get()!;
+    expect(stored.status).toBe('stored');
+    expect(fetches).toBe(1);
+    expect((stored.channelRef as { stagedFile?: string }).stagedFile).toBeUndefined();
+    expect(fs.existsSync(path.join(tmp, 'clients', stored.storedPath!))).toBe(true);
+
+    db().delete(schema.attachments).where(eq(schema.attachments.id, a.id)).run();
+    db().delete(schema.messages).where(eq(schema.messages.id, m.id)).run();
+    db().delete(schema.conversations).where(eq(schema.conversations.id, conv.id)).run();
+    db().delete(schema.clients).where(eq(schema.clients.id, client.id)).run();
+  });
 });
 
 describe('予定の登録・編集・削除', () => {
