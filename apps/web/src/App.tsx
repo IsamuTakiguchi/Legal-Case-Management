@@ -5,6 +5,7 @@ import { api } from './lib/api';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Inbox from './pages/Inbox';
+import Calendar from './pages/Calendar';
 import Conversation from './pages/Conversation';
 import Clients from './pages/Clients';
 import ClientDetail from './pages/ClientDetail';
@@ -20,6 +21,7 @@ import Setup from './pages/Setup';
 const NAV = [
   { to: '/', label: 'ダッシュボード', icon: '◎' },
   { to: '/inbox', label: '受信箱', icon: '✉' },
+  { to: '/calendar', label: '予定', icon: '📅' },
   { to: '/clients', label: '依頼者', icon: '👤' },
   { to: '/cases', label: '事件', icon: '⚖' },
   { to: '/tasks', label: 'タスク・返信待ち', icon: '☑' },
@@ -71,6 +73,7 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/inbox" element={<Inbox />} />
           <Route path="/inbox/:id" element={<Conversation />} />
+          <Route path="/calendar" element={<Calendar />} />
           <Route path="/clients" element={<Clients />} />
           <Route path="/clients/:id" element={<ClientDetail />} />
           <Route path="/cases" element={<Cases />} />
