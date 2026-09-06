@@ -6,7 +6,7 @@ import { fmtDateTime } from '../lib/format';
 interface Status {
   publicBaseUrl: string;
   storage: string;
-  line: { configured: boolean; webhookUrl: string; quota: { used: number; limit: number } | null };
+  line: { configured: boolean; webhookUrl: string; quota: { used: number; limit: number } | null; lastWebhookAt: string | null; lastEventAt: string | null; lastError: string | null };
   chatwork: { configured: boolean; webhookUrl: string; webhookTokenSet: boolean };
   google: { configured: boolean; connected: boolean; account: string | null; redirectUri: string };
   microsoft: { configured: boolean; connected: boolean; account: string | null; redirectUri: string };
@@ -21,7 +21,16 @@ interface BackupInfo {
   remoteFolder: string;
 }
 
-const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean }[] = [
+const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean; options?: { value: string; label: string }[] }[] = [
+  {
+    key: 'gmail_categories',
+    label: 'Gmail の取込範囲',
+    hint: '「メインだけ」にすると、Gmail がプロモーション・ソーシャル・新着・フォーラムに分類した受信メールを受信箱に出しません',
+    options: [
+      { value: 'all', label: 'すべて（Gmail の全タブ）' },
+      { value: 'primary', label: 'メインだけ' },
+    ],
+  },
   { key: 'lawyer_name', label: '弁護士名' },
   { key: 'office_name', label: '事務所名' },
   { key: 'office_location', label: '事務所所在地（カレンダーの場所欄）' },
@@ -153,6 +162,18 @@ export default function Settings() {
             </Conn>
             <Conn ok={s.line.configured} label="LINE公式アカウント" detail={s.line.configured ? `今月の送信 ${s.line.quota?.used ?? 0} / ${s.line.quota?.limit ?? 0}` : '.env に LINE_CHANNEL_SECRET / ACCESS_TOKEN を設定'}>
               <div className="text-xs text-slate-500">Webhook URL: {s.line.webhookUrl}</div>
+              {s.line.configured && (
+                <div className="mt-1 text-xs">
+                  <div className={s.line.lastEventAt ? 'text-green-700' : 'text-orange-700'}>
+                    {s.line.lastEventAt
+                      ? `最後にメッセージを受信: ${fmtDateTime(s.line.lastEventAt)}`
+                      : s.line.lastWebhookAt
+                        ? `Webhook の疎通は確認済み（${fmtDateTime(s.line.lastWebhookAt)}）。まだメッセージは届いていません`
+                        : 'Webhook をまだ一度も受信していません。LINE Developers の「Webhook の利用」と、Official Account Manager 応答設定の「Webhook」が ON か確認してください'}
+                  </div>
+                  {s.line.lastError && <div className="text-red-600">直近のエラー: {s.line.lastError}</div>}
+                </div>
+              )}
             </Conn>
             <Conn ok={s.chatwork.configured} label="Chatwork" detail={s.chatwork.configured ? (s.chatwork.webhookTokenSet ? 'API・Webhook 設定済' : 'Webhook トークン未設定（ポーリングのみ）') : '.env に CHATWORK_API_TOKEN を設定'}>
               <div className="text-xs text-slate-500">Webhook URL: {s.chatwork.webhookUrl}</div>
@@ -208,8 +229,23 @@ export default function Settings() {
         <div className="grid gap-3 md:grid-cols-2">
           {FIELDS.map((f) => (
             <div key={f.key} className={f.multiline ? 'md:col-span-2' : ''}>
-              <label className="label">{f.label}</label>
-              {f.multiline ? <textarea className="input" rows={3} value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} /> : <input className="input" value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} />}
+              <label className="label">
+                {f.label}
+                {f.hint && <span className="ml-1 font-normal text-slate-400">（{f.hint}）</span>}
+              </label>
+              {f.options ? (
+                <select className="input" value={form[f.key] ?? f.options[0].value} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}>
+                  {f.options.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              ) : f.multiline ? (
+                <textarea className="input" rows={3} value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} />
+              ) : (
+                <input className="input" value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} />
+              )}
             </div>
           ))}
         </div>
