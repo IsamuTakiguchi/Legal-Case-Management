@@ -97,6 +97,14 @@ export default function Settings() {
   const runJob = useMutation({ mutationFn: (name: string) => api.post<{ ok: boolean; summary?: string; error?: string }>(`/jobs/${name}/run`), onSuccess: () => qc.invalidateQueries({ queryKey: ['status'] }) });
   const disconnect = useMutation({ mutationFn: (p: string) => api.post(`/auth/${p}/disconnect`), onSuccess: () => qc.invalidateQueries({ queryKey: ['status'] }) });
   const [msg, setMsg] = useState('');
+  const recategorize = useMutation({
+    mutationFn: () => api.post<{ checked: number; updated: number; nonPrimary: number }>('/gmail/recategorize?all=1'),
+    onSuccess: (r) => {
+      setMsg(`Gmail の区分を判定し直しました: ${r.checked} 件を確認、${r.updated} 件を更新（メイン以外 ${r.nonPrimary} 件）`);
+      qc.invalidateQueries({ queryKey: ['conversations'] });
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
   const styleAction = useMutation({
     mutationFn: (v: { url: string; body?: unknown }) => api.post<{ imported?: number; profile?: string }>(v.url, v.body),
     onSuccess: (r) => {
@@ -267,13 +275,23 @@ export default function Settings() {
                 {f.hint && <span className="ml-1 font-normal text-slate-400">（{f.hint}）</span>}
               </label>
               {f.options ? (
-                <select className="input" value={form[f.key] ?? f.options[0].value} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}>
-                  {f.options.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
+                <>
+                  <select className="input" value={form[f.key] ?? f.options[0].value} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}>
+                    {f.options.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                  {f.key === 'gmail_categories' && (
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                      <button type="button" className="btn btn-sm" onClick={() => recategorize.mutate()} disabled={recategorize.isPending}>
+                        {recategorize.isPending ? '判定中…' : '取込済みのメールを判定し直す'}
+                      </button>
+                      <span>設定より前に取り込んだメールに区分を付け直します（Gmail に問い合わせるため、件数が多いと時間がかかります）</span>
+                    </div>
+                  )}
+                </>
               ) : f.multiline ? (
                 <textarea className="input" rows={3} value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} />
               ) : (
