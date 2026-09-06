@@ -8,50 +8,65 @@ body {
   @apply bg-slate-50 text-slate-800;
 }
 
-.btn {
-  @apply inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50;
+/* 部品クラスはユーティリティ（w-auto, p-0, text-xs など）で上書きできるよう components 層に置く */
+@layer components {
+  .btn {
+    @apply inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply border-blue-600 bg-blue-600 text-white hover:bg-blue-700;
+  }
+  .btn-danger {
+    @apply border-red-600 bg-red-600 text-white hover:bg-red-700;
+  }
+  .btn-sm {
+    @apply px-2 py-1 text-xs;
+  }
+  .input {
+    @apply w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500;
+  }
+  .label {
+    @apply mb-1 block text-xs font-medium text-slate-600;
+  }
+  .card {
+    @apply rounded-lg border border-slate-200 bg-white p-4 shadow-sm;
+  }
+  .badge {
+    @apply inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium;
+  }
+  .badge-line {
+    @apply bg-green-100 text-green-800;
+  }
+  .badge-chatwork {
+    @apply bg-red-100 text-red-800;
+  }
+  .badge-gmail {
+    @apply bg-yellow-100 text-yellow-800;
+  }
+  .badge-gray {
+    @apply bg-slate-100 text-slate-700;
+  }
+  .badge-blue {
+    @apply bg-blue-100 text-blue-800;
+  }
+  .badge-orange {
+    @apply bg-orange-100 text-orange-800;
+  }
 }
-.btn-primary {
-  @apply border-blue-600 bg-blue-600 text-white hover:bg-blue-700;
-}
-.btn-danger {
-  @apply border-red-600 bg-red-600 text-white hover:bg-red-700;
-}
-.btn-sm {
-  @apply px-2 py-1 text-xs;
-}
-.input {
-  @apply w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500;
-}
-.label {
-  @apply mb-1 block text-xs font-medium text-slate-600;
-}
-.card {
-  @apply rounded-lg border border-slate-200 bg-white p-4 shadow-sm;
-}
-.badge {
-  @apply inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium;
-}
-.badge-line {
-  @apply bg-green-100 text-green-800;
-}
-.badge-chatwork {
-  @apply bg-red-100 text-red-800;
-}
-.badge-gmail {
-  @apply bg-yellow-100 text-yellow-800;
-}
-.badge-gray {
-  @apply bg-slate-100 text-slate-700;
-}
-.badge-blue {
-  @apply bg-blue-100 text-blue-800;
-}
-.badge-orange {
-  @apply bg-orange-100 text-orange-800;
-}
+
 .prose-sm p {
   @apply my-1;
+}
+
+/* 表セル内のプルダウンは内容幅に合わせる（幅 100% だとセル幅の計算で潰れて矢印しか見えなくなる） */
+td > select.input {
+  width: auto;
+  min-width: 6rem;
+}
+
+/* 折り返しフォーム内の flex-1 入力欄が細く潰れないようにする */
+.input.flex-1 {
+  min-width: 12rem;
 }
 
 /* グリッド／フレックスの子が内容幅で列を押し広げないようにする（表の横スクロールを親で受ける） */
@@ -73,8 +88,10 @@ body {
   textarea {
     font-size: 16px;
   }
-  .card {
-    @apply p-3;
+  @layer components {
+    .card {
+      @apply p-3;
+    }
   }
 }
 

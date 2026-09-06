@@ -21,6 +21,8 @@ http://www.noboriohji.com/access/`,
   waiting_followup_business_days: '3',
   scheduling_stale_business_days: '3',
   attachment_subfolder: '受領資料',
+  /** 受信ファイルの扱い: auto | client_only | manual（services/attachments.ts 参照） */
+  attachment_policy: 'client_only',
   court_docs_subfolder: '提出書面',
   draft_subfolder: '下書き',
   unassigned_folder: '_未振分',

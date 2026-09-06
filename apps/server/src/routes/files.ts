@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { streamSSE } from 'hono/streaming';
-import { listAttachments, assignAttachment, processAttachment, retryFailedAttachments } from '../services/attachments.js';
+import { listAttachments, assignAttachment, processAttachment, retryFailedAttachments, saveAttachment, ignoreAttachment, fetchAttachmentData } from '../services/attachments.js';
 import { indexForms, searchForms, updateForm, formStats, draftFromForms } from '../services/forms.js';
 import { formDraftRequestSchema } from '@lcm/shared';
 import { storage } from '../integrations/storage.js';
@@ -30,13 +30,27 @@ fileRoutes.post('/attachments/:id/retry', async (c) => {
 
 fileRoutes.post('/attachments/retry-failed', async (c) => c.json({ retried: await retryFailedAttachments() }));
 
-/** 保存済み添付のダウンロード（アプリ経由） */
+/** 未保存の添付を保存（clientId 省略時は会話の依頼者へ） */
+fileRoutes.post('/attachments/:id/save', async (c) => {
+  const body = z.object({ clientId: z.number().int().optional().nullable() }).parse(await c.req.json().catch(() => ({})));
+  await saveAttachment(Number(c.req.param('id')), body.clientId ?? null);
+  return c.json(db().select().from(schema.attachments).where(eq(schema.attachments.id, Number(c.req.param('id')))).get());
+});
+
+/** 保存不要にする */
+fileRoutes.post('/attachments/:id/ignore', async (c) => {
+  await ignoreAttachment(Number(c.req.param('id')));
+  return c.json({ ok: true });
+});
+
+/** 添付のダウンロード（保存済みは OneDrive から、未保存はチャネルから直接） */
 fileRoutes.get('/attachments/:id/download', async (c) => {
   const att = db().select().from(schema.attachments).where(eq(schema.attachments.id, Number(c.req.param('id')))).get();
-  if (!att?.storedPath) return c.json({ error: 'not stored' }, 404);
-  const data = await storage().get({ itemId: att.driveItemId, path: att.storedPath });
-  c.header('Content-Type', att.mime ?? 'application/octet-stream');
-  c.header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(att.filename)}`);
+  if (!att) return c.json({ error: 'not found' }, 404);
+  if (att.status === 'ignored') return c.json({ error: '保存不要にしたファイルです' }, 410);
+  const { data, filename, mime } = await fetchAttachmentData(att.id);
+  c.header('Content-Type', mime ?? 'application/octet-stream');
+  c.header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
   return c.body(new Uint8Array(data));
 });
 

@@ -84,6 +84,15 @@ export default function Conversation() {
     qc.invalidateQueries({ queryKey: ['scheduling', id] });
   };
 
+  const attAction = useMutation({
+    mutationFn: (v: { id: number; action: 'save' | 'ignore' }) => api.post(`/attachments/${v.id}/${v.action}`),
+    onSuccess: () => {
+      invalidate();
+      qc.invalidateQueries({ queryKey: ['attachments'] });
+    },
+    onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
+  });
+
   const draft = useMutation({
     mutationFn: () => api.post<{ id: number; generatedText: string }>(`/conversations/${id}/draft`, { instruction, templateKey: templateKey || null }),
     onSuccess: (d) => {
@@ -220,16 +229,26 @@ export default function Conversation() {
                     {m.attachments.map((a) => (
                       <li key={a.id} className="text-xs">
                         📎{' '}
-                        {a.status === 'stored' ? (
+                        {a.status !== 'ignored' ? (
                           <a className="underline" href={`/api/attachments/${a.id}/download`}>
                             {a.filename}
                           </a>
                         ) : (
-                          a.filename
+                          <span className="line-through">{a.filename}</span>
                         )}{' '}
                         <span className={m.direction === 'out' ? 'text-blue-100' : 'text-slate-500'}>
-                          {fmtBytes(a.size)} {a.status === 'unassigned' ? '（未振分）' : a.status === 'failed' ? '（取得失敗）' : a.status === 'pending' ? '（保存中）' : ''}
+                          {fmtBytes(a.size)} {a.status === 'unassigned' ? '（未振分）' : a.status === 'failed' ? '（取得失敗）' : a.status === 'pending' ? '（保存中）' : a.status === 'held' ? '（未保存）' : a.status === 'ignored' ? '（不要）' : '（保存済）'}
                         </span>
+                        {(a.status === 'held' || a.status === 'failed') && m.direction === 'in' && (
+                          <span className="ml-1 inline-flex gap-1">
+                            <button type="button" className="rounded border border-slate-300 bg-white px-1.5 text-slate-700 hover:bg-slate-50" onClick={() => attAction.mutate({ id: a.id, action: 'save' })} disabled={attAction.isPending}>
+                              {c.client ? 'フォルダに保存' : '保存'}
+                            </button>
+                            <button type="button" className="rounded border border-slate-300 bg-white px-1.5 text-slate-500 hover:bg-slate-50" onClick={() => attAction.mutate({ id: a.id, action: 'ignore' })} disabled={attAction.isPending}>
+                              不要
+                            </button>
+                          </span>
+                        )}
                       </li>
                     ))}
                   </ul>

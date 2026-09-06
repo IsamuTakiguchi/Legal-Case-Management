@@ -30,15 +30,35 @@ export function storedFilename(channel: Channel, sentAt: string, original: strin
   return `${yyyymmdd(new Date(sentAt))}_${channel}_${sanitizeFilename(original)}`;
 }
 
-/** 添付を取得して依頼者フォルダ（または未振分）に保存 */
-export async function processAttachment(attachmentId: number): Promise<void> {
+/**
+ * 受信ファイルの扱い（設定 attachment_policy）
+ *   auto        依頼者が分かれば自動保存。不明なものは _未振分 に保存して要確認に出す
+ *   client_only 依頼者が分かれば自動保存。不明なものは保存せず「未保存」として置く（既定）
+ *   manual      すべて「未保存」。会話画面や受信ファイル画面から保存するものだけ保存
+ */
+export type AttachmentPolicy = 'auto' | 'client_only' | 'manual';
+export function attachmentPolicy(): AttachmentPolicy {
+  const v = getSetting('attachment_policy');
+  return v === 'auto' || v === 'manual' ? v : 'client_only';
+}
+
+/** 添付を取得して依頼者フォルダ（または未振分）に保存。force=true なら設定に関わらず保存する */
+export async function processAttachment(attachmentId: number, opts: { force?: boolean } = {}): Promise<void> {
   const d = db();
   const att = d.select().from(schema.attachments).where(eq(schema.attachments.id, attachmentId)).get();
-  if (!att || att.status === 'stored') return;
+  if (!att || att.status === 'stored' || att.status === 'ignored') return;
   const msg = d.select().from(schema.messages).where(eq(schema.messages.id, att.messageId)).get();
   if (!msg) return;
   const conv = d.select().from(schema.conversations).where(eq(schema.conversations.id, msg.conversationId)).get();
-  const client = conv?.clientId ? d.select().from(schema.clients).where(eq(schema.clients.id, conv.clientId)).get() : null;
+  const clientId = att.clientId ?? conv?.clientId ?? null;
+  const client = clientId ? d.select().from(schema.clients).where(eq(schema.clients.id, clientId)).get() : null;
+  if (!opts.force) {
+    const policy = attachmentPolicy();
+    if (policy === 'manual' || (policy === 'client_only' && !client)) {
+      d.update(schema.attachments).set({ status: 'held', clientId: client?.id ?? null, error: null }).where(eq(schema.attachments.id, att.id)).run();
+      return;
+    }
+  }
   try {
     const adapter = adapterFor(msg.channel as Channel);
     const data = await adapter.fetchAttachment({ ref: att.channelRef });
@@ -86,13 +106,52 @@ export async function assignAttachment(attachmentId: number, clientId: number): 
       .set({ status: 'stored', storedPath: moved.path, driveItemId: moved.itemId ?? att.driveItemId, clientId })
       .where(eq(schema.attachments.id, attachmentId))
       .run();
-  } else if (att.status === 'failed' || att.status === 'pending') {
+  } else if (att.status === 'failed' || att.status === 'pending' || att.status === 'held') {
     d.update(schema.attachments).set({ clientId }).where(eq(schema.attachments.id, attachmentId)).run();
-    await processAttachment(attachmentId);
+    await processAttachment(attachmentId, { force: true });
   } else {
     d.update(schema.attachments).set({ clientId }).where(eq(schema.attachments.id, attachmentId)).run();
   }
   resolveAlertsByKeyPrefix(`unassigned_file:${attachmentId}`);
+}
+
+/** 未保存の添付を保存する（依頼者を指定しなければ会話の依頼者へ） */
+export async function saveAttachment(attachmentId: number, clientId?: number | null): Promise<void> {
+  const d = db();
+  const att = d.select().from(schema.attachments).where(eq(schema.attachments.id, attachmentId)).get();
+  if (!att) throw new Error('添付が見つかりません');
+  if (clientId) return assignAttachment(attachmentId, clientId);
+  if (att.status === 'stored') return;
+  d.update(schema.attachments).set({ status: 'pending' }).where(eq(schema.attachments.id, attachmentId)).run();
+  await processAttachment(attachmentId, { force: true });
+  const after = d.select().from(schema.attachments).where(eq(schema.attachments.id, attachmentId)).get();
+  if (after?.status === 'failed') throw new Error(after.error ?? '保存に失敗しました');
+}
+
+/** 保存不要にする。_未振分 に置いてあったものは削除する */
+export async function ignoreAttachment(attachmentId: number): Promise<void> {
+  const d = db();
+  const att = d.select().from(schema.attachments).where(eq(schema.attachments.id, attachmentId)).get();
+  if (!att) throw new Error('添付が見つかりません');
+  if (att.status === 'unassigned' && att.storedPath) {
+    await storage()
+      .remove({ itemId: att.driveItemId, path: att.storedPath })
+      .catch((err) => logger.warn({ err, id: attachmentId }, '未振分ファイルの削除に失敗'));
+  }
+  d.update(schema.attachments).set({ status: 'ignored', storedPath: null, driveItemId: null, error: null }).where(eq(schema.attachments.id, attachmentId)).run();
+  resolveAlertsByKeyPrefix(`unassigned_file:${attachmentId}`);
+}
+
+/** 保存前の添付をチャネルから直接取得する（未保存のまま中身を見る・ダウンロードする用） */
+export async function fetchAttachmentData(attachmentId: number): Promise<{ data: Buffer; filename: string; mime: string | null }> {
+  const d = db();
+  const att = d.select().from(schema.attachments).where(eq(schema.attachments.id, attachmentId)).get();
+  if (!att) throw new Error('添付が見つかりません');
+  if (att.storedPath) return { data: await storage().get({ itemId: att.driveItemId, path: att.storedPath }), filename: att.filename, mime: att.mime };
+  const msg = d.select().from(schema.messages).where(eq(schema.messages.id, att.messageId)).get();
+  if (!msg) throw new Error('メッセージが見つかりません');
+  const data = await adapterFor(msg.channel as Channel).fetchAttachment({ ref: att.channelRef });
+  return { data, filename: att.filename, mime: att.mime };
 }
 
 /** 会話を依頼者に紐付けた後、その会話の未振分ファイルをまとめて移動 */
@@ -103,7 +162,7 @@ export async function assignConversationAttachments(conversationId: number, clie
   for (const m of msgs) {
     const atts = d.select().from(schema.attachments).where(eq(schema.attachments.messageId, m.id)).all();
     for (const a of atts) {
-      if (a.status === 'unassigned' || a.status === 'failed' || a.status === 'pending') {
+      if (a.status === 'unassigned' || a.status === 'failed' || a.status === 'pending' || (a.status === 'held' && attachmentPolicy() !== 'manual')) {
         await assignAttachment(a.id, clientId).catch((err) => logger.warn({ err, id: a.id }, '添付の移動に失敗'));
         n++;
       }
