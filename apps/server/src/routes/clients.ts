@@ -9,6 +9,8 @@ import { clientFolder } from '../services/attachments.js';
 import { listCaseTypes, upsertCaseType, createCase, updateCase, listCases, getCase, caseTimeline, addCaseNote, deleteCaseNote, generateCaseSummary, structureNote } from '../services/cases.js';
 import * as creditors from '../services/creditors.js';
 import { onedriveCandidates, chatworkCandidates, applyImport } from '../services/clientImport.js';
+import { clientFolderParents } from '../services/clientFolders.js';
+import { joinPath } from '../integrations/onedrive.js';
 
 export const clientRoutes = new Hono();
 
@@ -67,9 +69,17 @@ clientRoutes.get('/clients/:id/files', async (c) => {
 
 /** ルート直下のフォルダ一覧（既存フォルダから依頼者フォルダを選ぶ） */
 clientRoutes.get('/drive/folders', async (c) => {
-  const p = c.req.query('path') ?? storage().clientRoot();
-  const items = await storage().list(p);
-  return c.json({ path: p, items });
+  const root = storage().clientRoot();
+  const p = c.req.query('path');
+  if (p) return c.json({ path: p, items: await storage().list(p) });
+  // 区分フォルダ運用なら各区分の中身をまとめて返す（name は「区分/フォルダ名」）
+  const parents = clientFolderParents();
+  const items: { name: string; path: string; isFolder: boolean }[] = [];
+  for (const parent of parents) {
+    const list = await storage().list(parent ? joinPath(root, parent) : root).catch(() => []);
+    for (const i of list) items.push({ name: parent ? `${parent}/${i.name}` : i.name, path: i.path, isFolder: i.isFolder });
+  }
+  return c.json({ path: root, items });
 });
 
 // ---- 依頼者の一括登録 ----

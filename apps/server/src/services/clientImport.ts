@@ -4,6 +4,9 @@ import { db, schema } from '../db/index.js';
 import { storage } from '../integrations/storage.js';
 import * as cw from '../channels/chatwork.js';
 import { isConfigured } from '../config.js';
+import { joinPath } from '../integrations/onedrive.js';
+import { clientFolderParents, statusFolderMap } from './clientFolders.js';
+import { CASE_STATUS_LABEL, type CaseStatus } from '@lcm/shared';
 
 export interface ImportCandidate {
   source: 'onedrive' | 'chatwork';
@@ -28,14 +31,22 @@ export function guessNameFromFolder(folder: string): string {
 
 export async function onedriveCandidates(): Promise<ImportCandidate[]> {
   const root = storage().clientRoot();
-  const items = await storage().list(root);
   const clients = db().select().from(schema.clients).all();
   const out: ImportCandidate[] = [];
-  for (const i of items) {
-    if (!i.isFolder || SKIP_FOLDERS.test(i.name)) continue;
-    const name = guessNameFromFolder(i.name);
-    const existing = clients.find((c) => c.onedriveFolderPath === i.name || c.name.replace(/[\s　]/g, '') === name.replace(/[\s　]/g, ''));
-    out.push({ source: 'onedrive', name, folderPath: i.name, existingClientId: existing?.id ?? null, note: i.modifiedAt ? `更新 ${i.modifiedAt.slice(0, 10)}` : undefined });
+  const parents = clientFolderParents();
+  const statusByParent = new Map<string, string>();
+  for (const [status, folder] of Object.entries(statusFolderMap())) if (folder) statusByParent.set(folder, CASE_STATUS_LABEL[status as CaseStatus]);
+  for (const parent of parents) {
+    const items = await storage().list(parent ? joinPath(root, parent) : root).catch(() => []);
+    for (const i of items) {
+      if (!i.isFolder || SKIP_FOLDERS.test(i.name)) continue;
+      if (!parent && parents.length === 1 && [...statusByParent.keys()].includes(i.name)) continue;
+      const name = guessNameFromFolder(i.name);
+      const folderPath = parent ? `${parent}/${i.name}` : i.name;
+      const existing = clients.find((c) => c.onedriveFolderPath === folderPath || c.onedriveFolderPath === i.name || c.name.replace(/[\s　]/g, '') === name.replace(/[\s　]/g, ''));
+      const label = statusByParent.get(parent) ?? (parent || null);
+      out.push({ source: 'onedrive', name, folderPath, existingClientId: existing?.id ?? null, note: [label, i.modifiedAt ? `更新 ${i.modifiedAt.slice(0, 10)}` : null].filter(Boolean).join(' / ') || undefined });
+    }
   }
   return out.sort((a, b) => a.name.localeCompare(b.name, 'ja'));
 }

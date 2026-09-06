@@ -8,10 +8,11 @@ import { getSetting } from './settings.js';
 import { upsertAlert, resolveAlertsByKeyPrefix } from './alerts.js';
 import { yyyymmdd, CHANNEL_LABEL, type Channel } from '@lcm/shared';
 import { logger } from '../logger.js';
+import { defaultClientFolderRel } from './clientFolders.js';
 
-export function clientFolder(client: { name: string; onedriveFolderPath: string | null }): string {
+export function clientFolder(client: { id?: number; name: string; onedriveFolderPath: string | null }): string {
   const root = storage().clientRoot();
-  const rel = client.onedriveFolderPath && client.onedriveFolderPath.trim() ? client.onedriveFolderPath : client.name;
+  const rel = client.onedriveFolderPath && client.onedriveFolderPath.trim() ? client.onedriveFolderPath : defaultClientFolderRel(client);
   if (rel.startsWith('/')) return rel; // 絶対パス指定
   return joinPath(root, rel);
 }

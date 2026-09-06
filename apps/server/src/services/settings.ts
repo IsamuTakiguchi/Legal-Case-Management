@@ -32,6 +32,10 @@ http://www.noboriohji.com/access/`,
   web_meeting_provider: 'auto',
   office_location: '登大路総合法律事務所（奈良市登大路町5番地 修徳ビル1階）',
   holidays: '',
+  /** 依頼者フォルダの区分レイアウト（JSON: {consultation:'0.相談', active:'1.進行事件', ...}）。空ならルート直下 */
+  client_status_folders: '',
+  /** 区分に対応しないが依頼者フォルダを含むフォルダ（改行区切り。例: 4.その他（顧問等）） */
+  client_extra_folders: '',
   /** Google でログインできるメールアドレス（カンマ／改行区切り）。空なら「Google に接続」したアカウント */
   login_google_emails: '',
   backup_folder: '_システム/バックアップ',

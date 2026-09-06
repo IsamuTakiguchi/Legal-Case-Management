@@ -17,6 +17,7 @@ import { isGoogleConnected } from '../integrations/google.js';
 import { getSettingInt } from '../services/settings.js';
 import { refreshLineTokenIfNeeded } from '../services/lineSetup.js';
 import { runBackup } from '../services/backup.js';
+import { resolveAllClientFolders } from '../services/clientFolders.js';
 
 export interface JobDef {
   name: string;
@@ -60,7 +61,7 @@ export const JOBS: JobDef[] = [
   { name: 'notifyAlerts', label: 'アラート通知', cron: '15,45 * * * *', run: async () => ({ notified: await flushAlertNotifications() }), enabled: () => isConfigured('chatwork') },
   { name: 'chatworkTasks', label: 'Chatwork タスク同期', cron: '25 * * * *', run: importChatworkTasks, enabled: () => isConfigured('chatwork') },
   { name: 'morningDigest', label: '朝のダイジェスト', cron: `0 ${getSettingInt('morning_digest_hour', 8) - 9 < 0 ? getSettingInt('morning_digest_hour', 8) + 15 : getSettingInt('morning_digest_hour', 8) - 9} * * *`, run: morningDigest, enabled: () => isConfigured('chatwork') },
-  { name: 'formsIndex', label: '書式の索引化', cron: '30 17 * * *', run: () => indexForms(), enabled: () => true },
+  { name: 'formsIndex', label: '書式の索引化', cron: '30 17 * * *', run: async () => { const r = await resolveAllClientFolders().catch(() => null); const f = await indexForms(); return { folders: r, forms: f }; }, enabled: () => true },
   { name: 'caseSummary', label: '事件サマリーの週次更新', cron: '0 20 * * 0', run: async () => { let n = 0; for (const c of casesNeedingSummary(7)) { await generateCaseSummary(c.id); n++; } return { updated: n }; }, enabled: () => isConfigured('anthropic') },
   { name: 'lineToken', label: 'LINE トークンの自動更新', cron: '15 18 * * *', run: refreshLineTokenIfNeeded, enabled: () => isConfigured('line') },
   { name: 'backup', label: 'バックアップ（OneDrive に世代保存）', cron: '0 18 * * *', run: runBackup, enabled: () => true },

@@ -64,6 +64,46 @@ describe('事件の進捗区分', () => {
   });
 });
 
+describe('依頼者フォルダの区分レイアウト', () => {
+  it('区分フォルダを推定し、依頼者フォルダを区分付きに解決する', async () => {
+    const { guessStatusFolders, saveStatusFolderMap, resolveAllClientFolders, defaultClientFolderRel, clientFolderParents, clientEffectiveStatus } = await import('../services/clientFolders.js');
+    const { clientFolder } = await import('../services/attachments.js');
+    const g = guessStatusFolders(['0.相談', '1.進行事件', '2.残務処理', '3.終了事件', '4.その他（顧問等）']);
+    expect(g.map).toEqual({ consultation: '0.相談', active: '1.進行事件', wrapup: '2.残務処理', closed: '3.終了事件' });
+    expect(g.extras).toEqual(['4.その他（顧問等）']);
+
+    // ローカルストレージ上に区分フォルダと依頼者フォルダを用意
+    const root = path.join(tmp, 'clients');
+    for (const p of ['1.進行事件/山田 花子', '3.終了事件/田中 一郎', '4.その他（顧問等）/株式会社スズキ商事']) fs.mkdirSync(path.join(root, p), { recursive: true });
+    saveStatusFolderMap(g.map, g.extras);
+    expect(clientFolderParents()).toEqual(['0.相談', '1.進行事件', '2.残務処理', '3.終了事件', '4.その他（顧問等）']);
+
+    const yamada = db().insert(schema.clients).values({ name: '山田花子' }).returning().get();
+    const tanaka = db().insert(schema.clients).values({ name: '田中 一郎', onedriveFolderPath: '田中 一郎' }).returning().get();
+    const suzuki = db().insert(schema.clients).values({ name: '株式会社スズキ商事' }).returning().get();
+    const nobody = db().insert(schema.clients).values({ name: '存在しない' }).returning().get();
+    const r = await resolveAllClientFolders();
+    expect(r.updated).toBe(3);
+    expect(r.missing).toEqual(['存在しない']);
+    const get = (id: number) => db().select().from(schema.clients).where(eq(schema.clients.id, id)).get()!;
+    expect(get(yamada.id).onedriveFolderPath).toBe('1.進行事件/山田 花子');
+    expect(get(tanaka.id).onedriveFolderPath).toBe('3.終了事件/田中 一郎');
+    expect(get(suzuki.id).onedriveFolderPath).toBe('4.その他（顧問等）/株式会社スズキ商事');
+    expect(clientFolder(get(yamada.id))).toBe('/1.進行事件/山田 花子');
+
+    // 未解決の依頼者は実効区分のフォルダに新規作成される（事件なし → 相談）
+    expect(clientEffectiveStatus(nobody.id)).toBe('consultation');
+    expect(defaultClientFolderRel({ id: nobody.id, name: '存在しない' })).toBe('0.相談/存在しない');
+    db().insert(schema.cases).values({ clientId: nobody.id, title: 'x', status: 'active' }).run();
+    expect(defaultClientFolderRel({ id: nobody.id, name: '存在しない' })).toBe('1.進行事件/存在しない');
+
+    saveStatusFolderMap({}, []);
+    expect(clientFolderParents()).toEqual(['']);
+    db().delete(schema.cases).where(eq(schema.cases.clientId, nobody.id)).run();
+    db().delete(schema.clients).where(inArray(schema.clients.id, [yamada.id, tanaka.id, suzuki.id, nobody.id])).run();
+  });
+});
+
 describe('Google ログインの許可アドレス', () => {
   it('設定が空なら接続アカウント、設定があればその一覧（小文字化・区切り対応）', () => {
     setSetting('login_google_emails', '');

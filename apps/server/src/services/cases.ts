@@ -4,6 +4,8 @@ import { db, schema } from '../db/index.js';
 import { generateStructured, generateText } from '../integrations/anthropic.js';
 import { formatJaDateTime, type CaseInput, type CaseNoteInput, WAITING_FOR, CASE_NOTE_KIND_LABEL, type CaseNoteKind, OPEN_CASE_STATUSES } from '@lcm/shared';
 import { createTask } from './tasks.js';
+import { syncClientFolderWithStatus } from './clientFolders.js';
+import { logger } from '../logger.js';
 
 export type CaseRow = typeof schema.cases.$inferSelect;
 
@@ -56,6 +58,12 @@ export function updateCase(id: number, patch: Partial<CaseInput & { caseType: st
       .run();
   }
   db().update(schema.cases).set(set).where(eq(schema.cases.id, id)).run();
+  if (patch.status !== undefined && patch.status !== cur.status) {
+    // 区分フォルダ運用なら、依頼者フォルダを新しい区分へ移動（非同期・失敗してもログのみ）
+    setImmediate(() => {
+      syncClientFolderWithStatus(cur.clientId, id).catch((err) => logger.warn({ err, caseId: id }, '依頼者フォルダの移動に失敗'));
+    });
+  }
   return db().select().from(schema.cases).where(eq(schema.cases.id, id)).get()!;
 }
 
