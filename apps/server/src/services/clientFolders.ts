@@ -5,7 +5,7 @@ import { isMsConnected, moveItem, getItemByPath, joinPath } from '../integration
 import { getSetting, setSetting } from './settings.js';
 import { logger } from '../logger.js';
 import { CASE_STATUSES, CASE_STATUS_LABEL, type CaseStatus } from '@lcm/shared';
-import { parseFolderName, detectFolderNameFormat } from './clientImport.js';
+import { parseFolderName, detectFolderNameFormat, isTightKanaFormat } from './clientImport.js';
 
 /**
  * 依頼者フォルダの区分レイアウト。
@@ -148,6 +148,15 @@ export async function resolveAllClientFolders(): Promise<{ scanned: number; upda
   if (!getSetting('client_folder_name_format')) {
     const fmt = detectFolderNameFormat(allNames);
     if (fmt) setSetting('client_folder_name_format', fmt);
+  }
+  // 形式が確定したら、ひらがな始まりの氏名（ひめみこ 等）も先頭 1 文字をかなとして照合し直す
+  if (isTightKanaFormat()) {
+    byBareName.clear();
+    for (const [, rel] of index) {
+      const folderName = rel.split('/').pop() ?? rel;
+      const bare = parseFolderName(folderName, { tightKana: true }).name.replace(/[\s　]/g, '');
+      if (bare && !byBareName.has(bare)) byBareName.set(bare, rel);
+    }
   }
   let updated = 0;
   const missing: string[] = [];

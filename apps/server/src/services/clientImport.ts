@@ -6,6 +6,7 @@ import * as cw from '../channels/chatwork.js';
 import { isConfigured } from '../config.js';
 import { joinPath } from '../integrations/onedrive.js';
 import { clientFolderParents, statusFolderMap } from './clientFolders.js';
+import { getSetting } from './settings.js';
 import { CASE_STATUS_LABEL, type CaseStatus } from '@lcm/shared';
 
 export interface ImportCandidate {
@@ -52,6 +53,11 @@ const SKIP_FOLDERS = /^(_|\.|書式|テンプレ|事務所|その他|旧|過去|
 const KANA_PREFIX_SEP = /^([ぁ-んァ-ヶ]{1,3})[\s　_＿\-－.．]+(?=\S)/;
 const KANA_PREFIX_TIGHT = /^([ぁ-ん])(?=[^ぁ-ん\s　])/;
 
+/** 設定済みのフォルダ名形式が「かな＋氏名（区切りなし）」か */
+export function isTightKanaFormat(): boolean {
+  return getSetting('client_folder_name_format').trim().startsWith('{kana}{name}');
+}
+
 export interface ParsedFolderName {
   name: string;
   kanaPrefix: string | null;
@@ -59,9 +65,17 @@ export interface ParsedFolderName {
   caseTitle: string | null;
 }
 
-export function parseFolderName(folder: string): ParsedFolderName {
+/**
+ * @param opts.tightKana 事務所の形式（ひらがな 1 文字＋氏名、区切りなし）が確定している場合 true。
+ *   氏名がひらがなで始まる「ひひめみこ」のような名前でも先頭 1 文字をかなとして扱う
+ */
+export function parseFolderName(folder: string, opts: { tightKana?: boolean } = {}): ParsedFolderName {
   const trimmed = folder.trim();
-  const m = trimmed.match(KANA_PREFIX_SEP) ?? trimmed.match(KANA_PREFIX_TIGHT);
+  let m: RegExpMatchArray | null = trimmed.match(KANA_PREFIX_SEP) ?? trimmed.match(KANA_PREFIX_TIGHT);
+  // 「ひひめみこ　成年後見セミナー」: 先頭がひらがなで、後ろに空白区切りの事件名があれば先頭 1 文字をかなとみなす
+  if (!m && /^[ぁ-ん]\S+[\s　]+\S/.test(trimmed)) m = [trimmed[0], trimmed[0]] as unknown as RegExpMatchArray;
+  // 形式が確定していれば、先頭がひらがななら常に 1 文字をかなとみなす
+  if (!m && opts.tightKana && /^[ぁ-ん]\S/.test(trimmed)) m = [trimmed[0], trimmed[0]] as unknown as RegExpMatchArray;
   if (m && trimmed.slice(m[0].length).trim()) {
     const rest = trimmed.slice(m[0].length).trim();
     // かな付きの形では、最初の空白より後ろは事件名とみなす
@@ -122,12 +136,13 @@ export async function onedriveCandidates(): Promise<ImportCandidate[]> {
   const parents = clientFolderParents();
   const statusByParent = new Map<string, CaseStatus>();
   for (const [status, folder] of Object.entries(statusFolderMap())) if (folder) statusByParent.set(folder, status as CaseStatus);
+  const tightKana = isTightKanaFormat();
   for (const parent of parents) {
     const items = await storage().list(parent ? joinPath(root, parent) : root).catch(() => []);
     for (const i of items) {
       if (!i.isFolder || SKIP_FOLDERS.test(i.name)) continue;
       if (!parent && parents.length === 1 && [...statusByParent.keys()].includes(i.name)) continue;
-      const { name, kanaPrefix, caseTitle: parsedTitle } = parseFolderName(i.name);
+      const { name, kanaPrefix, caseTitle: parsedTitle } = parseFolderName(i.name, { tightKana });
       const folderPath = parent ? `${parent}/${i.name}` : i.name;
       const existing = clients.find((c) => c.onedriveFolderPath === folderPath || c.onedriveFolderPath === i.name || c.name.replace(/[\s　]/g, '') === name.replace(/[\s　]/g, ''));
       const status = statusByParent.get(parent) ?? null;

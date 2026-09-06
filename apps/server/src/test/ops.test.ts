@@ -121,6 +121,11 @@ describe('一括登録と削除', () => {
     expect(parseFolderName('か株式会社カトウ　破産申立')).toEqual({ name: '株式会社カトウ', kanaPrefix: 'か', caseTitle: '破産申立' });
     expect(parseFolderName('や山田花子 離婚調停')).toEqual({ name: '山田花子', kanaPrefix: 'や', caseTitle: '離婚調停' });
     expect(guessCaseType('損害賠償請求（交通事故）')).toBe('traffic');
+    // ひらがな始まりの氏名: 事件名付きなら空白で判定、形式確定後は先頭 1 文字を常にかなとみなす
+    expect(parseFolderName('ひひめみこ　成年後見セミナー')).toEqual({ name: 'ひめみこ', kanaPrefix: 'ひ', caseTitle: '成年後見セミナー' });
+    expect(parseFolderName('ひひめみこ')).toEqual({ name: 'ひひめみこ', kanaPrefix: null, caseTitle: null });
+    expect(parseFolderName('ひひめみこ', { tightKana: true })).toEqual({ name: 'ひめみこ', kanaPrefix: 'ひ', caseTitle: null });
+    expect(parseFolderName('やまだ', { tightKana: true })).toEqual({ name: 'まだ', kanaPrefix: 'や', caseTitle: null });
     expect(detectFolderNameFormat(['や 山田太郎', 'さ 佐藤花子', 'た_田中', '株式会社ABC'])).toBe('{kana} {name}');
     expect(detectFolderNameFormat(['し塩見海斗　損害賠償請求（交通事故）', 'か株式会社カトウ　破産申立', 'や山田花子'])).toBe('{kana}{name}　{case}');
     expect(detectFolderNameFormat(['山田太郎', '佐藤花子'])).toBe('');
