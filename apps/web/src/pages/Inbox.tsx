@@ -21,7 +21,7 @@ interface ConversationListItem {
 export default function Inbox() {
   const [params, setParams] = useSearchParams();
   const [q, setQ] = useState(params.get('q') ?? '');
-  const filter = { channel: params.get('channel') ?? '', needsReply: params.get('needsReply') ?? '', unlinked: params.get('unlinked') ?? '', q: params.get('q') ?? '', archived: params.get('archived') ?? '' };
+  const filter = { channel: params.get('channel') ?? '', needsReply: params.get('needsReply') ?? '', unlinked: params.get('unlinked') ?? '', q: params.get('q') ?? '', archived: params.get('archived') ?? '', outbound: params.get('outbound') ?? '' };
   const query = useQuery({
     queryKey: ['conversations', filter],
     queryFn: () => api.get<ConversationListItem[]>(`/conversations?${new URLSearchParams(Object.fromEntries(Object.entries(filter).filter(([, v]) => v))).toString()}`),
@@ -52,6 +52,9 @@ export default function Inbox() {
           </label>
           <label className="flex items-center gap-1 text-sm">
             <input type="checkbox" checked={filter.archived === '1'} onChange={(e) => set('archived', e.target.checked ? '1' : '')} /> アーカイブ
+          </label>
+          <label className="flex items-center gap-1 text-sm" title="相手からの受信が無く、自分が送っただけの会話も一覧に出します">
+            <input type="checkbox" checked={filter.outbound === '1'} onChange={(e) => set('outbound', e.target.checked ? '1' : '')} /> 送信のみの会話も表示
           </label>
           <form
             onSubmit={(e) => {

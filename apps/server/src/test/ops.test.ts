@@ -180,6 +180,19 @@ describe('Gmail 送信予約', () => {
   });
 });
 
+describe('受信箱の表示範囲', () => {
+  it('inboundOnly なら自分の送信だけの会話を除く', async () => {
+    const { listConversations } = await import('../services/inbox.js');
+    const now = new Date().toISOString();
+    const outOnly = db().insert(schema.conversations).values({ channel: 'gmail', externalThreadId: 'out-only', subject: '送信のみ', lastMessageAt: now, lastOutboundAt: now }).returning().get();
+    const both = db().insert(schema.conversations).values({ channel: 'gmail', externalThreadId: 'both', subject: '往復', lastMessageAt: now, lastInboundAt: now, lastOutboundAt: now }).returning().get();
+    expect(listConversations({ channel: 'gmail', inboundOnly: true }).map((c) => c.id)).not.toContain(outOnly.id);
+    expect(listConversations({ channel: 'gmail', inboundOnly: true }).map((c) => c.id)).toContain(both.id);
+    expect(listConversations({ channel: 'gmail' }).map((c) => c.id)).toContain(outOnly.id);
+    db().delete(schema.conversations).where(inArray(schema.conversations.id, [outOnly.id, both.id])).run();
+  });
+});
+
 describe('Gmail の取込範囲', () => {
   it('ラベルからタブを判定し、「メインだけ」なら一覧から除外する', async () => {
     const { gmailCategory } = await import('../channels/gmail.js');
