@@ -15,7 +15,7 @@ interface ConversationListItem {
   lastMessageAt: string | null;
   unread: number;
   needsReply: boolean;
-  lastMessage: { body: string; direction: string; sentAt: string } | null;
+  lastMessage: { body: string; truncated?: boolean; direction: string; sentAt: string } | null;
 }
 
 export default function Inbox() {
@@ -153,16 +153,41 @@ export default function Inbox() {
                       {c.subject && <span className="min-w-0 truncate text-xs text-slate-500">{c.subject}</span>}
                     </div>
                   )}
-                  <div className="truncate text-sm text-slate-600">
-                    {c.lastMessage?.direction === 'out' && <span className="text-slate-400">自分: </span>}
-                    {c.lastMessage?.body}
-                  </div>
+                  {c.lastMessage && <MessagePreview body={c.lastMessage.body} truncated={!!c.lastMessage.truncated} mine={c.lastMessage.direction === 'out'} />}
                 </div>
               </Link>
             </li>
           ))}
         </ul>
       </div>
+    </div>
+  );
+}
+
+/** 最新メッセージの本文。短ければ全文、長文（目安 300 字 or 8 行超）は 4 行で折りたたみ「続きを表示」で開く */
+function MessagePreview({ body, truncated, mine }: { body: string; truncated: boolean; mine: boolean }) {
+  const [open, setOpen] = useState(false);
+  const long = body.length > 300 || body.split('\n').length > 8;
+  return (
+    <div className="text-sm text-slate-600">
+      <div className={`whitespace-pre-wrap break-words ${long && !open ? 'line-clamp-4' : ''}`}>
+        {mine && <span className="text-slate-400">自分: </span>}
+        {body}
+        {open && truncated && <span className="text-slate-400">…（続きは会話を開いて確認）</span>}
+      </div>
+      {long && (
+        <button
+          type="button"
+          className="mt-0.5 text-xs text-blue-700 hover:underline"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setOpen(!open);
+          }}
+        >
+          {open ? '折りたたむ' : '続きを表示'}
+        </button>
+      )}
     </div>
   );
 }
