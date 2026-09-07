@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import { ClientPicker } from '../lib/ClientPicker';
 import { fmtDate, fmtRelative, toLocalInput, fromLocalInput } from '../lib/format';
 import { TASK_STATUSES, TASK_STATUS_LABEL, type TaskStatus } from '@lcm/shared';
+import { useSort, readingKey, type SortOption } from '../lib/sort';
 
 interface Task {
   id: number;
@@ -22,6 +23,16 @@ interface Task {
   updatedAt: string;
 }
 
+/** 並べ替え。既定は「期限が早い順」（返信待ちはフォロー期限、対応中は期日。未設定は末尾） */
+const deadlineOf = (t: Task) => (t.status === 'waiting_client' || t.status === 'waiting_other' ? (t.followUpAt ?? t.dueAt) : (t.dueAt ?? t.followUpAt)) ?? null;
+const TASK_SORTS: SortOption<Task>[] = [
+  { key: 'deadline', label: '期限が早い順', value: deadlineOf },
+  { key: 'waiting', label: '待ちが長い順', value: (t) => t.waitingSince ?? null },
+  { key: 'client', label: '依頼者のあいうえお順', value: (t) => (t.clientName ? readingKey(null, t.clientName) : null) },
+  { key: 'title', label: 'タスク名', value: (t) => t.title },
+  { key: 'updated', label: '更新が新しい順', value: (t) => t.updatedAt ?? null, desc: true },
+];
+
 export default function Tasks() {
   const qc = useQueryClient();
   const [status, setStatus] = useState<string>('active');
@@ -29,6 +40,8 @@ export default function Tasks() {
   const [newStatus, setNewStatus] = useState<TaskStatus>('open');
   const [sync, setSync] = useState(false);
   const list = useQuery({ queryKey: ['tasks', status], queryFn: () => api.get<Task[]>(`/tasks?status=${status}`), refetchInterval: 60_000 });
+  const sort = useSort('tasks', TASK_SORTS, 'deadline');
+  const rows = sort.apply(list.data ?? []);
   const [clientId, setClientId] = useState('');
   const refresh = () => qc.invalidateQueries({ queryKey: ['tasks'] });
   const create = useMutation({
@@ -51,6 +64,13 @@ export default function Tasks() {
           {TASK_STATUSES.map((s) => (
             <option key={s} value={s}>
               {TASK_STATUS_LABEL[s]}
+            </option>
+          ))}
+        </select>
+        <select className="input w-auto" value={sort.key} onChange={(e) => sort.setKey(e.target.value)} aria-label="並べ替え">
+          {TASK_SORTS.map((o) => (
+            <option key={o.key} value={o.key}>
+              並べ替え: {o.label}
             </option>
           ))}
         </select>
@@ -92,7 +112,7 @@ export default function Tasks() {
             </tr>
           </thead>
           <tbody>
-            {list.data?.map((t) => {
+            {rows.map((t) => {
               const over = t.followUpAt && new Date(t.followUpAt).getTime() < now && t.status !== 'done' && t.status !== 'open';
               return (
                 <tr key={t.id} className={`border-t border-slate-100 ${over ? 'bg-orange-50' : ''}`}>
