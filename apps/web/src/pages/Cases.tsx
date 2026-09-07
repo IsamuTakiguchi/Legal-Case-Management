@@ -45,11 +45,21 @@ export function CaseStatusBadge({ status }: { status: string }) {
 export default function Cases() {
   const [status, setStatus] = useState<string>('active');
   const [creating, setCreating] = useState(false);
+  const [q, setQ] = useState('');
   const all = useQuery({ queryKey: ['cases', 'all'], queryFn: () => api.get<CaseRow[]>('/cases') });
   const sort = useSort('cases', CASE_SORTS, 'client');
-  const rows = sort.apply((all.data ?? []).filter((c) => !status || c.status === status));
+  // 依頼者名・かな・事件名・事件番号・裁判所・類型をまとめてテキスト検索（カタカナはひらがなに寄せる）
+  const hira = (t: string) => t.replace(/[ァ-ヶ]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0x60)).replace(/[\s　]/g, '').toLowerCase();
+  const terms = hira(q).split(/[,、]/).filter(Boolean);
+  const matches = (c: CaseRow) => {
+    if (!terms.length) return true;
+    const hay = hira([c.clientName, c.clientKana ?? '', c.title, c.caseNumber ?? '', c.courtName ?? '', c.caseTypeLabel, c.stage ?? ''].join(' '));
+    return terms.every((t) => hay.includes(t));
+  };
+  const searched = (all.data ?? []).filter(matches);
+  const rows = sort.apply(searched.filter((c) => !status || c.status === status));
   const counts: Record<string, number> = {};
-  for (const c of all.data ?? []) counts[c.status] = (counts[c.status] ?? 0) + 1;
+  for (const c of searched) counts[c.status] = (counts[c.status] ?? 0) + 1;
   const H = (label: string, key: string) => <SortHeader label={label} sortKey={key} current={sort.key} desc={sort.desc} onClick={sort.setKey} />;
   return (
     <div className="space-y-4">
@@ -58,6 +68,7 @@ export default function Cases() {
         <button className="btn btn-primary ml-auto" onClick={() => setCreating(!creating)}>
           ＋ 新規事件
         </button>
+        <input className="input w-full md:w-64" placeholder="依頼者名・かな・事件名・事件番号で検索" value={q} onChange={(e) => setQ(e.target.value)} aria-label="事件を検索" />
         <select className="input w-auto" value={sort.key} onChange={(e) => sort.setKey(e.target.value)} aria-label="並べ替え">
           {CASE_SORTS.map((o) => (
             <option key={o.key} value={o.key}>
@@ -74,8 +85,9 @@ export default function Cases() {
           </button>
         ))}
         <button type="button" className={`btn btn-sm ${status === '' ? 'btn-primary' : ''}`} onClick={() => setStatus('')}>
-          すべて <span className={status === '' ? 'opacity-80' : 'text-slate-400'}>{all.data?.length ?? 0}</span>
+          すべて <span className={status === '' ? 'opacity-80' : 'text-slate-400'}>{searched.length}</span>
         </button>
+        {q && <span className="self-center text-xs text-slate-500">「{q}」で検索中</span>}
       </div>
       <div className="card p-0">
         <table className="w-full text-sm">
@@ -119,7 +131,7 @@ export default function Cases() {
             {all.data && rows.length === 0 && (
               <tr>
                 <td className="px-4 py-4 text-slate-500" colSpan={7}>
-                  {status ? `「${CASE_STATUS_LABEL[status as CaseStatus]}」の事件はありません。` : '事件がありません。「＋ 新規事件」から追加してください。'}
+                  {q ? `「${q}」に一致する事件はありません${status ? `（${CASE_STATUS_LABEL[status as CaseStatus]}の中）` : ''}。` : status ? `「${CASE_STATUS_LABEL[status as CaseStatus]}」の事件はありません。` : '事件がありません。「＋ 新規事件」から追加してください。'}
                 </td>
               </tr>
             )}
