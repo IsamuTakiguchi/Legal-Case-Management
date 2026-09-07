@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
+import { ClientPicker } from '../lib/ClientPicker';
 import { channelBadge, channelLabel, fmtDateTime, fmtBytes, fromLocalInput, toLocalInput, todayLocalInput } from '../lib/format';
 import { SCHEDULING_KINDS, EVENT_KIND_LABEL, type EventKind } from '@lcm/shared';
 
@@ -64,7 +65,6 @@ export default function Conversation() {
   const conv = useQuery({ queryKey: ['conversation', id], queryFn: () => api.get<Conv>(`/conversations/${id}`), refetchInterval: 30_000 });
   const templates = useQuery({ queryKey: ['templates'], queryFn: () => api.get<Template[]>('/templates') });
   const sessions = useQuery({ queryKey: ['scheduling', id], queryFn: () => api.get<Session[]>(`/scheduling?conversationId=${id}`) });
-  const clients = useQuery({ queryKey: ['clients'], queryFn: () => api.get<{ id: number; name: string }[]>('/clients') });
 
   const [text, setText] = useState('');
   const [instruction, setInstruction] = useState('');
@@ -188,25 +188,7 @@ export default function Conversation() {
           <div className="card border-orange-200 bg-orange-50">
             <div className="mb-2 text-sm font-semibold text-orange-800">この連絡先はまだ依頼者に紐付いていません</div>
             <div className="flex flex-wrap items-center gap-2">
-              <select className="input w-64" value={linkClientId} onChange={(e) => setLinkClientId(e.target.value)}>
-                <option value="">依頼者を選択…</option>
-                {c.suggestions.length > 0 && (
-                  <optgroup label="候補">
-                    {c.suggestions.map((s) => (
-                      <option key={`s${s.id}`} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                <optgroup label="すべて">
-                  {clients.data?.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </optgroup>
-              </select>
+              <ClientPicker value={linkClientId} onChange={setLinkClientId} suggestions={c.suggestions} />
               <button className="btn btn-primary btn-sm" disabled={!linkClientId} onClick={() => link.mutate(Number(linkClientId))}>
                 紐付ける
               </button>

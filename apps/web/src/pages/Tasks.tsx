@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
+import { ClientPicker } from '../lib/ClientPicker';
 import { fmtDate, fmtRelative, toLocalInput, fromLocalInput } from '../lib/format';
 import { TASK_STATUSES, TASK_STATUS_LABEL, type TaskStatus } from '@lcm/shared';
 
@@ -28,7 +29,6 @@ export default function Tasks() {
   const [newStatus, setNewStatus] = useState<TaskStatus>('open');
   const [sync, setSync] = useState(false);
   const list = useQuery({ queryKey: ['tasks', status], queryFn: () => api.get<Task[]>(`/tasks?status=${status}`), refetchInterval: 60_000 });
-  const clients = useQuery({ queryKey: ['clients'], queryFn: () => api.get<{ id: number; name: string }[]>('/clients') });
   const [clientId, setClientId] = useState('');
   const refresh = () => qc.invalidateQueries({ queryKey: ['tasks'] });
   const create = useMutation({
@@ -67,14 +67,7 @@ export default function Tasks() {
         }}
       >
         <input className="input flex-1" placeholder="新しいタスク" value={title} onChange={(e) => setTitle(e.target.value)} required />
-        <select className="input w-auto" value={clientId} onChange={(e) => setClientId(e.target.value)}>
-          <option value="">依頼者なし</option>
-          {clients.data?.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </select>
+        <ClientPicker value={clientId} onChange={setClientId} emptyLabel="依頼者なし" selectClassName="w-48" />
         <select className="input w-auto" value={newStatus} onChange={(e) => setNewStatus(e.target.value as TaskStatus)}>
           {TASK_STATUSES.filter((s) => s !== 'done').map((s) => (
             <option key={s} value={s}>

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { EVENT_KINDS, EVENT_KIND_LABEL, type EventKind } from '@lcm/shared';
 import { api } from '../lib/api';
+import { ClientPicker } from '../lib/ClientPicker';
 import { toLocalInput, fromLocalInput } from '../lib/format';
 
 interface Ev {
@@ -376,7 +377,6 @@ function EventForm({ initial, defaultDay, onClose, onSaved, onError }: { initial
   const [location, setLocation] = useState(base.location ?? '');
   const [description, setDescription] = useState(base.description ?? '');
   const [tentative, setTentative] = useState(base.status === 'tentative');
-  const clients = useQuery({ queryKey: ['clients'], queryFn: () => api.get<{ id: number; name: string }[]>('/clients') });
   const cases = useQuery({ queryKey: ['cases', 'open'], queryFn: () => api.get<{ id: number; title: string; clientId: number; clientName: string }[]>('/cases?status=open') });
   const caseOptions = (cases.data ?? []).filter((c) => !clientId || c.clientId === Number(clientId));
 
@@ -452,21 +452,15 @@ function EventForm({ initial, defaultDay, onClose, onSaved, onError }: { initial
         </div>
         <div>
           <label className="label">依頼者</label>
-          <select
-            className="input"
+          <ClientPicker
             value={clientId}
-            onChange={(e) => {
-              setClientId(e.target.value);
+            onChange={(v) => {
+              setClientId(v);
               setCaseId('');
             }}
-          >
-            <option value="">（なし）</option>
-            {clients.data?.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+            emptyLabel="（なし）"
+            selectClassName="min-w-48 flex-1"
+          />
         </div>
         <div>
           <label className="label">事件</label>
@@ -560,21 +554,15 @@ function HoldForm({ defaultDay, onClose, onSaved, onError }: { defaultDay: strin
       <div className="grid gap-3 md:grid-cols-2">
         <div>
           <label className="label">依頼者</label>
-          <select
-            className="input"
+          <ClientPicker
             value={clientId}
-            onChange={(e) => {
-              setClientId(e.target.value);
+            onChange={(v) => {
+              setClientId(v);
               setCaseId('');
             }}
-          >
-            <option value="">（未登録の相手）</option>
-            {clients.data?.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+            emptyLabel="（未登録の相手）"
+            selectClassName="min-w-48 flex-1"
+          />
         </div>
         {clientId ? (
           <div>
