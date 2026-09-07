@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
+import { ClientPicker } from '../lib/ClientPicker';
 import { fmtDateTime, fmtRelative } from '../lib/format';
 import { CASE_STATUSES, CASE_STATUS_LABEL, type CaseStatus } from '@lcm/shared';
 import { useSort, readingKey, SortHeader, type SortOption } from '../lib/sort';
@@ -146,14 +147,9 @@ export default function Cases() {
 function NewCaseForm({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const nav = useNavigate();
-  const clients = useQuery({ queryKey: ['clients'], queryFn: () => api.get<{ id: number; name: string; kana: string | null }[]>('/clients') });
   const types = useQuery({ queryKey: ['case-types'], queryFn: () => api.get<{ key: string; label: string }[]>('/case-types') });
-  const [q, setQ] = useState('');
   const [form, setForm] = useState({ clientId: '', title: '', caseType: 'general_civil', status: 'active', courtName: '', caseNumber: '' });
   const [err, setErr] = useState('');
-  const filtered = (clients.data ?? [])
-    .filter((c) => !q || c.name.includes(q) || (c.kana ?? '').includes(q))
-    .sort((a, b) => readingKey(a.kana, a.name).localeCompare(readingKey(b.kana, b.name), 'ja'));
   const create = useMutation({
     mutationFn: () => api.post<{ id: number }>('/cases', { ...form, clientId: Number(form.clientId), courtName: form.courtName || null, caseNumber: form.caseNumber || null }),
     onSuccess: (r) => {
@@ -185,14 +181,7 @@ function NewCaseForm({ onClose }: { onClose: () => void }) {
       <div className="grid gap-3 md:grid-cols-2">
         <div>
           <label className="label">依頼者（登録済みから選ぶ）</label>
-          <input className="input mb-1" placeholder="名前・かなで絞り込み" value={q} onChange={(e) => setQ(e.target.value)} />
-          <select className="input" value={form.clientId} onChange={(e) => setForm({ ...form, clientId: e.target.value })} size={Math.min(6, Math.max(2, filtered.length))} required>
-            {filtered.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+          <ClientPicker value={form.clientId} onChange={(v) => setForm({ ...form, clientId: v })} emptyLabel="依頼者を選択…" selectClassName="min-w-48 flex-1" autoFocus />
           <div className="mt-1 text-xs text-slate-500">
             新しい依頼者の場合は{' '}
             <Link to="/clients" className="text-blue-700 hover:underline">
