@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
+import { ClientPicker, sortClients } from '../lib/ClientPicker';
 import { channelBadge, channelLabel, fmtDateTime, fmtBytes } from '../lib/format';
 
 interface Att {
@@ -33,6 +34,7 @@ export default function Files() {
   const retry = useMutation({ mutationFn: (id: number) => api.post(`/attachments/${id}/retry`), onSuccess: refresh });
   const [pick, setPick] = useState<Record<number, string>>({});
   const clientName = (id: number | null) => clients.data?.find((c) => c.id === id)?.name ?? null;
+  const clientsSorted = sortClients(clients.data ?? []);
   // 一括操作
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkClient, setBulkClient] = useState('');
@@ -98,14 +100,7 @@ export default function Files() {
                 </button>
               )}
               <span className="flex items-center gap-1">
-                <select className="input w-44 py-0.5 text-xs" value={bulkClient} onChange={(e) => setBulkClient(e.target.value)}>
-                  <option value="">依頼者を選んで保存…</option>
-                  {clients.data?.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
+                <ClientPicker value={bulkClient} onChange={setBulkClient} emptyLabel="依頼者を選んで保存…" selectClassName="w-44 py-0.5 text-xs" />
                 <button className="btn btn-sm" disabled={!bulkClient || bulk.isPending} onClick={() => bulk.mutate({ action: 'save', clientId: Number(bulkClient) })}>
                   保存
                 </button>
@@ -173,7 +168,7 @@ export default function Files() {
                       )}
                       <select className="input w-40 py-0.5 text-xs" value={pick[a.id] ?? ''} onChange={(e) => setPick({ ...pick, [a.id]: e.target.value })}>
                         <option value="">{a.status === 'held' && a.clientId ? '別の依頼者…' : '依頼者を選ぶ…'}</option>
-                        {clients.data?.map((c) => (
+                        {clientsSorted.map((c) => (
                           <option key={c.id} value={c.id}>
                             {c.name}
                           </option>

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
+import { ClientPicker } from '../lib/ClientPicker';
 import { fmtDateTime, fromLocalInput, todayLocalInput } from '../lib/format';
 import { ALERT_TYPE_LABEL, type AlertType } from '@lcm/shared';
 
@@ -17,7 +18,6 @@ interface Alert {
 export default function Alerts() {
   const qc = useQueryClient();
   const list = useQuery({ queryKey: ['alerts', 'all'], queryFn: () => api.get<Alert[]>('/alerts'), refetchInterval: 60_000 });
-  const clients = useQuery({ queryKey: ['clients'], queryFn: () => api.get<{ id: number; name: string }[]>('/clients') });
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['alerts'] });
     qc.invalidateQueries({ queryKey: ['dashboard'] });
@@ -50,8 +50,8 @@ export default function Alerts() {
                   </button>
                 </div>
                 <div className="mt-2">
-                  {type === 'unlinked_contact' && <LinkAction alert={a} clients={clients.data ?? []} onLink={(clientId) => link.mutate({ conversationId: Number(a.payload.conversationId), clientId })} />}
-                  {type === 'unassigned_file' && <LinkAction alert={a} clients={clients.data ?? []} label="このファイルの依頼者" onLink={(clientId) => assign.mutate({ attachmentId: Number(a.payload.attachmentId), clientId })} />}
+                  {type === 'unlinked_contact' && <LinkAction alert={a} onLink={(clientId) => link.mutate({ conversationId: Number(a.payload.conversationId), clientId })} />}
+                  {type === 'unassigned_file' && <LinkAction alert={a} label="このファイルの依頼者" onLink={(clientId) => assign.mutate({ attachmentId: Number(a.payload.attachmentId), clientId })} />}
                   {type === 'next_hearing_missing' && <NextHearing alert={a} onDone={refresh} />}
                   {(type === 'waiting_overdue' || type === 'reply_received' || type === 'scheduling_stale') && a.payload.conversationId ? (
                     <Link to={`/inbox/${a.payload.conversationId}`} className="btn btn-sm">
@@ -78,18 +78,11 @@ export default function Alerts() {
   );
 }
 
-function LinkAction({ alert, clients, onLink, label = '依頼者に紐付け' }: { alert: Alert; clients: { id: number; name: string }[]; onLink: (clientId: number) => void; label?: string }) {
+function LinkAction({ alert, onLink, label = '依頼者に紐付け' }: { alert: Alert; onLink: (clientId: number) => void; label?: string }) {
   const [id, setId] = useState('');
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <select className="input w-64" value={id} onChange={(e) => setId(e.target.value)}>
-        <option value="">{label}…</option>
-        {clients.map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.name}
-          </option>
-        ))}
-      </select>
+      <ClientPicker value={id} onChange={setId} emptyLabel={`${label}…`} />
       <button className="btn btn-primary btn-sm" disabled={!id} onClick={() => onLink(Number(id))}>
         紐付ける
       </button>
