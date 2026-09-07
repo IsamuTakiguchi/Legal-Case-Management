@@ -62,11 +62,15 @@ let rateLimitResetAt = 0;
 async function cw<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!isConfigured('chatwork')) throw new Error('CHATWORK_API_TOKEN が設定されていません');
   if (rateLimitResetAt > Date.now()) {
-    await new Promise((r) => setTimeout(r, rateLimitResetAt - Date.now()));
+    const wait = rateLimitResetAt - Date.now();
+    // 長い待ちは画面が固まる原因になるので、10 秒を超える場合は待たずにエラーにする（ジョブは次回に回る）
+    if (wait > 10_000) throw new Error(`Chatwork API のレート制限中です（あと ${Math.ceil(wait / 1000)} 秒）`);
+    await new Promise((r) => setTimeout(r, wait));
   }
   const res = await fetch(`${API}${path}`, {
     ...init,
     headers: { 'X-ChatWorkToken': env().CHATWORK_API_TOKEN!, ...((init.headers as Record<string, string>) ?? {}) },
+    signal: init.signal ?? AbortSignal.timeout(15_000),
   });
   const remaining = Number(res.headers.get('x-ratelimit-remaining') ?? '1');
   const reset = Number(res.headers.get('x-ratelimit-reset') ?? '0');

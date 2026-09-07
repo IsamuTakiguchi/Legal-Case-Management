@@ -496,7 +496,16 @@ function StaffSection() {
   const qc = useQueryClient();
   const list = useQuery({ queryKey: ['staff', 'all'], queryFn: () => api.get<{ id: number; name: string; kana: string | null; chatworkAccountId: number | null; note: string | null; active: boolean }[]>('/staff?all=1') });
   const [loadAccounts, setLoadAccounts] = useState(false);
-  const accounts = useQuery({ queryKey: ['staff-chatwork-accounts'], queryFn: () => api.get<{ accountId: number; name: string; rooms: string[] }[]>('/staff/chatwork-accounts'), enabled: loadAccounts, staleTime: 5 * 60_000 });
+  const [refreshKey, setRefreshKey] = useState(0);
+  const accountsQ = useQuery({
+    queryKey: ['staff-chatwork-accounts', refreshKey],
+    queryFn: () => api.get<{ accounts: { accountId: number; name: string; rooms: string[]; source: string }[]; partial: boolean; error?: string }>(`/staff/chatwork-accounts${refreshKey ? '?refresh=1' : ''}`),
+    enabled: loadAccounts,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const accounts = { data: accountsQ.data?.accounts, isLoading: accountsQ.isLoading, isError: accountsQ.isError };
+  const [manualId, setManualId] = useState(false);
   const [form, setForm] = useState({ name: '', kana: '', chatworkAccountId: '' });
   const [msg, setMsg] = useState('');
   const refresh = () => {
@@ -581,26 +590,43 @@ function StaffSection() {
         </div>
         <div>
           <label className="label">Chatwork アカウント</label>
-          {loadAccounts ? (
+          {manualId ? (
+            <input type="number" className="input w-40" placeholder="アカウント ID" value={form.chatworkAccountId} onChange={(e) => setForm({ ...form, chatworkAccountId: e.target.value })} />
+          ) : loadAccounts ? (
             <select className="input w-64" value={form.chatworkAccountId} onChange={(e) => setForm({ ...form, chatworkAccountId: e.target.value })}>
-              <option value="">{accounts.isLoading ? '読み込み中…' : '選択…'}</option>
+              <option value="">{accounts.isLoading ? '読み込み中…' : accounts.data?.length ? '選択…' : '候補がありません'}</option>
               {accounts.data?.map((a) => (
                 <option key={a.accountId} value={a.accountId}>
-                  {a.name}（{a.rooms.slice(0, 2).join('・')}）
+                  {a.name}（{a.rooms.slice(0, 2).join('・') || `#${a.accountId}`}）
                 </option>
               ))}
             </select>
           ) : (
             <button type="button" className="btn" onClick={() => setLoadAccounts(true)}>
-              Chatwork の参加ルームから候補を読み込む
+              Chatwork から候補を読み込む
             </button>
           )}
+          <div className="mt-0.5 text-xs text-slate-400">
+            <button type="button" className="hover:underline" onClick={() => setManualId(!manualId)}>
+              {manualId ? '候補から選ぶ' : 'アカウント ID を直接入力'}
+            </button>
+            {loadAccounts && !manualId && (
+              <>
+                {' / '}
+                <button type="button" className="hover:underline" onClick={() => setRefreshKey((k) => k + 1)} disabled={accountsQ.isFetching}>
+                  {accountsQ.isFetching ? '読み込み中…' : '候補を更新'}
+                </button>
+              </>
+            )}
+          </div>
         </div>
         <button className="btn btn-primary" disabled={!form.name.trim() || create.isPending}>
           追加
         </button>
       </form>
-      {accounts.isError && <div className="mt-1 text-xs text-red-600">Chatwork からメンバーを取得できませんでした（Chatwork が未接続か、権限がありません）</div>}
+      {accounts.isError && <div className="mt-1 text-xs text-red-600">候補を取得できませんでした: {(accountsQ.error as Error)?.message ?? ''}。「アカウント ID を直接入力」でも登録できます</div>}
+      {accountsQ.data?.error && <div className="mt-1 text-xs text-orange-700">Chatwork API から取れなかったため、取込済みメッセージの送信者だけを候補にしています（{accountsQ.data.error}）</div>}
+      {accountsQ.data?.partial && !accountsQ.data.error && <div className="mt-1 text-xs text-slate-500">ルームが多いため、直近に動きのあったルームのメンバーだけを候補にしています。見つからない人は「アカウント ID を直接入力」で登録できます（Chatwork のプロフィール画面で確認できます）</div>}
       {msg && <div className="mt-2 text-xs text-red-600">{msg}</div>}
     </section>
   );

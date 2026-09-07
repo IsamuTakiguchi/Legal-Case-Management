@@ -163,7 +163,7 @@ clientRoutes.delete('/staff/:id', (c) => {
   return c.json({ ok: true });
 });
 /** Chatwork の参加ルームのメンバー一覧（事務局メンバー登録の候補） */
-clientRoutes.get('/staff/chatwork-accounts', async (c) => c.json(await listChatworkAccounts()));
+clientRoutes.get('/staff/chatwork-accounts', async (c) => c.json(await listChatworkAccounts({ refresh: c.req.query('refresh') === '1' })));
 /** Chatwork の参加ルーム一覧（事件専用ルームの指定用） */
 clientRoutes.get('/chatwork/rooms', async (c) => {
   if (!isConfigured('chatwork')) return c.json([]);
