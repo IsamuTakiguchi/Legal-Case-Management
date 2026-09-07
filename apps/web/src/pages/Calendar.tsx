@@ -20,6 +20,9 @@ interface Ev {
   clientName: string | null;
   caseTitle: string | null;
   local: boolean;
+  /** 日程調整中の仮押さえなら、そのセッション ID と候補数 */
+  sessionId: number | null;
+  sessionCandidates: number;
 }
 
 interface EvInput {
@@ -104,6 +107,7 @@ export default function Calendar() {
   const [anchor, setAnchor] = useState(todayKey());
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [editing, setEditing] = useState<Ev | 'new' | null>(null);
+  const [holdOpen, setHoldOpen] = useState(false);
   const range = useMemo(() => rangeFor(view, anchor), [view, anchor]);
   const list = useQuery({
     queryKey: ['calendar', range.from, range.to],
@@ -128,6 +132,22 @@ export default function Calendar() {
     onSuccess: () => {
       invalidate();
       setMsg({ kind: 'ok', text: '予定を削除しました' });
+    },
+    onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
+  });
+  const confirmHold = useMutation({
+    mutationFn: (v: { sessionId: number; eventId: number }) => api.post(`/calendar/holds/${v.sessionId}/confirm`, { eventId: v.eventId }),
+    onSuccess: () => {
+      invalidate();
+      setMsg({ kind: 'ok', text: '確定しました。ほかの候補の仮押さえは削除しました' });
+    },
+    onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
+  });
+  const cancelHold = useMutation({
+    mutationFn: (sessionId: number) => api.post(`/calendar/holds/${sessionId}/cancel`),
+    onSuccess: () => {
+      invalidate();
+      setMsg({ kind: 'ok', text: '仮押さえをすべて取り消しました' });
     },
     onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
   });
@@ -181,6 +201,9 @@ export default function Calendar() {
           <button className="btn btn-primary" onClick={() => setEditing('new')}>
             ＋ 予定を追加
           </button>
+          <button className="btn" onClick={() => setHoldOpen(true)} title="候補日時を複数まとめて仮押さえし、あとで 1 つを確定します">
+            ＋ 仮押さえ（複数候補）
+          </button>
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
@@ -194,6 +217,19 @@ export default function Calendar() {
         )}
       </div>
       {msg && <div className={`rounded-md px-3 py-2 text-sm ${msg.kind === 'ok' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700'}`}>{msg.text}</div>}
+
+      {holdOpen && (
+        <HoldForm
+          defaultDay={view === 'week' || view === 'list' ? (anchor >= range.from && anchor < range.to ? anchor : range.from) : range.from}
+          onClose={() => setHoldOpen(false)}
+          onSaved={(text) => {
+            setHoldOpen(false);
+            invalidate();
+            setMsg({ kind: 'ok', text });
+          }}
+          onError={(text) => setMsg({ kind: 'err', text })}
+        />
+      )}
 
       {editing && (
         <EventForm
@@ -239,7 +275,30 @@ export default function Calendar() {
                         </span>
                       )}
                     </span>
-                    <div className="ml-auto flex gap-1">
+                    <div className="ml-auto flex flex-wrap gap-1">
+                      {e.sessionId && (
+                        <>
+                          <button
+                            className="btn btn-sm btn-primary"
+                            disabled={confirmHold.isPending}
+                            onClick={() => {
+                              if (window.confirm(`この候補で確定しますか？\nほかの候補（${Math.max(e.sessionCandidates - 1, 0)} 件）の仮押さえは削除されます。`)) confirmHold.mutate({ sessionId: e.sessionId!, eventId: e.id });
+                            }}
+                          >
+                            この候補で確定
+                          </button>
+                          <button
+                            className="btn btn-sm"
+                            disabled={cancelHold.isPending}
+                            onClick={() => {
+                              if (window.confirm(`この日程調整の仮押さえ ${e.sessionCandidates} 件をすべて取り消しますか？`)) cancelHold.mutate(e.sessionId!);
+                            }}
+                            title="候補をすべて取り消す"
+                          >
+                            全候補を取消
+                          </button>
+                        </>
+                      )}
                       <button className="btn btn-sm" onClick={() => setEditing(e)}>
                         編集
                       </button>
@@ -300,6 +359,8 @@ function emptyEv(day: string): Ev {
     clientName: null,
     caseTitle: null,
     local: false,
+    sessionId: null,
+    sessionCandidates: 0,
   };
 }
 
@@ -432,6 +493,158 @@ function EventForm({ initial, defaultDay, onClose, onSaved, onError }: { initial
           {save.isPending ? '保存中…' : isEdit ? '更新' : '登録'}
         </button>
         <span className="text-xs text-slate-500">種別を「期日」にして事件を選ぶと、事件の次回期日にも反映されます。</span>
+      </div>
+    </form>
+  );
+}
+
+/** 複数候補の仮押さえ */
+function HoldForm({ defaultDay, onClose, onSaved, onError }: { defaultDay: string; onClose: () => void; onSaved: (msg: string) => void; onError: (msg: string) => void }) {
+  const [title, setTitle] = useState('打合せ');
+  const [kind, setKind] = useState<EventKind>('meeting');
+  const [clientId, setClientId] = useState('');
+  const [caseId, setCaseId] = useState('');
+  const [counterpartName, setCounterpartName] = useState('');
+  const [location, setLocation] = useState('');
+  const [duration, setDuration] = useState('60');
+  const [slots, setSlots] = useState<string[]>([`${defaultDay}T10:00`, `${defaultDay}T14:00`]);
+  const clients = useQuery({ queryKey: ['clients'], queryFn: () => api.get<{ id: number; name: string }[]>('/clients') });
+  const cases = useQuery({ queryKey: ['cases', 'open'], queryFn: () => api.get<{ id: number; title: string; clientId: number; clientName: string }[]>('/cases?status=open') });
+  const caseOptions = (cases.data ?? []).filter((c) => !clientId || c.clientId === Number(clientId));
+  const clientName = clients.data?.find((c) => c.id === Number(clientId))?.name ?? '';
+  const preview = `${clientName ? clientName.split(/[\s　]/)[0] : counterpartName || '（相手）'} ${title || '（内容）'} 仮`;
+
+  const addSlot = () => {
+    const last = slots[slots.length - 1];
+    const next = last ? toLocalInput(new Date(new Date(fromLocalInput(last)).getTime() + 86400_000).toISOString()) : `${defaultDay}T10:00`;
+    setSlots([...slots, next]);
+  };
+  const save = useMutation({
+    mutationFn: () => {
+      const mins = Math.max(15, Number(duration) || 60);
+      const body = {
+        title,
+        kind,
+        clientId: clientId ? Number(clientId) : null,
+        caseId: caseId ? Number(caseId) : null,
+        counterpartName: clientId ? null : counterpartName || null,
+        location: location || null,
+        slots: slots
+          .filter(Boolean)
+          .map((v) => {
+            const start = new Date(fromLocalInput(v));
+            return { startAt: start.toISOString(), endAt: new Date(start.getTime() + mins * 60_000).toISOString() };
+          }),
+      };
+      return api.post<{ sessionId: number; events: unknown[] }>('/calendar/holds', body);
+    },
+    onSuccess: (r) => onSaved(`仮押さえを ${r.events.length} 件登録しました。相手の返事が来たら、その候補の「この候補で確定」を押してください`),
+    onError: (e) => onError((e as Error).message),
+  });
+
+  return (
+    <form
+      className="card space-y-3 border-blue-200"
+      onSubmit={(e) => {
+        e.preventDefault();
+        save.mutate();
+      }}
+    >
+      <div className="flex items-center gap-2">
+        <h2 className="font-semibold">仮押さえ（複数候補）</h2>
+        <button type="button" className="btn btn-sm ml-auto" onClick={onClose}>
+          閉じる
+        </button>
+      </div>
+      <p className="text-xs text-slate-500">候補の日時をすべて「{'{姓} {内容} 仮'}」として登録します。相手が選んだ候補で「この候補で確定」を押すと、ほかの候補は自動で削除されます。</p>
+      <div className="grid gap-3 md:grid-cols-2">
+        <div>
+          <label className="label">依頼者</label>
+          <select
+            className="input"
+            value={clientId}
+            onChange={(e) => {
+              setClientId(e.target.value);
+              setCaseId('');
+            }}
+          >
+            <option value="">（未登録の相手）</option>
+            {clients.data?.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        {clientId ? (
+          <div>
+            <label className="label">事件</label>
+            <select className="input" value={caseId} onChange={(e) => setCaseId(e.target.value)}>
+              <option value="">（なし）</option>
+              {caseOptions.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.title}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : (
+          <div>
+            <label className="label">相手の名前（姓）</label>
+            <input className="input" value={counterpartName} onChange={(e) => setCounterpartName(e.target.value)} placeholder="例: 田中" />
+          </div>
+        )}
+        <div>
+          <label className="label">内容</label>
+          <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例: 打合せ / 新規相談 / WEB相談" required />
+        </div>
+        <div>
+          <label className="label">確定したときの種別</label>
+          <select className="input" value={kind} onChange={(e) => setKind(e.target.value as EventKind)}>
+            {EVENT_KINDS.filter((k) => k !== 'hold').map((k) => (
+              <option key={k} value={k}>
+                {EVENT_KIND_LABEL[k]}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="label">所要時間（分）</label>
+          <input type="number" className="input" min={15} step={15} value={duration} onChange={(e) => setDuration(e.target.value)} />
+        </div>
+        <div>
+          <label className="label">場所</label>
+          <input className="input" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="例: 事務所 / Zoom" />
+        </div>
+        <div className="md:col-span-2">
+          <label className="label">候補日時（開始）</label>
+          <div className="space-y-2">
+            {slots.map((v, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <span className="w-6 text-xs text-slate-500">{i + 1}.</span>
+                <input
+                  type="datetime-local"
+                  className="input w-auto"
+                  value={v}
+                  onChange={(e) => setSlots(slots.map((x, j) => (j === i ? e.target.value : x)))}
+                  required
+                />
+                <button type="button" className="btn btn-sm" onClick={() => setSlots(slots.filter((_, j) => j !== i))} disabled={slots.length <= 1} aria-label="この候補を外す">
+                  ×
+                </button>
+              </div>
+            ))}
+            <button type="button" className="btn btn-sm" onClick={addSlot} disabled={slots.length >= 10}>
+              ＋ 候補を追加
+            </button>
+          </div>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button className="btn btn-primary" disabled={save.isPending}>
+          {save.isPending ? '登録中…' : `${slots.filter(Boolean).length} 件を仮押さえ`}
+        </button>
+        <span className="text-xs text-slate-500">件名: {preview}</span>
       </div>
     </form>
   );
