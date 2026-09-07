@@ -33,6 +33,29 @@ export default function Files() {
   const retry = useMutation({ mutationFn: (id: number) => api.post(`/attachments/${id}/retry`), onSuccess: refresh });
   const [pick, setPick] = useState<Record<number, string>>({});
   const clientName = (id: number | null) => clients.data?.find((c) => c.id === id)?.name ?? null;
+  // 一括操作
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkClient, setBulkClient] = useState('');
+  const selectable = (list.data ?? []).filter((a) => a.status !== 'stored' && a.status !== 'ignored' && a.status !== 'pending');
+  const allSelected = selectable.length > 0 && selectable.every((a) => selected.has(a.id));
+  const toggle = (id: number) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const bulk = useMutation({
+    mutationFn: (v: { action: 'ignore' | 'save' | 'retry'; clientId?: number | null }) => api.post<{ done: number; errors: { id: number; error: string }[] }>('/attachments/bulk', { ids: [...selected], action: v.action, clientId: v.clientId ?? null }),
+    onSuccess: (r, v) => {
+      refresh();
+      setSelected(new Set());
+      const label = v.action === 'ignore' ? '不要にしました' : v.action === 'save' ? '保存しました' : '再取得しました';
+      setMsg(`${r.done} 件を${label}${r.errors.length ? `（${r.errors.length} 件は失敗: ${r.errors[0].error}）` : ''}`);
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
+  const selectedHeldWithClient = [...selected].filter((id) => list.data?.find((a) => a.id === id)?.clientId).length;
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -57,11 +80,53 @@ export default function Files() {
           受信したままで OneDrive には保存していないファイルです。必要なものだけ「保存」を押してください（依頼者が分かっている会話なら、その依頼者の受領資料フォルダに入ります）。要らないものは「不要」で一覧から外れます。LINE の画像・ファイルは LINE 側の保持期間が短いため、受信時にアプリ内へ控えを取ってあります。設定 → 基本設定 → 「受信ファイルの扱い」で自動保存の範囲を変えられます。
         </p>
       )}
-      {msg && <div className="text-xs text-red-600">{msg}</div>}
-      <div className="card p-0">
+      {msg && <div className="text-xs text-slate-700">{msg}</div>}
+      {selectable.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm">
+          <label className="flex items-center gap-1">
+            <input type="checkbox" checked={allSelected} onChange={(e) => setSelected(e.target.checked ? new Set(selectable.map((a) => a.id)) : new Set())} /> すべて選択
+          </label>
+          {selected.size > 0 && (
+            <>
+              <span className="text-slate-500">{selected.size} 件を選択中</span>
+              <button className="btn btn-sm" disabled={bulk.isPending} onClick={() => bulk.mutate({ action: 'ignore' })} title="保存せずに一覧から外す">
+                不要にする
+              </button>
+              {selectedHeldWithClient > 0 && (
+                <button className="btn btn-sm btn-primary" disabled={bulk.isPending} onClick={() => bulk.mutate({ action: 'save' })} title="会話の依頼者が分かっているものを、その依頼者の受領資料フォルダへ保存">
+                  それぞれの依頼者のフォルダに保存{selectedHeldWithClient < selected.size ? `（${selectedHeldWithClient} 件）` : ''}
+                </button>
+              )}
+              <span className="flex items-center gap-1">
+                <select className="input w-44 py-0.5 text-xs" value={bulkClient} onChange={(e) => setBulkClient(e.target.value)}>
+                  <option value="">依頼者を選んで保存…</option>
+                  {clients.data?.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <button className="btn btn-sm" disabled={!bulkClient || bulk.isPending} onClick={() => bulk.mutate({ action: 'save', clientId: Number(bulkClient) })}>
+                  保存
+                </button>
+              </span>
+              {status === 'failed' && (
+                <button className="btn btn-sm" disabled={bulk.isPending} onClick={() => bulk.mutate({ action: 'retry' })}>
+                  再取得
+                </button>
+              )}
+              <button className="btn btn-sm text-slate-500" onClick={() => setSelected(new Set())}>
+                選択解除
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      <div className="card overflow-x-auto p-0">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-left text-xs text-slate-500">
             <tr>
+              <th className="w-px px-3 py-2"></th>
               <th className="px-3 py-2">ファイル</th>
               <th className="px-3 py-2">受信元</th>
               <th className="px-3 py-2">状態</th>
@@ -71,7 +136,10 @@ export default function Files() {
           </thead>
           <tbody>
             {list.data?.map((a) => (
-              <tr key={a.id} className="border-t border-slate-100">
+              <tr key={a.id} className={`border-t border-slate-100 ${selected.has(a.id) ? 'bg-blue-50/40' : ''}`}>
+                <td className="w-px px-3 py-2">
+                  {a.status !== 'stored' && a.status !== 'ignored' && a.status !== 'pending' && <input type="checkbox" checked={selected.has(a.id)} onChange={() => toggle(a.id)} aria-label="選択" />}
+                </td>
                 <td className="px-3 py-2">
                   {a.status !== 'ignored' ? (
                     <a className="font-medium text-blue-700 hover:underline" href={`/api/attachments/${a.id}/download`} title={a.status === 'stored' ? 'OneDrive から取得' : '保存せずに中身を取得'}>
@@ -129,7 +197,7 @@ export default function Files() {
             ))}
             {list.data?.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-4 py-4 text-slate-500">
+                <td colSpan={6} className="px-4 py-4 text-slate-500">
                   {status === 'held' ? '未保存のファイルはありません' : 'ファイルはありません'}
                 </td>
               </tr>

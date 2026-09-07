@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { streamSSE } from 'hono/streaming';
-import { listAttachments, assignAttachment, processAttachment, retryFailedAttachments, saveAttachment, ignoreAttachment, fetchAttachmentData } from '../services/attachments.js';
+import { listAttachments, assignAttachment, processAttachment, retryFailedAttachments, saveAttachment, ignoreAttachment, fetchAttachmentData, bulkAttachments } from '../services/attachments.js';
 import { indexForms, searchForms, updateForm, formStats, draftFromForms } from '../services/forms.js';
 import { formDraftRequestSchema } from '@lcm/shared';
 import { storage } from '../integrations/storage.js';
@@ -26,6 +26,12 @@ fileRoutes.post('/attachments/:id/retry', async (c) => {
   db().update(schema.attachments).set({ status: 'pending' }).where(eq(schema.attachments.id, id)).run();
   await processAttachment(id);
   return c.json(db().select().from(schema.attachments).where(eq(schema.attachments.id, id)).get());
+});
+
+/** 一括操作: ignore（不要）/ save（保存。clientId 省略時は会話の依頼者）/ retry（再取得） */
+fileRoutes.post('/attachments/bulk', async (c) => {
+  const body = z.object({ ids: z.array(z.number().int()).min(1).max(500), action: z.enum(['ignore', 'save', 'retry']), clientId: z.number().int().nullable().optional() }).parse(await c.req.json());
+  return c.json(await bulkAttachments(body.ids, body.action, body.clientId ?? null));
 });
 
 fileRoutes.post('/attachments/retry-failed', async (c) => c.json({ retried: await retryFailedAttachments() }));
