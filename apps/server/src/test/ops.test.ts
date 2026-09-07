@@ -415,6 +415,30 @@ describe('電話記録', () => {
   });
 });
 
+describe('Chatwork の取込範囲', () => {
+  it('自分宛だけの設定では To・全員宛・ダイレクト・自分宛タスクのメッセージだけ取り込む', async () => {
+    const { chatworkInScope, isAddressedToMe } = await import('../channels/chatwork.js');
+    const me = 12345;
+    const other = { account_id: 999 };
+    const msg = (body: string, id = 'm') => ({ body, message_id: id, account: other });
+    expect(isAddressedToMe('[To:12345]瀧口さん お願いします', me)).toBe(true);
+    expect(isAddressedToMe('[To:123456]別の人', me)).toBe(false);
+    expect(isAddressedToMe('[toall] 皆さん', me)).toBe(true);
+    // all なら何でも取り込む
+    expect(chatworkInScope('all', msg('雑談'), { myAccountId: me, roomType: 'group' })).toBe(true);
+    // to_me
+    expect(chatworkInScope('to_me', msg('雑談'), { myAccountId: me, roomType: 'group' })).toBe(false);
+    expect(chatworkInScope('to_me', msg('[To:12345]瀧口さん 確認お願いします'), { myAccountId: me, roomType: 'group' })).toBe(true);
+    expect(chatworkInScope('to_me', msg('[toall] 来週の予定'), { myAccountId: me, roomType: 'group' })).toBe(true);
+    expect(chatworkInScope('to_me', msg('雑談'), { myAccountId: me, roomType: 'direct' })).toBe(true);
+    expect(chatworkInScope('to_me', msg('タスクの本文', 'task-msg'), { myAccountId: me, roomType: 'group', taskMessageIds: new Set(['task-msg']) })).toBe(true);
+    // 自分の発言は、既に取り込んだ会話がある場合だけ
+    const mine = { body: '返信です', message_id: 'x', account: { account_id: me } };
+    expect(chatworkInScope('to_me', mine, { myAccountId: me, roomType: 'group', conversationExists: false })).toBe(false);
+    expect(chatworkInScope('to_me', mine, { myAccountId: me, roomType: 'group', conversationExists: true })).toBe(true);
+  });
+});
+
 describe('受信箱の表示範囲', () => {
   it('inboundOnly なら自分の送信だけの会話を除く', async () => {
     const { listConversations } = await import('../services/inbox.js');
