@@ -207,6 +207,12 @@ export function listCalendarEvents(from: Date, to: Date, filter: { clientId?: nu
   const conds = [gt(schema.calendarEvents.endAt, from.toISOString()), lt(schema.calendarEvents.startAt, to.toISOString())];
   if (filter.clientId) conds.push(eq(schema.calendarEvents.clientId, filter.clientId));
   if (filter.caseId) conds.push(eq(schema.calendarEvents.caseId, filter.caseId));
+  // 日程調整中の仮押さえは、どのセッションの候補かを付ける（確定・取消をカレンダーから行うため）
+  const sessionByEvent = new Map<string, { id: number; count: number }>();
+  for (const s of db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.state, 'proposing')).all()) {
+    const withEvent = s.candidates.filter((c) => c.eventId);
+    for (const c of withEvent) sessionByEvent.set(c.eventId!, { id: s.id, count: withEvent.length });
+  }
   return db()
     .select({ ev: schema.calendarEvents, clientName: schema.clients.name, caseTitle: schema.cases.title })
     .from(schema.calendarEvents)
@@ -215,7 +221,10 @@ export function listCalendarEvents(from: Date, to: Date, filter: { clientId?: nu
     .where(and(...conds))
     .orderBy(schema.calendarEvents.startAt)
     .all()
-    .map((r) => ({ ...r.ev, clientName: r.clientName ?? null, caseTitle: r.caseTitle ?? null, local: isLocalEventId(r.ev.googleEventId) }));
+    .map((r) => {
+      const sess = sessionByEvent.get(r.ev.googleEventId);
+      return { ...r.ev, clientName: r.clientName ?? null, caseTitle: r.caseTitle ?? null, local: isLocalEventId(r.ev.googleEventId), sessionId: sess?.id ?? null, sessionCandidates: sess?.count ?? 0 };
+    });
 }
 
 export interface CalendarEventInput {
@@ -308,4 +317,112 @@ export async function removeCalendarEvent(id: number) {
   if (!isLocalEventId(row.googleEventId) && isGoogleConnected()) await cal.deleteEvent(row.googleEventId);
   db().delete(schema.calendarEvents).where(eq(schema.calendarEvents.id, id)).run();
   refreshNextHearing(row.caseId);
+}
+
+// ---- 複数候補の仮押さえ（日程調整セッションとして管理。1 つを確定すると残りを削除） ----
+
+export interface HoldSetInput {
+  /** 予定の内容（例: 打合せ、WEB相談）。件名は「{姓} {内容} 仮」になる */
+  title: string;
+  kind: EventKind;
+  clientId?: number | null;
+  caseId?: number | null;
+  /** 依頼者を選ばない場合の相手の名前（件名の先頭に付ける） */
+  counterpartName?: string | null;
+  location?: string | null;
+  description?: string | null;
+  slots: { startAt: string; endAt: string }[];
+}
+
+function holdSetTitle(input: HoldSetInput, clientName: string | null): { hold: string; confirmed: string } {
+  const who = clientName ? familyName(clientName) : (input.counterpartName ?? '').trim();
+  const content = input.title.trim();
+  const base = [who, content].filter(Boolean).join(' ');
+  return { hold: base.endsWith('仮') ? base : `${base} 仮`, confirmed: base.replace(/\s*仮$/, '') };
+}
+
+export async function createHoldSet(input: HoldSetInput) {
+  if (!input.slots.length) throw new Error('候補日時を 1 つ以上入れてください');
+  if (!input.title.trim()) throw new Error('内容を入力してください');
+  const client = input.clientId ? db().select().from(schema.clients).where(eq(schema.clients.id, input.clientId)).get() : null;
+  const titles = holdSetTitle(input, client?.name ?? null);
+  const sorted = [...input.slots].sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime());
+  for (const sl of sorted) assertRange(sl.startAt, sl.endAt);
+  const session = db()
+    .insert(schema.schedulingSessions)
+    .values({ clientId: client?.id ?? null, conversationId: null, kind: input.kind === 'hearing' ? '期日' : input.kind === 'consult' ? '面談' : '打合せ', state: 'proposing', candidates: [], proposedAt: new Date().toISOString() })
+    .returning()
+    .get();
+  const candidates: { startAt: string; endAt: string; eventId?: string }[] = [];
+  const events = [];
+  for (const sl of sorted) {
+    const row = await createCalendarEvent({
+      title: titles.hold,
+      startAt: sl.startAt,
+      endAt: sl.endAt,
+      kind: 'hold',
+      clientId: client?.id ?? null,
+      caseId: input.caseId ?? null,
+      location: input.location ?? null,
+      description: [input.description ?? '', `日程調整中（アプリで管理: セッション ${session.id}）`].filter(Boolean).join('\n'),
+      tentative: true,
+    });
+    candidates.push({ startAt: row.startAt, endAt: row.endAt, eventId: row.googleEventId });
+    events.push(row);
+  }
+  db()
+    .update(schema.schedulingSessions)
+    .set({ candidates, updatedAt: new Date().toISOString() })
+    .where(eq(schema.schedulingSessions.id, session.id))
+    .run();
+  // 確定後の種別と件名を後で使えるようにメモしておく（zoom 列は使っていないので流用しない。description に残す）
+  holdMeta.set(session.id, { kind: input.kind, confirmedTitle: titles.confirmed });
+  logger.info({ sessionId: session.id, slots: events.length }, '複数候補の仮押さえを登録しました');
+  return { sessionId: session.id, events };
+}
+
+/** セッション作成時の確定後情報（再起動で消えても件名から復元できる） */
+const holdMeta = new Map<number, { kind: EventKind; confirmedTitle: string }>();
+
+/** 候補のうち 1 つを確定。残りの仮押さえを削除し、選んだ予定を確定に切り替える */
+export async function confirmHold(sessionId: number, eventId: number) {
+  const session = db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, sessionId)).get();
+  if (!session) throw new Error('日程調整が見つかりません');
+  if (session.state !== 'proposing') throw new Error('この日程調整はすでに確定または取消されています');
+  const chosen = db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, eventId)).get();
+  if (!chosen || !session.candidates.some((c) => c.eventId === chosen.googleEventId)) throw new Error('選んだ予定はこの日程調整の候補ではありません');
+  for (const c of session.candidates) {
+    if (!c.eventId || c.eventId === chosen.googleEventId) continue;
+    const row = db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.googleEventId, c.eventId)).get();
+    if (row) await removeCalendarEvent(row.id);
+    else if (!isLocalEventId(c.eventId) && isGoogleConnected()) await cal.deleteEvent(c.eventId);
+  }
+  const meta = holdMeta.get(sessionId);
+  const kind: EventKind = meta?.kind ?? (session.kind === '期日' ? 'hearing' : session.kind === '面談' || session.kind === 'WEB' ? 'consult' : 'meeting');
+  const title = meta?.confirmedTitle ?? chosen.title.replace(/\s*仮$/, '');
+  const description = (chosen.description ?? '').replace(/\n?日程調整中（アプリで管理: セッション \d+）/, '').trim() || null;
+  const updated = await editCalendarEvent(chosen.id, { title, kind, tentative: false, description });
+  db()
+    .update(schema.schedulingSessions)
+    .set({ state: 'confirmed', confirmedEventId: chosen.googleEventId, confirmedStartAt: chosen.startAt, updatedAt: new Date().toISOString() })
+    .where(eq(schema.schedulingSessions.id, sessionId))
+    .run();
+  holdMeta.delete(sessionId);
+  resolveAlertsByKeyPrefix(`scheduling_stale:${sessionId}`);
+  return updated;
+}
+
+/** 仮押さえをすべて取り消す */
+export async function cancelHoldSet(sessionId: number) {
+  const session = db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, sessionId)).get();
+  if (!session) throw new Error('日程調整が見つかりません');
+  for (const c of session.candidates) {
+    if (!c.eventId) continue;
+    const row = db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.googleEventId, c.eventId)).get();
+    if (row) await removeCalendarEvent(row.id);
+    else if (!isLocalEventId(c.eventId) && isGoogleConnected()) await cal.deleteEvent(c.eventId);
+  }
+  db().update(schema.schedulingSessions).set({ state: 'cancelled', updatedAt: new Date().toISOString() }).where(eq(schema.schedulingSessions.id, sessionId)).run();
+  holdMeta.delete(sessionId);
+  resolveAlertsByKeyPrefix(`scheduling_stale:${sessionId}`);
 }

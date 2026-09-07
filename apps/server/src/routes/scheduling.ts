@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { proposeSlotsSchema, confirmSlotSchema, nextHearingInputSchema, EVENT_KINDS } from '@lcm/shared';
 import { proposeSlots, confirmSlot, cancelSession, listSessions, findFreeSlots, extractChosenSlot } from '../services/scheduling.js';
-import { syncCalendar, checkPostEvents, resolveNextHearing, listCourtDocs, upcomingEvents, relinkEvent, listCalendarEvents, createCalendarEvent, editCalendarEvent, removeCalendarEvent } from '../services/court.js';
+import { syncCalendar, checkPostEvents, resolveNextHearing, listCourtDocs, upcomingEvents, relinkEvent, listCalendarEvents, createCalendarEvent, editCalendarEvent, removeCalendarEvent, createHoldSet, confirmHold, cancelHoldSet } from '../services/court.js';
 import { createZoomMeeting } from '../integrations/zoom.js';
 import { db, schema } from '../db/index.js';
 import { eq } from 'drizzle-orm';
@@ -79,6 +79,33 @@ schedulingRoutes.put('/calendar/events/:id', async (c) => {
     return c.json(db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, id)).get());
   }
   return c.json(await editCalendarEvent(id, body));
+});
+
+/** 複数候補の仮押さえをまとめて登録 */
+schedulingRoutes.post('/calendar/holds', async (c) => {
+  const body = z
+    .object({
+      title: z.string().min(1),
+      kind: z.enum(EVENT_KINDS).default('meeting'),
+      clientId: z.number().int().nullable().optional(),
+      caseId: z.number().int().nullable().optional(),
+      counterpartName: z.string().nullable().optional(),
+      location: z.string().nullable().optional(),
+      description: z.string().nullable().optional(),
+      slots: z.array(z.object({ startAt: z.string(), endAt: z.string() })).min(1).max(10),
+    })
+    .parse(await c.req.json());
+  return c.json(await createHoldSet(body));
+});
+
+schedulingRoutes.post('/calendar/holds/:sessionId/confirm', async (c) => {
+  const body = z.object({ eventId: z.number().int() }).parse(await c.req.json());
+  return c.json(await confirmHold(Number(c.req.param('sessionId')), body.eventId));
+});
+
+schedulingRoutes.post('/calendar/holds/:sessionId/cancel', async (c) => {
+  await cancelHoldSet(Number(c.req.param('sessionId')));
+  return c.json({ ok: true });
 });
 
 schedulingRoutes.delete('/calendar/events/:id', async (c) => {

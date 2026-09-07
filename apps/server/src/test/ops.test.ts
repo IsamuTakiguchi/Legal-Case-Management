@@ -335,6 +335,41 @@ describe('予定の登録・編集・削除', () => {
   });
 });
 
+describe('複数候補の仮押さえ', () => {
+  it('候補をまとめて登録し、1 つを確定すると残りが消える。取消なら全部消える', async () => {
+    const { createHoldSet, confirmHold, cancelHoldSet, listCalendarEvents } = await import('../services/court.js');
+    const client = db().insert(schema.clients).values({ name: '仮押 太郎', kana: 'かりおし たろう' }).returning().get();
+    const day = (n: number, h: number) => new Date(Date.now() + n * 86400_000 + h * 3600_000).toISOString();
+    const r = await createHoldSet({ title: '打合せ', kind: 'meeting', clientId: client.id, slots: [{ startAt: day(2, 1), endAt: day(2, 2) }, { startAt: day(3, 1), endAt: day(3, 2) }, { startAt: day(4, 1), endAt: day(4, 2) }] });
+    expect(r.events.length).toBe(3);
+    expect(r.events[0].title).toBe('仮押 打合せ 仮');
+    expect(r.events[0].status).toBe('tentative');
+    expect(r.events[0].kind).toBe('hold');
+    const listed = listCalendarEvents(new Date(), new Date(Date.now() + 7 * 86400_000), { clientId: client.id });
+    expect(listed.filter((e) => e.sessionId === r.sessionId).length).toBe(3);
+    expect(listed[0].sessionCandidates).toBe(3);
+
+    const confirmed = await confirmHold(r.sessionId, r.events[1].id);
+    expect(confirmed!.title).toBe('仮押 打合せ');
+    expect(confirmed!.status).toBe('confirmed');
+    expect(confirmed!.kind).toBe('meeting');
+    const after = listCalendarEvents(new Date(), new Date(Date.now() + 7 * 86400_000), { clientId: client.id });
+    expect(after.map((e) => e.id)).toEqual([r.events[1].id]);
+    expect(after[0].sessionId).toBeNull();
+    expect(db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, r.sessionId)).get()!.state).toBe('confirmed');
+    await expect(confirmHold(r.sessionId, r.events[1].id)).rejects.toThrow('すでに確定');
+
+    const r2 = await createHoldSet({ title: '相談', kind: 'consult', counterpartName: '田中', slots: [{ startAt: day(5, 1), endAt: day(5, 2) }, { startAt: day(6, 1), endAt: day(6, 2) }] });
+    expect(r2.events[0].title).toBe('田中 相談 仮');
+    await cancelHoldSet(r2.sessionId);
+    expect(db().select().from(schema.calendarEvents).where(inArray(schema.calendarEvents.id, r2.events.map((e) => e.id))).all().length).toBe(0);
+
+    db().delete(schema.calendarEvents).where(eq(schema.calendarEvents.id, r.events[1].id)).run();
+    db().delete(schema.schedulingSessions).where(inArray(schema.schedulingSessions.id, [r.sessionId, r2.sessionId])).run();
+    db().delete(schema.clients).where(eq(schema.clients.id, client.id)).run();
+  });
+});
+
 describe('受信箱の表示範囲', () => {
   it('inboundOnly なら自分の送信だけの会話を除く', async () => {
     const { listConversations } = await import('../services/inbox.js');
