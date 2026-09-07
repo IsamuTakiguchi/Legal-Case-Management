@@ -106,6 +106,8 @@ export function googleClient(): OAuth2Client {
     authedClient = newClient();
     authedClient.setCredentials(tokens);
     authedClient.on('tokens', (t) => saveGoogleTokens(t));
+    // Google API が応答しないときに要求が固まらないよう、全呼び出しにタイムアウトを付ける
+    google.options({ timeout: 20_000 });
   }
   return authedClient;
 }
