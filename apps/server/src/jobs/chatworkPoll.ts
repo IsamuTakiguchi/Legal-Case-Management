@@ -8,6 +8,7 @@ import { logger } from '../logger.js';
 
 const KEY_ME = 'chatwork:myAccountId';
 const KEY_ROOM_TYPES = 'chatwork:roomTypes';
+const KEY_ROOM_NAMES = 'chatwork:roomNames';
 const KEY_TASK_MSGS = 'chatwork:taskMessageIds';
 
 function scope(): cw.ChatworkScope {
@@ -17,6 +18,14 @@ function scope(): cw.ChatworkScope {
 function roomTypes(): Record<string, string> {
   try {
     return JSON.parse(getSyncState(KEY_ROOM_TYPES) ?? '{}') as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function roomNames(): Record<string, string> {
+  try {
+    return JSON.parse(getSyncState(KEY_ROOM_NAMES) ?? '{}') as Record<string, string>;
   } catch {
     return {};
   }
@@ -92,6 +101,7 @@ export async function pollChatwork(opts: { allRooms?: boolean } = {}): Promise<{
       .map((r) => Number(r.t)),
   );
   setSyncState(KEY_ROOM_TYPES, JSON.stringify(Object.fromEntries(rooms.map((r) => [String(r.room_id), r.type]))));
+  setSyncState(KEY_ROOM_NAMES, JSON.stringify(Object.fromEntries(rooms.map((r) => [String(r.room_id), r.name]))));
   const sc = scope();
   let taskIds = new Set<string>();
   if (sc === 'to_me') {
@@ -120,6 +130,8 @@ export async function pollChatwork(opts: { allRooms?: boolean } = {}): Promise<{
       if (!cw.chatworkInScope(sc, m, { myAccountId: me, roomType: room.type, taskMessageIds: taskIds, conversationExists: conversationExists(room.room_id) })) continue;
       const norm = cw.normalizeChatworkMessage(room.room_id, m, me);
       if (norm.direction === 'in' && !norm.identity.displayName) norm.identity.displayName = room.name;
+      // グループチャットは会話名をルーム名にする（発言者は伝言ごとに表示）
+      if (room.type !== 'direct') norm.subject = room.name;
       const r = await ingestMessage(norm);
       if (r.isNew) ingested++;
     }
@@ -148,6 +160,9 @@ export async function ingestChatworkWebhook(body: cw.ChatworkWebhookBody): Promi
     }
   }
   const norm = cw.normalizeChatworkMessage(ev.room_id, msg, me);
+  const rn = roomNames()[String(ev.room_id)];
+  if (rn && roomTypes()[String(ev.room_id)] !== 'direct') norm.subject = rn;
+  if (!norm.senderName) norm.senderName = null;
   const r = await ingestMessage(norm);
   return r.isNew;
 }
