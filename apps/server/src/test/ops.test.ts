@@ -522,6 +522,23 @@ describe('事務局メンバー（Chatwork）', () => {
   });
 });
 
+describe('事務局メンバー候補', () => {
+  it('取込済みメッセージの送信者から候補を出す（Chatwork 未接続でも動く）', async () => {
+    const { chatworkAccountsFromMessages, listChatworkAccounts } = await import('../services/staff.js');
+    const now = new Date().toISOString();
+    const conv = db().insert(schema.conversations).values({ channel: 'chatwork', externalThreadId: '90010', counterpartName: '事務局ルーム', lastMessageAt: now, lastInboundAt: now }).returning().get();
+    db().insert(schema.messages).values({ conversationId: conv.id, channel: 'chatwork', externalId: 'cand-1', direction: 'in', senderName: '事務 一郎', senderAddress: '888001', sentAt: now, body: 'a' }).run();
+    db().insert(schema.messages).values({ conversationId: conv.id, channel: 'chatwork', externalId: 'cand-2', direction: 'in', senderName: '事務 一郎', senderAddress: '888001', sentAt: now, body: 'b' }).run();
+    db().insert(schema.messages).values({ conversationId: conv.id, channel: 'chatwork', externalId: 'cand-3', direction: 'out', senderName: '自分', senderAddress: '1', sentAt: now, body: 'c' }).run();
+    const c = chatworkAccountsFromMessages();
+    expect(c.filter((x) => x.accountId === 888001)).toEqual([{ accountId: 888001, name: '事務 一郎', rooms: ['事務局ルーム'], source: 'messages' }]);
+    const r = await listChatworkAccounts();
+    expect(r.accounts.some((x) => x.accountId === 888001)).toBe(true);
+    db().delete(schema.messages).where(eq(schema.messages.conversationId, conv.id)).run();
+    db().delete(schema.conversations).where(eq(schema.conversations.id, conv.id)).run();
+  });
+});
+
 describe('受信箱の表示範囲', () => {
   it('inboundOnly なら自分の送信だけの会話を除く', async () => {
     const { listConversations } = await import('../services/inbox.js');

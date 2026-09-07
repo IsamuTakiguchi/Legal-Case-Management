@@ -4,6 +4,7 @@ import * as cw from '../channels/chatwork.js';
 import { isConfigured } from '../config.js';
 import { familyName, OPEN_CASE_STATUSES } from '@lcm/shared';
 import { logger } from '../logger.js';
+import { getSyncState, setSyncState } from './settings.js';
 
 /**
  * 事務局メンバー。Chatwork は依頼者ではなく内部の事務局からの伝言が中心なので、
@@ -48,26 +49,104 @@ export function staffByChatworkAccount(accountId: number | null | undefined): St
   return db().select().from(schema.staffMembers).where(and(eq(schema.staffMembers.chatworkAccountId, accountId), eq(schema.staffMembers.active, true))).get() ?? null;
 }
 
-/** Chatwork の参加ルームからメンバーを集める（事務局メンバー登録の候補。自分は除く） */
-export async function listChatworkAccounts(): Promise<{ accountId: number; name: string; rooms: string[] }[]> {
-  if (!isConfigured('chatwork')) return [];
-  const me = await cw.chatworkMe().catch(() => null);
-  const rooms = await cw.listRooms();
-  const map = new Map<number, { accountId: number; name: string; rooms: string[] }>();
-  for (const r of rooms) {
-    if (r.type === 'my') continue;
-    let members: cw.ChatworkMember[] = [];
+export interface ChatworkAccountCandidate {
+  accountId: number;
+  name: string;
+  rooms: string[];
+  /** どこから分かったか: messages=取込済みメッセージの送信者 / api=ルームのメンバー一覧 */
+  source: 'messages' | 'api';
+}
+
+const ACCOUNTS_CACHE_KEY = 'chatwork:accountCandidates';
+const ACCOUNTS_CACHE_TTL = 10 * 60_000;
+const ACCOUNTS_MAX_ROOMS = 25;
+const ACCOUNTS_TIME_BUDGET = 8_000;
+
+/** 取込済みの Chatwork メッセージの送信者（API を呼ばずに即座に分かる候補） */
+export function chatworkAccountsFromMessages(): ChatworkAccountCandidate[] {
+  const me = getSyncState('chatwork:myAccountId');
+  const rows = db()
+    .select({ address: schema.messages.senderAddress, name: schema.messages.senderName, thread: schema.conversations.externalThreadId, counterpart: schema.conversations.counterpartName })
+    .from(schema.messages)
+    .innerJoin(schema.conversations, eq(schema.conversations.id, schema.messages.conversationId))
+    .where(and(eq(schema.messages.channel, 'chatwork'), eq(schema.messages.direction, 'in')))
+    .all();
+  const map = new Map<number, ChatworkAccountCandidate>();
+  for (const r of rows) {
+    const id = Number(r.address);
+    if (!Number.isFinite(id) || !id || String(id) === me) continue;
+    const cur = map.get(id) ?? { accountId: id, name: r.name || `アカウント ${id}`, rooms: [], source: 'messages' as const };
+    const room = r.counterpart ?? `ルーム ${r.thread}`;
+    if (!cur.rooms.includes(room) && cur.rooms.length < 5) cur.rooms.push(room);
+    if (r.name && cur.name.startsWith('アカウント ')) cur.name = r.name;
+    map.set(id, cur);
+  }
+  return [...map.values()];
+}
+
+/**
+ * 事務局メンバー登録の候補。まず取込済みメッセージの送信者を出し、Chatwork API では直近に動きのあったルームだけ
+ * （最大 25 ルーム・並列 4・8 秒まで）メンバーを集める。結果は 10 分キャッシュ。自分は除く。
+ */
+export async function listChatworkAccounts(opts: { refresh?: boolean } = {}): Promise<{ accounts: ChatworkAccountCandidate[]; partial: boolean; error?: string }> {
+  const fromMessages = chatworkAccountsFromMessages();
+  if (!isConfigured('chatwork')) return { accounts: fromMessages.sort((a, b) => a.name.localeCompare(b.name, 'ja')), partial: false };
+  if (!opts.refresh) {
     try {
-      members = await cw.roomMembers(r.room_id);
-    } catch (err) {
-      logger.warn({ err, room: r.room_id }, 'Chatwork ルームのメンバー取得に失敗');
-      continue;
+      const cached = JSON.parse(getSyncState(ACCOUNTS_CACHE_KEY) ?? 'null') as { at: number; accounts: ChatworkAccountCandidate[]; partial: boolean } | null;
+      if (cached && Date.now() - cached.at < ACCOUNTS_CACHE_TTL) return { accounts: mergeAccounts(fromMessages, cached.accounts), partial: cached.partial };
+    } catch {
+      /* キャッシュ無し */
     }
-    for (const m of members) {
-      if (me && m.account_id === me.account_id) continue;
-      const cur = map.get(m.account_id) ?? { accountId: m.account_id, name: m.name, rooms: [] };
-      if (cur.rooms.length < 5) cur.rooms.push(r.name);
-      map.set(m.account_id, cur);
+  }
+  const map = new Map<number, ChatworkAccountCandidate>();
+  let partial = false;
+  let error: string | undefined;
+  try {
+    const me = await cw.chatworkMe().catch(() => null);
+    const rooms = (await cw.listRooms()).filter((r) => r.type !== 'my').sort((a, b) => (b.last_update_time ?? 0) - (a.last_update_time ?? 0));
+    const targets = rooms.slice(0, ACCOUNTS_MAX_ROOMS);
+    partial = rooms.length > targets.length;
+    const started = Date.now();
+    let idx = 0;
+    const worker = async () => {
+      while (idx < targets.length) {
+        if (Date.now() - started > ACCOUNTS_TIME_BUDGET) {
+          partial = true;
+          return;
+        }
+        const r = targets[idx++];
+        try {
+          const members = await cw.roomMembers(r.room_id);
+          for (const m of members) {
+            if (me && m.account_id === me.account_id) continue;
+            const cur = map.get(m.account_id) ?? { accountId: m.account_id, name: m.name, rooms: [], source: 'api' as const };
+            if (cur.rooms.length < 5) cur.rooms.push(r.name);
+            map.set(m.account_id, cur);
+          }
+        } catch (err) {
+          logger.warn({ err, room: r.room_id }, 'Chatwork ルームのメンバー取得に失敗');
+          partial = true;
+        }
+      }
+    };
+    await Promise.all([worker(), worker(), worker(), worker()]);
+    setSyncState(ACCOUNTS_CACHE_KEY, JSON.stringify({ at: Date.now(), accounts: [...map.values()], partial }));
+  } catch (err) {
+    error = String((err as Error).message ?? err);
+    logger.warn({ err }, 'Chatwork のメンバー候補取得に失敗（取込済みメッセージの送信者だけを返す）');
+  }
+  return { accounts: mergeAccounts(fromMessages, [...map.values()]), partial, error };
+}
+
+function mergeAccounts(a: ChatworkAccountCandidate[], b: ChatworkAccountCandidate[]): ChatworkAccountCandidate[] {
+  const map = new Map<number, ChatworkAccountCandidate>();
+  for (const x of [...b, ...a]) {
+    const cur = map.get(x.accountId);
+    if (!cur) map.set(x.accountId, { ...x, rooms: [...x.rooms] });
+    else {
+      for (const r of x.rooms) if (!cur.rooms.includes(r) && cur.rooms.length < 5) cur.rooms.push(r);
+      if (cur.name.startsWith('アカウント ') && !x.name.startsWith('アカウント ')) cur.name = x.name;
     }
   }
   return [...map.values()].sort((a, b) => a.name.localeCompare(b.name, 'ja'));
