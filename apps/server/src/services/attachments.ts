@@ -1,4 +1,4 @@
-import { eq, desc, and, inArray } from 'drizzle-orm';
+import { eq, desc, and, inArray, lt, sql } from 'drizzle-orm';
 import path from 'node:path';
 import fs from 'node:fs';
 import { dataDir } from '../config.js';
@@ -153,6 +153,43 @@ export async function processAttachment(attachmentId: number, opts: { force?: bo
   }
 }
 
+/**
+ * 「取得中（pending）」のまま止まっている添付をやり直す。
+ * 取得の途中でアプリが再起動・再デプロイされると pending のまま残り、一覧のどこにも出なくなるため、
+ * 起動時と定期ジョブで一定時間より前のものを拾って処理し直す。
+ */
+export async function requeueStuckAttachments(olderThanMinutes = 10): Promise<number> {
+  const threshold = new Date(Date.now() - olderThanMinutes * 60_000).toISOString();
+  const rows = db()
+    .select({ id: schema.attachments.id })
+    .from(schema.attachments)
+    .where(and(eq(schema.attachments.status, 'pending'), lt(schema.attachments.createdAt, threshold)))
+    .all();
+  for (const r of rows) {
+    await processAttachment(r.id).catch((err) => logger.warn({ err, attachmentId: r.id }, '取得中の添付の再処理に失敗'));
+  }
+  if (rows.length) logger.info({ count: rows.length }, '取得中のまま止まっていた添付を処理し直しました');
+  return rows.length;
+}
+
+/** 受信ファイルの件数（状態別・チャネル別）。一覧の絞り込みに件数を出して、どこに入ったか分かるようにする */
+export function attachmentSummary(): { byStatus: Record<string, number>; byChannel: Record<string, Record<string, number>> } {
+  const rows = db()
+    .select({ status: schema.attachments.status, channel: schema.messages.channel, n: sql<number>`count(*)` })
+    .from(schema.attachments)
+    .innerJoin(schema.messages, eq(schema.messages.id, schema.attachments.messageId))
+    .groupBy(schema.attachments.status, schema.messages.channel)
+    .all();
+  const byStatus: Record<string, number> = {};
+  const byChannel: Record<string, Record<string, number>> = {};
+  for (const r of rows) {
+    byStatus[r.status] = (byStatus[r.status] ?? 0) + Number(r.n);
+    byChannel[r.channel] ??= {};
+    byChannel[r.channel][r.status] = (byChannel[r.channel][r.status] ?? 0) + Number(r.n);
+  }
+  return { byStatus, byChannel };
+}
+
 /** 未振分ファイルを依頼者フォルダへ移動 */
 export async function assignAttachment(attachmentId: number, clientId: number): Promise<void> {
   const d = db();
@@ -305,7 +342,7 @@ export async function bulkAttachments(ids: number[], action: BulkAttachmentActio
         if (att.status === 'unassigned' && clientId) await assignAttachment(id, clientId);
         else await saveAttachment(id, clientId ?? null);
       } else if (action === 'retry') {
-        if (att.status !== 'failed') continue;
+        if (att.status !== 'failed' && att.status !== 'pending') continue;
         db().update(schema.attachments).set({ status: 'pending' }).where(eq(schema.attachments.id, id)).run();
         await processAttachment(id);
       }

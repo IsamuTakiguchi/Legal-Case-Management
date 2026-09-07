@@ -17,16 +17,23 @@ interface Att {
   message: { id: number; conversationId: number; channel: string; senderName: string | null; sentAt: string; body: string };
 }
 
-const STATUS_LABEL: Record<string, string> = { pending: '保存中', stored: '保存済', unassigned: '振り分け待ち', held: '未保存', failed: '失敗', ignored: '不要' };
+const STATUS_LABEL: Record<string, string> = { pending: '取得中', stored: '保存済', unassigned: '振り分け待ち', held: '未保存', failed: '失敗', ignored: '不要' };
 const STATUS_BADGE: Record<string, string> = { stored: 'badge-gray', failed: 'badge-chatwork', ignored: 'badge-gray', held: 'badge-blue', unassigned: 'badge-orange', pending: 'badge-orange' };
 
 export default function Files() {
   const qc = useQueryClient();
-  const TODO = 'held,unassigned,failed';
+  const TODO = 'held,unassigned,failed,pending';
   const [status, setStatus] = useState(TODO);
   const [channel, setChannel] = useState('');
   const list = useQuery({ queryKey: ['attachments', status, channel], queryFn: () => api.get<Att[]>(`/attachments?status=${status}&channel=${channel}`) });
   const clients = useQuery({ queryKey: ['clients'], queryFn: () => api.get<{ id: number; name: string }[]>('/clients') });
+  const summary = useQuery({ queryKey: ['attachments', 'summary'], queryFn: () => api.get<{ byStatus: Record<string, number>; byChannel: Record<string, Record<string, number>> }>('/attachments/summary'), refetchInterval: 30_000 });
+  // 絞り込み中のチャネルでの状態別件数（プルダウンに添えて、どこに入ったか分かるようにする）
+  const counts = (channel ? summary.data?.byChannel[channel] : summary.data?.byStatus) ?? {};
+  const cnt = (keys: string) => {
+    const n = keys ? keys.split(',').reduce((a, k) => a + (counts[k] ?? 0), 0) : Object.values(counts).reduce((a, b) => a + b, 0);
+    return summary.data ? `（${n}）` : '';
+  };
   const refresh = () => qc.invalidateQueries({ queryKey: ['attachments'] });
   const [msg, setMsg] = useState('');
   const assign = useMutation({ mutationFn: (v: { id: number; clientId: number }) => api.post(`/attachments/${v.id}/assign`, { clientId: v.clientId }), onSuccess: refresh, onError: (e) => setMsg((e as Error).message) });
@@ -70,13 +77,14 @@ export default function Files() {
           <option value="gmail">Gmail</option>
         </select>
         <select className="input w-auto" value={status} onChange={(e) => setStatus(e.target.value)}>
-          <option value={TODO}>要対応（未保存・振り分け待ち・失敗）</option>
-          <option value="held">未保存（保存するか選ぶ）</option>
-          <option value="unassigned">振り分け待ち</option>
-          <option value="failed">失敗</option>
-          <option value="stored">保存済</option>
-          <option value="ignored">不要にしたもの</option>
-          <option value="">すべて</option>
+          <option value={TODO}>要対応（未保存・振り分け待ち・失敗・取得中）{cnt(TODO)}</option>
+          <option value="held">未保存（保存するか選ぶ）{cnt('held')}</option>
+          <option value="unassigned">振り分け待ち{cnt('unassigned')}</option>
+          <option value="failed">失敗{cnt('failed')}</option>
+          <option value="pending">取得中{cnt('pending')}</option>
+          <option value="stored">保存済{cnt('stored')}</option>
+          <option value="ignored">不要にしたもの{cnt('ignored')}</option>
+          <option value="">すべて{cnt('')}</option>
         </select>
       </div>
       {(status === 'held' || status === TODO) && (
@@ -161,6 +169,11 @@ export default function Files() {
                 </td>
                 <td className="px-3 py-2 text-xs text-slate-600">{a.storedPath}</td>
                 <td className="px-3 py-2">
+                  {a.status === 'pending' && (
+                    <button className="btn btn-sm" onClick={() => retry.mutate(a.id)} disabled={retry.isPending} title="取得が途中で止まっている場合に、もう一度取得します">
+                      再取得
+                    </button>
+                  )}
                   {(a.status === 'held' || a.status === 'unassigned' || a.status === 'failed') && (
                     <div className="flex flex-wrap items-center gap-1">
                       {a.status === 'held' && a.clientId && (
@@ -195,7 +208,9 @@ export default function Files() {
             {list.data?.length === 0 && (
               <tr>
                 <td colSpan={6} className="px-4 py-4 text-slate-500">
-                  {status === 'held' || status === TODO ? '対応が必要なファイルはありません（自動保存されたものは「保存済」にあります）' : 'ファイルはありません'}
+                  {status === 'held' || status === TODO
+                    ? `対応が必要なファイルはありません（自動保存されたものは「保存済」にあります${summary.data ? `。${channel ? channelLabel(channel) + 'の' : ''}保存済は ${counts.stored ?? 0} 件` : ''}）`
+                    : 'ファイルはありません'}
                 </td>
               </tr>
             )}
