@@ -4,6 +4,7 @@ import { proposeSlotsSchema, confirmSlotSchema, nextHearingInputSchema, EVENT_KI
 import { proposeSlots, confirmSlot, cancelSession, listSessions, findFreeSlots, extractChosenSlot } from '../services/scheduling.js';
 import { syncCalendar, checkPostEvents, resolveNextHearing, listCourtDocs, upcomingEvents, relinkEvent, listCalendarEvents, createCalendarEvent, editCalendarEvent, removeCalendarEvent, createHoldSet, confirmHold, cancelHoldSet } from '../services/court.js';
 import { createZoomMeeting } from '../integrations/zoom.js';
+import { extractScheduleFromConversation, registerScheduleFromConversation } from '../services/scheduleExtract.js';
 import { db, schema } from '../db/index.js';
 import { eq } from 'drizzle-orm';
 
@@ -31,6 +32,25 @@ schedulingRoutes.post('/scheduling/:id/extract-choice', async (c) => {
 schedulingRoutes.get('/scheduling', (c) => {
   const q = c.req.query();
   return c.json(listSessions({ conversationId: q.conversationId ? Number(q.conversationId) : undefined, clientId: q.clientId ? Number(q.clientId) : undefined, state: q.state || undefined }));
+});
+
+/** 会話のやり取りから日程を読み取る（AI） */
+schedulingRoutes.post('/conversations/:id/schedule/extract', async (c) => c.json(await extractScheduleFromConversation(Number(c.req.param('id')))));
+
+/** 読み取った（修正済みの）日程をカレンダーに登録 */
+schedulingRoutes.post('/conversations/:id/schedule/register', async (c) => {
+  const body = z
+    .object({
+      mode: z.enum(['confirmed', 'holds']),
+      title: z.string().min(1),
+      kind: z.enum(EVENT_KINDS).default('meeting'),
+      slots: z.array(z.object({ startAt: z.string(), endAt: z.string() })).min(1).max(10),
+      location: z.string().nullable().optional(),
+      description: z.string().nullable().optional(),
+      caseId: z.number().int().nullable().optional(),
+    })
+    .parse(await c.req.json());
+  return c.json(await registerScheduleFromConversation(Number(c.req.param('id')), body));
 });
 
 /** 単独で Zoom を発行（既存の予定に追加する用途） */

@@ -370,6 +370,36 @@ describe('複数候補の仮押さえ', () => {
   });
 });
 
+describe('会話からの予定登録', () => {
+  it('確定なら 1 件を依頼者・進行中の事件に紐付けて登録し、候補なら仮押さえにする', async () => {
+    const { registerScheduleFromConversation } = await import('../services/scheduleExtract.js');
+    const client = db().insert(schema.clients).values({ name: '会話 花子', kana: 'かいわ はなこ' }).returning().get();
+    const kase = db().insert(schema.cases).values({ clientId: client.id, title: '会話テスト事件', caseType: 'civil', status: 'active' }).returning().get();
+    const now = new Date().toISOString();
+    const conv = db().insert(schema.conversations).values({ channel: 'line', externalThreadId: 'sched-1', clientId: client.id, counterpartName: '会話 花子', lastMessageAt: now, lastInboundAt: now }).returning().get();
+    const start = new Date(Date.now() + 2 * 86400_000);
+    const r = await registerScheduleFromConversation(conv.id, { mode: 'confirmed', title: '会話 打合せ', kind: 'meeting', slots: [{ startAt: start.toISOString(), endAt: new Date(start.getTime() + 3600_000).toISOString() }], location: '事務所' });
+    expect(r.mode).toBe('confirmed');
+    expect(r.events[0].clientId).toBe(client.id);
+    expect(r.events[0].caseId).toBe(kase.id);
+    expect(r.events[0].status).toBe('confirmed');
+    expect(r.events[0].description).toContain(`受信箱 #${conv.id}`);
+
+    const r2 = await registerScheduleFromConversation(conv.id, { mode: 'holds', title: '会話 打合せ', kind: 'meeting', slots: [{ startAt: start.toISOString(), endAt: new Date(start.getTime() + 3600_000).toISOString() }, { startAt: new Date(start.getTime() + 86400_000).toISOString(), endAt: new Date(start.getTime() + 86400_000 + 3600_000).toISOString() }] });
+    expect(r2.mode).toBe('holds');
+    expect(r2.events.length).toBe(2);
+    expect(r2.events[0].title).toBe('会話 打合せ 仮');
+    expect(r2.events[0].status).toBe('tentative');
+
+    const ids = [r.events[0].id, ...r2.events.map((e) => e.id)];
+    db().delete(schema.calendarEvents).where(inArray(schema.calendarEvents.id, ids)).run();
+    if (r2.mode === 'holds') db().delete(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, r2.sessionId)).run();
+    db().delete(schema.conversations).where(eq(schema.conversations.id, conv.id)).run();
+    db().delete(schema.cases).where(eq(schema.cases.id, kase.id)).run();
+    db().delete(schema.clients).where(eq(schema.clients.id, client.id)).run();
+  });
+});
+
 describe('受信箱の表示範囲', () => {
   it('inboundOnly なら自分の送信だけの会話を除く', async () => {
     const { listConversations } = await import('../services/inbox.js');

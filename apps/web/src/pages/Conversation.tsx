@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
-import { channelBadge, channelLabel, fmtDateTime, fmtBytes, fromLocalInput, todayLocalInput } from '../lib/format';
-import { SCHEDULING_KINDS } from '@lcm/shared';
+import { channelBadge, channelLabel, fmtDateTime, fmtBytes, fromLocalInput, toLocalInput, todayLocalInput } from '../lib/format';
+import { SCHEDULING_KINDS, EVENT_KIND_LABEL, type EventKind } from '@lcm/shared';
 
 interface Attachment {
   id: number;
@@ -75,6 +75,7 @@ export default function Conversation() {
   const [driveFiles, setDriveFiles] = useState<DriveFile[]>([]);
   const [showFiles, setShowFiles] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
+  const [showExtract, setShowExtract] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [linkClientId, setLinkClientId] = useState('');
 
@@ -306,6 +307,9 @@ export default function Conversation() {
             <button className="btn btn-sm" onClick={() => setShowSchedule(!showSchedule)}>
               📅 日程調整
             </button>
+            <button className="btn btn-sm" onClick={() => setShowExtract(!showExtract)} title="やり取りから日時を読み取ってカレンダーに登録します">
+              🗓 会話から予定を登録
+            </button>
             <button className="btn btn-sm" onClick={() => judge.mutate()} disabled={!text || judge.isPending}>
               返信待ちになる？
             </button>
@@ -332,6 +336,7 @@ export default function Conversation() {
             </div>
           )}
           {showSchedule && <SchedulePanel conversationId={c.id} onText={(t) => setText((prev) => (prev ? `${prev}\n\n${t}` : t))} onDone={invalidate} />}
+          {showExtract && <ExtractSchedulePanel conversationId={c.id} cases={c.cases} onDone={invalidate} />}
         </div>
       </div>
 
@@ -567,6 +572,181 @@ function TaskMini({ conversationId, clientId }: { conversationId: number; client
           追加
         </button>
       </div>
+    </div>
+  );
+}
+
+interface Extracted {
+  status: 'confirmed' | 'candidates' | 'none';
+  content: string;
+  kind: 'meeting' | 'consult' | 'hearing';
+  web: boolean;
+  durationMinutes: number;
+  location: string | null;
+  slots: { startAt: string; endAt: string; timeKnown: boolean; quote: string; by: 'counterpart' | 'me' }[];
+  note: string;
+  clientId: number | null;
+  clientName: string | null;
+  counterpartName: string;
+  title: string;
+}
+
+/** 会話のやり取りから日程を読み取り、確認してカレンダーに登録 */
+function ExtractSchedulePanel({ conversationId, cases, onDone }: { conversationId: number; cases: { id: number; title: string }[]; onDone: () => void }) {
+  const [res, setRes] = useState<Extracted | null>(null);
+  const [mode, setMode] = useState<'confirmed' | 'holds'>('confirmed');
+  const [title, setTitle] = useState('');
+  const [kind, setKind] = useState<EventKind>('meeting');
+  const [duration, setDuration] = useState(60);
+  const [location, setLocation] = useState('');
+  const [caseId, setCaseId] = useState('');
+  const [slots, setSlots] = useState<{ start: string; quote?: string; timeKnown?: boolean }[]>([]);
+  const [err, setErr] = useState('');
+  const [done, setDone] = useState('');
+  const extract = useMutation({
+    mutationFn: () => api.post<Extracted>(`/conversations/${conversationId}/schedule/extract`),
+    onSuccess: (r) => {
+      setRes(r);
+      setErr('');
+      setDone('');
+      setMode(r.status === 'confirmed' || r.slots.length <= 1 ? 'confirmed' : 'holds');
+      setTitle(r.title);
+      setKind(r.kind);
+      setDuration(r.durationMinutes);
+      setLocation(r.location ?? (r.web ? 'WEB会議' : ''));
+      setCaseId(cases[0] ? String(cases[0].id) : '');
+      setSlots(r.slots.map((s) => ({ start: toLocalInput(s.startAt), quote: s.quote, timeKnown: s.timeKnown })));
+    },
+    onError: (e) => {
+      // AI が使えないときも手入力で登録できるように空の結果を出す
+      setErr(`読み取りに失敗しました: ${(e as Error).message}`);
+      if (!res) {
+        setRes({ status: 'none', content: '打合せ', kind: 'meeting', web: false, durationMinutes: 60, location: null, slots: [], note: '', clientId: null, clientName: null, counterpartName: '', title: '' });
+        setSlots([{ start: todayLocalInput(10) }]);
+      }
+    },
+  });
+  const register = useMutation({
+    mutationFn: () =>
+      api.post<{ mode: string; events: { id: number }[] }>(`/conversations/${conversationId}/schedule/register`, {
+        mode,
+        title: mode === 'holds' ? title.replace(/\s*仮$/, '') : title,
+        kind,
+        caseId: caseId ? Number(caseId) : null,
+        location: location || null,
+        slots: (mode === 'confirmed' ? slots.slice(0, 1) : slots)
+          .filter((s) => s.start)
+          .map((s) => {
+            const start = new Date(fromLocalInput(s.start));
+            return { startAt: start.toISOString(), endAt: new Date(start.getTime() + Math.max(15, duration) * 60_000).toISOString() };
+          }),
+      }),
+    onSuccess: (r) => {
+      setDone(r.mode === 'confirmed' ? 'カレンダーに登録しました' : `${r.events.length} 件を仮押さえしました。確定したら「予定」画面の「この候補で確定」を押してください`);
+      setErr('');
+      onDone();
+    },
+    onError: (e) => setErr((e as Error).message),
+  });
+  useEffect(() => {
+    if (!res && !extract.isPending) extract.mutate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return (
+    <div className="rounded border border-slate-200 p-3 text-sm">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="font-semibold">会話から予定を登録</span>
+        <button className="btn btn-sm ml-auto" onClick={() => extract.mutate()} disabled={extract.isPending}>
+          {extract.isPending ? '読み取り中…' : '読み取り直す'}
+        </button>
+      </div>
+      {extract.isPending && !res && <div className="text-slate-500">やり取りから日時を読み取っています…</div>}
+      {err && <div className="mb-2 text-red-600">{err}</div>}
+      {done && (
+        <div className="mb-2 text-green-700">
+          {done}{' '}
+          <Link to="/calendar" className="text-blue-700 underline">
+            予定を開く
+          </Link>
+        </div>
+      )}
+      {res && !done && (
+        <div className="space-y-2">
+          <div className="rounded bg-slate-50 p-2 text-xs text-slate-600">
+            {res.status === 'none' ? '日程に関するやり取りは見つかりませんでした。下で手入力もできます。' : res.status === 'confirmed' ? '日時は確定しているようです。' : '候補が挙がっていますが未確定のようです。仮押さえとして登録できます。'} {res.note}
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="flex items-center gap-1">
+              <input type="radio" checked={mode === 'confirmed'} onChange={() => setMode('confirmed')} /> 確定として登録（1 件）
+            </label>
+            <label className="flex items-center gap-1">
+              <input type="radio" checked={mode === 'holds'} onChange={() => setMode('holds')} /> 候補を仮押さえ（{slots.filter((s) => s.start).length} 件）
+            </label>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            <div className="md:col-span-2">
+              <label className="label">件名{mode === 'holds' && '（末尾に「仮」が付きます）'}</label>
+              <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">種別</label>
+              <select className="input" value={kind} onChange={(e) => setKind(e.target.value as EventKind)}>
+                {(['meeting', 'consult', 'hearing', 'other'] as EventKind[]).map((k) => (
+                  <option key={k} value={k}>
+                    {EVENT_KIND_LABEL[k]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">所要時間（分）</label>
+              <input type="number" className="input" min={15} step={15} value={duration} onChange={(e) => setDuration(Number(e.target.value))} />
+            </div>
+            <div>
+              <label className="label">場所</label>
+              <input className="input" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="事務所 / Zoom など" />
+            </div>
+            {cases.length > 0 && (
+              <div>
+                <label className="label">事件</label>
+                <select className="input" value={caseId} onChange={(e) => setCaseId(e.target.value)}>
+                  <option value="">（なし）</option>
+                  {cases.map((k) => (
+                    <option key={k.id} value={k.id}>
+                      {k.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div className="md:col-span-2">
+              <label className="label">{mode === 'confirmed' ? '日時（先頭の 1 件を使います）' : '候補日時'}</label>
+              <div className="space-y-1">
+                {slots.map((s, i) => (
+                  <div key={i} className={`flex flex-wrap items-center gap-2 ${mode === 'confirmed' && i > 0 ? 'opacity-50' : ''}`}>
+                    <span className="w-5 text-xs text-slate-500">{i + 1}.</span>
+                    <input type="datetime-local" className="input w-auto" value={s.start} onChange={(e) => setSlots(slots.map((x, j) => (j === i ? { ...x, start: e.target.value } : x)))} />
+                    {s.timeKnown === false && <span className="badge badge-orange">時刻は仮</span>}
+                    {s.quote && <span className="min-w-0 truncate text-xs text-slate-500" title={s.quote}>「{s.quote}」</span>}
+                    <button type="button" className="btn btn-sm" onClick={() => setSlots(slots.filter((_, j) => j !== i))} aria-label="外す">
+                      ×
+                    </button>
+                  </div>
+                ))}
+                <button type="button" className="btn btn-sm" onClick={() => setSlots([...slots, { start: todayLocalInput(10) }])}>
+                  ＋ 日時を追加
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button className="btn btn-primary" onClick={() => register.mutate()} disabled={register.isPending || !title.trim() || slots.filter((s) => s.start).length === 0}>
+              {register.isPending ? '登録中…' : mode === 'confirmed' ? 'カレンダーに登録' : `${slots.filter((s) => s.start).length} 件を仮押さえ`}
+            </button>
+            <span className="text-xs text-slate-500">内容を確認してから押してください。Google 接続時は Google カレンダーにも登録されます。</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
