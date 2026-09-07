@@ -1,4 +1,4 @@
-import { eq, desc, and } from 'drizzle-orm';
+import { eq, desc, and, inArray } from 'drizzle-orm';
 import path from 'node:path';
 import fs from 'node:fs';
 import { dataDir } from '../config.js';
@@ -247,7 +247,10 @@ export async function retryFailedAttachments(): Promise<number> {
 export function listAttachments(filter: { status?: string; clientId?: number; channel?: string; limit?: number }) {
   const d = db();
   const conds = [];
-  if (filter.status) conds.push(eq(schema.attachments.status, filter.status));
+  if (filter.status) {
+    const list = filter.status.split(',').map((x) => x.trim()).filter(Boolean);
+    conds.push(list.length > 1 ? inArray(schema.attachments.status, list) : eq(schema.attachments.status, list[0]));
+  }
   if (filter.channel) conds.push(eq(schema.messages.channel, filter.channel));
   if (filter.clientId) conds.push(eq(schema.attachments.clientId, filter.clientId));
   const rows = d
@@ -312,4 +315,21 @@ export async function bulkAttachments(ids: number[], action: BulkAttachmentActio
     }
   }
   return { done, errors };
+}
+
+/** 以前の版で登録された「自分の送信メッセージの添付」を不要にする（一度だけ実行） */
+export async function ignoreOutboundAttachments(): Promise<number> {
+  const rows = db()
+    .select({ id: schema.attachments.id, status: schema.attachments.status })
+    .from(schema.attachments)
+    .innerJoin(schema.messages, eq(schema.messages.id, schema.attachments.messageId))
+    .where(and(eq(schema.messages.direction, 'out'), inArray(schema.attachments.status, ['held', 'unassigned', 'pending', 'failed'])))
+    .all();
+  let n = 0;
+  for (const r of rows) {
+    await ignoreAttachment(r.id).catch((err) => logger.warn({ err, id: r.id }, '送信添付の整理に失敗'));
+    n++;
+  }
+  if (n) logger.info({ n }, '自分の送信メッセージの添付を受信ファイルから外しました');
+  return n;
 }

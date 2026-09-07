@@ -22,7 +22,8 @@ const STATUS_BADGE: Record<string, string> = { stored: 'badge-gray', failed: 'ba
 
 export default function Files() {
   const qc = useQueryClient();
-  const [status, setStatus] = useState('held');
+  const TODO = 'held,unassigned,failed';
+  const [status, setStatus] = useState(TODO);
   const [channel, setChannel] = useState('');
   const list = useQuery({ queryKey: ['attachments', status, channel], queryFn: () => api.get<Att[]>(`/attachments?status=${status}&channel=${channel}`) });
   const clients = useQuery({ queryKey: ['clients'], queryFn: () => api.get<{ id: number; name: string }[]>('/clients') });
@@ -69,6 +70,7 @@ export default function Files() {
           <option value="gmail">Gmail</option>
         </select>
         <select className="input w-auto" value={status} onChange={(e) => setStatus(e.target.value)}>
+          <option value={TODO}>要対応（未保存・振り分け待ち・失敗）</option>
           <option value="held">未保存（保存するか選ぶ）</option>
           <option value="unassigned">振り分け待ち</option>
           <option value="failed">失敗</option>
@@ -77,7 +79,7 @@ export default function Files() {
           <option value="">すべて</option>
         </select>
       </div>
-      {status === 'held' && (
+      {(status === 'held' || status === TODO) && (
         <p className="text-xs text-slate-500">
           受信したままで OneDrive には保存していないファイルです。必要なものだけ「保存」を押してください（依頼者が分かっている会話なら、その依頼者の受領資料フォルダに入ります）。要らないものは「不要」で一覧から外れます。LINE の画像・ファイルは LINE 側の保持期間が短いため、受信時にアプリ内へ控えを取ってあります。設定 → 基本設定 → 「受信ファイルの扱い」で自動保存の範囲を変えられます。
         </p>
@@ -193,7 +195,7 @@ export default function Files() {
             {list.data?.length === 0 && (
               <tr>
                 <td colSpan={6} className="px-4 py-4 text-slate-500">
-                  {status === 'held' ? '未保存のファイルはありません' : 'ファイルはありません'}
+                  {status === 'held' || status === TODO ? '対応が必要なファイルはありません（自動保存されたものは「保存済」にあります）' : 'ファイルはありません'}
                 </td>
               </tr>
             )}
