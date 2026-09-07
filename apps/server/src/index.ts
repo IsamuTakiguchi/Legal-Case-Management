@@ -88,6 +88,9 @@ export function createApp() {
 }
 
 async function main() {
+  // 取りこぼした Promise の拒否や想定外の例外でプロセスを落とさず、ログに残す（落ちると Railway 側で 502 になる）
+  process.on('unhandledRejection', (err) => logger.error({ err }, '未処理の Promise 拒否'));
+  process.on('uncaughtException', (err) => logger.error({ err }, '想定外の例外'));
   const e = env();
   ensureDataDirSafe();
   openDatabase();

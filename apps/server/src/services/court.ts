@@ -355,20 +355,28 @@ export async function createHoldSet(input: HoldSetInput) {
     .get();
   const candidates: { startAt: string; endAt: string; eventId?: string }[] = [];
   const events = [];
-  for (const sl of sorted) {
-    const row = await createCalendarEvent({
-      title: titles.hold,
-      startAt: sl.startAt,
-      endAt: sl.endAt,
-      kind: 'hold',
-      clientId: client?.id ?? null,
-      caseId: input.caseId ?? null,
-      location: input.location ?? null,
-      description: [input.description ?? '', `日程調整中（アプリで管理: セッション ${session.id}）`].filter(Boolean).join('\n'),
-      tentative: true,
-    });
-    candidates.push({ startAt: row.startAt, endAt: row.endAt, eventId: row.googleEventId });
-    events.push(row);
+  try {
+    for (const sl of sorted) {
+      const row = await createCalendarEvent({
+        title: titles.hold,
+        startAt: sl.startAt,
+        endAt: sl.endAt,
+        kind: 'hold',
+        clientId: client?.id ?? null,
+        caseId: input.caseId ?? null,
+        location: input.location ?? null,
+        description: [input.description ?? '', `日程調整中（アプリで管理: セッション ${session.id}）`].filter(Boolean).join('\n'),
+        tentative: true,
+      });
+      candidates.push({ startAt: row.startAt, endAt: row.endAt, eventId: row.googleEventId });
+      events.push(row);
+    }
+  } catch (err) {
+    // 途中で失敗したら、作れた分を消してセッションも残さない（半端な仮押さえを残さない）
+    logger.warn({ err, sessionId: session.id, created: events.length }, '仮押さえの登録に失敗。作成済みの候補を取り消します');
+    for (const ev of events) await removeCalendarEvent(ev.id).catch(() => undefined);
+    db().delete(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, session.id)).run();
+    throw err;
   }
   db()
     .update(schema.schedulingSessions)
