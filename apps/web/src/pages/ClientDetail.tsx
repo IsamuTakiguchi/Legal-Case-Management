@@ -4,7 +4,7 @@ import { Link, useParams, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { channelBadge, channelLabel, fmtDateTime, fmtBytes } from '../lib/format';
 import { ClientForm, type ClientRow } from './Clients';
-import { EVENT_KIND_LABEL, TASK_STATUS_LABEL, type EventKind, type TaskStatus } from '@lcm/shared';
+import { EVENT_KIND_LABEL, TASK_STATUS_LABEL, type EventKind, type TaskStatus, CASE_STATUSES, CASE_STATUS_LABEL } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
 
 interface Detail extends ClientRow {
@@ -32,7 +32,7 @@ export default function ClientDetail() {
       qc.invalidateQueries({ queryKey: ['client', id] });
     },
   });
-  const [caseForm, setCaseForm] = useState({ title: '', caseType: 'general_civil', courtName: '', caseNumber: '' });
+  const [caseForm, setCaseForm] = useState({ title: '', caseType: 'general_civil', status: 'active', courtName: '', caseNumber: '' });
   const createCase = useMutation({
     mutationFn: () => api.post<{ id: number }>('/cases', { ...caseForm, clientId: Number(id) }),
     onSuccess: () => {
@@ -84,7 +84,14 @@ export default function ClientDetail() {
                 createCase.mutate();
               }}
             >
-              <input className="input md:col-span-2" placeholder="事件名（例: 山田 離婚調停）" required value={caseForm.title} onChange={(e) => setCaseForm({ ...caseForm, title: e.target.value })} />
+              <input className="input md:col-span-2" placeholder="事件名（例: 損害賠償請求（交通事故））" required value={caseForm.title} onChange={(e) => setCaseForm({ ...caseForm, title: e.target.value })} />
+              <select className="input" value={caseForm.status} onChange={(e) => setCaseForm({ ...caseForm, status: e.target.value })} aria-label="進捗区分">
+                {CASE_STATUSES.map((st) => (
+                  <option key={st} value={st}>
+                    {CASE_STATUS_LABEL[st]}
+                  </option>
+                ))}
+              </select>
               <select className="input" value={caseForm.caseType} onChange={(e) => setCaseForm({ ...caseForm, caseType: e.target.value })}>
                 {types.data?.map((t) => (
                   <option key={t.key} value={t.key}>

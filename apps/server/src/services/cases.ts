@@ -26,7 +26,9 @@ export function upsertCaseType(ct: { key: string; label: string; sortOrder?: num
 }
 
 export function createCase(input: CaseInput & { caseType?: string; stage?: string | null; policy?: string | null }): CaseRow {
-  return db()
+  const client = db().select({ id: schema.clients.id }).from(schema.clients).where(eq(schema.clients.id, input.clientId)).get();
+  if (!client) throw new Error('依頼者が見つかりません');
+  const row = db()
     .insert(schema.cases)
     .values({
       clientId: input.clientId,
@@ -40,6 +42,11 @@ export function createCase(input: CaseInput & { caseType?: string; stage?: strin
     })
     .returning()
     .get();
+  // 区分フォルダ運用なら、依頼者フォルダの区分をこの事件に合わせる（例: 終了事件しかなかった依頼者に進行事件が増えた）
+  setImmediate(() => {
+    syncClientFolderWithStatus(input.clientId, row.id).catch((err) => logger.warn({ err, caseId: row.id }, '依頼者フォルダの区分合わせに失敗'));
+  });
+  return row;
 }
 
 export function updateCase(id: number, patch: Partial<CaseInput & { caseType: string; stage: string | null; policy: string | null }>): CaseRow {
