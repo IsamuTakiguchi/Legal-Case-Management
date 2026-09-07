@@ -236,6 +236,30 @@ describe('受信ファイルの扱い', () => {
     db().delete(schema.clients).where(eq(schema.clients.id, client.id)).run();
   });
 
+  it('一括操作で不要・保存・再取得ができる', async () => {
+    const { processAttachment, bulkAttachments } = await import('../services/attachments.js');
+    const { setAdapter } = await import('../channels/registry.js');
+    setAdapter('chatwork', { channel: 'chatwork', isConfigured: () => true, fetchAttachment: async () => Buffer.from('CW'), send: async () => ({ externalId: 'x', externalThreadId: 'y', sentAt: new Date().toISOString() }) });
+    const now = new Date().toISOString();
+    const client = db().insert(schema.clients).values({ name: '一括太郎', kana: 'いっかつたろう' }).returning().get();
+    const conv = db().insert(schema.conversations).values({ channel: 'chatwork', externalThreadId: 'bulk-att', lastMessageAt: now, lastInboundAt: now }).returning().get();
+    const m = db().insert(schema.messages).values({ conversationId: conv.id, channel: 'chatwork', externalId: 'bulk-att-1', direction: 'in', sentAt: now }).returning().get();
+    const ids = [1, 2, 3].map((i) => db().insert(schema.attachments).values({ messageId: m.id, filename: `f${i}.pdf`, channelRef: { fileId: String(i) } }).returning().get().id);
+    for (const id of ids) await processAttachment(id);
+    const status = (id: number) => db().select().from(schema.attachments).where(eq(schema.attachments.id, id)).get()!.status;
+    expect(ids.map(status)).toEqual(['held', 'held', 'held']);
+    const r1 = await bulkAttachments([ids[0], ids[1]], 'ignore');
+    expect(r1.done).toBe(2);
+    expect(status(ids[0])).toBe('ignored');
+    const r2 = await bulkAttachments([ids[2], ids[0]], 'save', client.id);
+    expect(r2.done).toBe(1); // 不要にしたものは対象外
+    expect(status(ids[2])).toBe('stored');
+    db().delete(schema.attachments).where(inArray(schema.attachments.id, ids)).run();
+    db().delete(schema.messages).where(eq(schema.messages.id, m.id)).run();
+    db().delete(schema.conversations).where(eq(schema.conversations.id, conv.id)).run();
+    db().delete(schema.clients).where(eq(schema.clients.id, client.id)).run();
+  });
+
   it('LINE の添付は未保存でも受信時にアプリ内へ控えを取り、保存時はそこから使う', async () => {
     const { processAttachment, saveAttachment, fetchAttachmentData, listAttachments } = await import('../services/attachments.js');
     const { setAdapter } = await import('../channels/registry.js');

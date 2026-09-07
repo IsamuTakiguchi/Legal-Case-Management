@@ -283,3 +283,33 @@ export async function readClientFile(
 export function extOf(name: string): string {
   return path.extname(name).toLowerCase();
 }
+
+export type BulkAttachmentAction = 'ignore' | 'save' | 'retry';
+
+/** 受信ファイルの一括操作。1 件ずつ処理し、失敗した分はエラーを返す */
+export async function bulkAttachments(ids: number[], action: BulkAttachmentAction, clientId?: number | null): Promise<{ done: number; errors: { id: number; error: string }[] }> {
+  const errors: { id: number; error: string }[] = [];
+  let done = 0;
+  for (const id of ids) {
+    try {
+      const att = db().select().from(schema.attachments).where(eq(schema.attachments.id, id)).get();
+      if (!att) continue;
+      if (action === 'ignore') {
+        if (att.status === 'stored') continue; // 保存済みは対象外
+        await ignoreAttachment(id);
+      } else if (action === 'save') {
+        if (att.status === 'stored' || att.status === 'ignored') continue;
+        if (att.status === 'unassigned' && clientId) await assignAttachment(id, clientId);
+        else await saveAttachment(id, clientId ?? null);
+      } else if (action === 'retry') {
+        if (att.status !== 'failed') continue;
+        db().update(schema.attachments).set({ status: 'pending' }).where(eq(schema.attachments.id, id)).run();
+        await processAttachment(id);
+      }
+      done++;
+    } catch (err) {
+      errors.push({ id, error: String((err as Error).message ?? err) });
+    }
+  }
+  return { done, errors };
+}
