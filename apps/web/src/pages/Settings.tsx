@@ -314,6 +314,8 @@ export default function Settings() {
         </button>
       </section>
 
+      <StaffSection />
+
       <section className="card">
         <h2 className="mb-1 font-semibold">通知の文面</h2>
         <p className="mb-3 text-xs text-slate-500">Chatwork マイチャットに届く朝のダイジェストと要確認の通知の文面です。返信の催促文や期日報告は文体エンジンが作るため、ここでは変えません。</p>
@@ -486,5 +488,120 @@ function Conn({ ok, label, detail, children }: { ok: boolean; label: string; det
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2">{children}</div>
     </div>
+  );
+}
+
+/** 事務局メンバー（Chatwork で伝言をくれる内部スタッフ） */
+function StaffSection() {
+  const qc = useQueryClient();
+  const list = useQuery({ queryKey: ['staff', 'all'], queryFn: () => api.get<{ id: number; name: string; kana: string | null; chatworkAccountId: number | null; note: string | null; active: boolean }[]>('/staff?all=1') });
+  const [loadAccounts, setLoadAccounts] = useState(false);
+  const accounts = useQuery({ queryKey: ['staff-chatwork-accounts'], queryFn: () => api.get<{ accountId: number; name: string; rooms: string[] }[]>('/staff/chatwork-accounts'), enabled: loadAccounts, staleTime: 5 * 60_000 });
+  const [form, setForm] = useState({ name: '', kana: '', chatworkAccountId: '' });
+  const [msg, setMsg] = useState('');
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['staff'] });
+  };
+  const create = useMutation({
+    mutationFn: () => api.post('/staff', { name: form.name, kana: form.kana || null, chatworkAccountId: form.chatworkAccountId ? Number(form.chatworkAccountId) : null }),
+    onSuccess: () => {
+      setForm({ name: '', kana: '', chatworkAccountId: '' });
+      setMsg('');
+      refresh();
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
+  const update = useMutation({ mutationFn: (v: { id: number; patch: Record<string, unknown> }) => api.put(`/staff/${v.id}`, v.patch), onSuccess: refresh, onError: (e) => setMsg((e as Error).message) });
+  const remove = useMutation({ mutationFn: (id: number) => api.del(`/staff/${id}`), onSuccess: refresh, onError: (e) => setMsg((e as Error).message) });
+  const accountName = (id: number | null) => accounts.data?.find((a) => a.accountId === id)?.name;
+  return (
+    <section className="card">
+      <h2 className="mb-1 font-semibold">事務局メンバー</h2>
+      <p className="mb-3 text-xs text-slate-500">
+        Chatwork で伝言をくれる事務局の方を登録します。登録した人からのメッセージは「事務局」として扱い、依頼者の未紐付け警告を出しません。本文に依頼者名があれば、その依頼者・事件に自動で紐付けます。事件ごとの担当は事件ページの「担当事務局」で設定します。
+      </p>
+      <table className="mb-3 w-full text-sm">
+        <thead className="bg-slate-50 text-left text-xs text-slate-500">
+          <tr>
+            <th className="px-3 py-2">氏名</th>
+            <th className="px-3 py-2">かな</th>
+            <th className="px-3 py-2">Chatwork アカウント</th>
+            <th className="px-3 py-2">状態</th>
+            <th className="px-3 py-2"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {list.data?.map((st) => (
+            <tr key={st.id} className={`border-t border-slate-100 ${st.active ? '' : 'text-slate-400'}`}>
+              <td className="px-3 py-2">{st.name}</td>
+              <td className="px-3 py-2">{st.kana ?? ''}</td>
+              <td className="px-3 py-2">
+                {st.chatworkAccountId ? (
+                  <span>
+                    {accountName(st.chatworkAccountId) ?? ''} <span className="text-xs text-slate-400">#{st.chatworkAccountId}</span>
+                  </span>
+                ) : (
+                  <span className="text-xs text-orange-700">未設定（伝言の判定に使えません）</span>
+                )}
+              </td>
+              <td className="px-3 py-2">{st.active ? '有効' : '無効'}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-right">
+                <button className="btn btn-sm" onClick={() => update.mutate({ id: st.id, patch: { active: !st.active } })}>
+                  {st.active ? '無効にする' : '有効にする'}
+                </button>{' '}
+                <button className="btn btn-sm text-red-600" onClick={() => window.confirm(`${st.name} を削除しますか？（担当になっている事件の担当は外れます）`) && remove.mutate(st.id)}>
+                  削除
+                </button>
+              </td>
+            </tr>
+          ))}
+          {list.data?.length === 0 && (
+            <tr>
+              <td className="px-3 py-3 text-slate-500" colSpan={5}>
+                まだ登録がありません
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+      <form
+        className="flex flex-wrap items-end gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          create.mutate();
+        }}
+      >
+        <div>
+          <label className="label">氏名</label>
+          <input className="input w-40" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+        </div>
+        <div>
+          <label className="label">かな</label>
+          <input className="input w-36" value={form.kana} onChange={(e) => setForm({ ...form, kana: e.target.value })} />
+        </div>
+        <div>
+          <label className="label">Chatwork アカウント</label>
+          {loadAccounts ? (
+            <select className="input w-64" value={form.chatworkAccountId} onChange={(e) => setForm({ ...form, chatworkAccountId: e.target.value })}>
+              <option value="">{accounts.isLoading ? '読み込み中…' : '選択…'}</option>
+              {accounts.data?.map((a) => (
+                <option key={a.accountId} value={a.accountId}>
+                  {a.name}（{a.rooms.slice(0, 2).join('・')}）
+                </option>
+              ))}
+            </select>
+          ) : (
+            <button type="button" className="btn" onClick={() => setLoadAccounts(true)}>
+              Chatwork の参加ルームから候補を読み込む
+            </button>
+          )}
+        </div>
+        <button className="btn btn-primary" disabled={!form.name.trim() || create.isPending}>
+          追加
+        </button>
+      </form>
+      {accounts.isError && <div className="mt-1 text-xs text-red-600">Chatwork からメンバーを取得できませんでした（Chatwork が未接続か、権限がありません）</div>}
+      {msg && <div className="mt-2 text-xs text-red-600">{msg}</div>}
+    </section>
   );
 }

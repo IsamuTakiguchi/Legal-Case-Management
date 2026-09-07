@@ -464,6 +464,64 @@ describe('仮押さえの文字入力の読み取り', () => {
   });
 });
 
+describe('事務局メンバー（Chatwork）', () => {
+  it('事務局からの伝言は未紐付け警告を出さず、本文の依頼者名で紐付け、事件専用ルームは事件に紐付く', async () => {
+    const { createStaff, staffByChatworkAccount, guessClientFromText, deleteStaff } = await import('../services/staff.js');
+    const { ingestMessage, linkMessage } = await import('../services/inbox.js');
+    const { openAlerts } = await import('../services/alerts.js');
+    const { caseTimeline } = await import('../services/cases.js');
+    const staff = createStaff({ name: '事務 花子', kana: 'じむ はなこ', chatworkAccountId: 777001 });
+    expect(staffByChatworkAccount(777001)?.id).toBe(staff.id);
+    expect(staffByChatworkAccount(1)).toBeNull();
+
+    const client = db().insert(schema.clients).values({ name: '伝言 太郎', kana: 'でんごん たろう' }).returning().get();
+    const kase = db().insert(schema.cases).values({ clientId: client.id, title: '伝言テスト事件', caseType: 'civil', status: 'active', staffId: staff.id }).returning().get();
+    expect(guessClientFromText('伝言太郎さんから電話がありました')).toEqual({ clientId: client.id, caseId: kase.id });
+    expect(guessClientFromText('特に誰の話でもない')).toBeNull();
+
+    // 全体ルームからの伝言（事務局メンバー）
+    const before = openAlerts('unlinked_contact').length;
+    const r = await ingestMessage(
+      { channel: 'chatwork', externalThreadId: '90001', externalId: 'cw-staff-1', direction: 'in', sentAt: new Date().toISOString(), senderName: '事務 花子', senderAddress: '777001', body: '[To:1]先生 伝言 太郎さんから、来週の打合せを変更したいと電話がありました', attachments: [], identity: { channel: 'chatwork', chatworkRoomId: 90001, chatworkAccountId: 777001, displayName: '事務 花子' } },
+      { processAttachments: false },
+    );
+    expect(openAlerts('unlinked_contact').length).toBe(before);
+    expect((r.conversation.meta as { staff?: boolean }).staff).toBe(true);
+    expect(r.conversation.clientId).toBeNull();
+    expect(r.message.clientId).toBe(client.id);
+    expect(r.message.caseId).toBe(kase.id);
+    expect(caseTimeline(kase.id).some((i) => i.ref?.messageId === r.message.id && i.title.includes('伝言'))).toBe(true);
+
+    // 手動で紐付けを外す／付け直す
+    expect(linkMessage(r.message.id, { clientId: null }).caseId).toBeNull();
+    expect(linkMessage(r.message.id, { caseId: kase.id }).clientId).toBe(client.id);
+
+    // 事件専用ルーム
+    db().update(schema.cases).set({ chatworkRoomId: 90002 }).where(eq(schema.cases.id, kase.id)).run();
+    const r2 = await ingestMessage(
+      { channel: 'chatwork', externalThreadId: '90002', externalId: 'cw-room-1', direction: 'in', sentAt: new Date().toISOString(), senderName: '事務 花子', senderAddress: '777001', body: '書面を提出しました', attachments: [], identity: { channel: 'chatwork', chatworkRoomId: 90002, chatworkAccountId: 777001, displayName: '事務 花子' } },
+      { processAttachments: false },
+    );
+    expect(r2.conversation.clientId).toBe(client.id);
+    expect(r2.message.caseId).toBe(kase.id);
+
+    // 事務局でない相手からの受信は従来どおり未紐付けに
+    const r3 = await ingestMessage(
+      { channel: 'chatwork', externalThreadId: '90003', externalId: 'cw-other-1', direction: 'in', sentAt: new Date().toISOString(), senderName: '外部 次郎', senderAddress: '555', body: 'こんにちは', attachments: [], identity: { channel: 'chatwork', chatworkRoomId: 90003, chatworkAccountId: 555, displayName: '外部 次郎' } },
+      { processAttachments: false },
+    );
+    expect(openAlerts('unlinked_contact').length).toBe(before + 1);
+
+    const convIds = [r.conversation.id, r2.conversation.id, r3.conversation.id];
+    db().delete(schema.alerts).where(eq(schema.alerts.type, 'unlinked_contact')).run();
+    db().delete(schema.messages).where(inArray(schema.messages.conversationId, convIds)).run();
+    db().delete(schema.conversations).where(inArray(schema.conversations.id, convIds)).run();
+    deleteStaff(staff.id);
+    db().delete(schema.cases).where(eq(schema.cases.id, kase.id)).run();
+    db().delete(schema.clients).where(eq(schema.clients.id, client.id)).run();
+  });
+});
+
 describe('受信箱の表示範囲', () => {
   it('inboundOnly なら自分の送信だけの会話を除く', async () => {
     const { listConversations } = await import('../services/inbox.js');

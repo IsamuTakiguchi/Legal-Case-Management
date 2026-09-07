@@ -22,6 +22,7 @@ interface CaseRow {
   caseNumber: string | null;
   nextHearingAt: string | null;
   updatedAt: string;
+  staffName?: string | null;
 }
 
 const STATUS_BADGE: Record<string, string> = {
@@ -99,6 +100,7 @@ export default function Cases() {
               <th className="px-4 py-2">区分</th>
               <th className="px-4 py-2">{H('類型', 'type')}</th>
               <th className="px-4 py-2">段階</th>
+              <th className="px-4 py-2">担当事務局</th>
               <th className="px-4 py-2">{H('次回期日', 'hearing')}</th>
               <th className="px-4 py-2">{H('更新', 'updated')}</th>
             </tr>
@@ -125,13 +127,14 @@ export default function Cases() {
                   {c.hasCreditors && <span className="badge badge-blue ml-1">債権者</span>}
                 </td>
                 <td className="px-4 py-2 text-slate-600">{c.stage ?? ''}</td>
+                <td className="px-4 py-2 text-slate-600">{c.staffName ?? ''}</td>
                 <td className="px-4 py-2 text-slate-600">{c.nextHearingAt ? fmtDateTime(c.nextHearingAt) : <span className="text-slate-400">未定</span>}</td>
                 <td className="px-4 py-2 text-xs text-slate-500">{fmtRelative(c.updatedAt)}</td>
               </tr>
             ))}
             {all.data && rows.length === 0 && (
               <tr>
-                <td className="px-4 py-4 text-slate-500" colSpan={7}>
+                <td className="px-4 py-4 text-slate-500" colSpan={8}>
                   {q ? `「${q}」に一致する事件はありません${status ? `（${CASE_STATUS_LABEL[status as CaseStatus]}の中）` : ''}。` : status ? `「${CASE_STATUS_LABEL[status as CaseStatus]}」の事件はありません。` : '事件がありません。「＋ 新規事件」から追加してください。'}
                 </td>
               </tr>

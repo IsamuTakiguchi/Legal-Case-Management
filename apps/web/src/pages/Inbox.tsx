@@ -15,6 +15,7 @@ interface ConversationListItem {
   lastMessageAt: string | null;
   unread: number;
   needsReply: boolean;
+  staff?: boolean;
   lastMessage: { body: string; truncated?: boolean; direction: string; sentAt: string } | null;
 }
 
@@ -145,9 +146,10 @@ export default function Inbox() {
                     <span className={`min-w-0 truncate ${c.unread ? 'font-bold' : 'font-medium'}`}>{c.client?.name ?? c.counterpartName ?? c.counterpartAddress ?? '（不明）'}</span>
                     <span className="ml-auto shrink-0 whitespace-nowrap text-xs text-slate-400">{fmtRelative(c.lastMessageAt)}</span>
                   </div>
-                  {(!c.clientId || c.needsReply || c.unread > 0 || c.subject) && (
+                  {(!c.clientId || c.needsReply || c.unread > 0 || c.subject || c.staff) && (
                     <div className="mt-0.5 flex items-center gap-2">
-                      {!c.clientId && <span className="badge badge-orange shrink-0 whitespace-nowrap">未紐付け</span>}
+                      {c.staff && <span className="badge badge-gray shrink-0 whitespace-nowrap">事務局</span>}
+                      {!c.clientId && !c.staff && <span className="badge badge-orange shrink-0 whitespace-nowrap">未紐付け</span>}
                       {c.needsReply && <span className="badge badge-blue shrink-0 whitespace-nowrap">要返信</span>}
                       {c.unread > 0 && <span className="badge badge-blue shrink-0">{c.unread}</span>}
                       {c.subject && <span className="min-w-0 truncate text-xs text-slate-500">{c.subject}</span>}

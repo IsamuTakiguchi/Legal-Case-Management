@@ -35,6 +35,9 @@ interface CaseData {
   summary: string | null;
   summaryGeneratedAt: string | null;
   nextHearingAt: string | null;
+  staffId: number | null;
+  chatworkRoomId: number | null;
+  staff: { id: number; name: string } | null;
   notes: Note[];
   tasks: { id: number; title: string; status: string }[];
   events: { id: number; title: string; startAt: string; kind: string }[];
@@ -54,11 +57,19 @@ export default function CaseDetail() {
   const d = useQuery({ queryKey: ['case', id], queryFn: () => api.get<CaseData>(`/cases/${id}`) });
   const types = useQuery({ queryKey: ['case-types'], queryFn: () => api.get<{ key: string; label: string }[]>('/case-types') });
   const c = d.data;
-  const [form, setForm] = useState({ title: '', caseType: '', courtName: '', caseNumber: '', stage: '', policy: '', status: 'active' });
+  const [form, setForm] = useState({ title: '', caseType: '', courtName: '', caseNumber: '', stage: '', policy: '', status: 'active', staffId: '', chatworkRoomId: '' });
   useEffect(() => {
-    if (c) setForm({ title: c.title, caseType: c.caseType?.key ?? 'general_civil', courtName: c.courtName ?? '', caseNumber: c.caseNumber ?? '', stage: c.stage ?? '', policy: c.policy ?? '', status: c.status });
+    if (c) setForm({ title: c.title, caseType: c.caseType?.key ?? 'general_civil', courtName: c.courtName ?? '', caseNumber: c.caseNumber ?? '', stage: c.stage ?? '', policy: c.policy ?? '', status: c.status, staffId: c.staffId ? String(c.staffId) : '', chatworkRoomId: c.chatworkRoomId ? String(c.chatworkRoomId) : '' });
   }, [c]);
-  const save = useMutation({ mutationFn: () => api.put(`/cases/${id}`, form), onSuccess: () => qc.invalidateQueries({ queryKey: ['case', id] }) });
+  const staffList = useQuery({ queryKey: ['staff'], queryFn: () => api.get<{ id: number; name: string }[]>('/staff') });
+  const rooms = useQuery({ queryKey: ['chatwork-rooms'], queryFn: () => api.get<{ roomId: number; name: string; type: string }[]>('/chatwork/rooms'), staleTime: 5 * 60_000 });
+  const save = useMutation({
+    mutationFn: () => api.put(`/cases/${id}`, { ...form, staffId: form.staffId ? Number(form.staffId) : null, chatworkRoomId: form.chatworkRoomId ? Number(form.chatworkRoomId) : null }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['case', id] });
+      qc.invalidateQueries({ queryKey: ['cases'] });
+    },
+  });
   const summary = useMutation({ mutationFn: () => api.post(`/cases/${id}/summary`), onSuccess: () => qc.invalidateQueries({ queryKey: ['case', id] }) });
   if (!c) return <div className="text-slate-500">読み込み中…</div>;
   return (
@@ -122,6 +133,31 @@ export default function CaseDetail() {
                   </option>
                 ))}
               </select>
+              <div>
+                <label className="label">担当事務局</label>
+                <select className="input" value={form.staffId} onChange={(e) => setForm({ ...form, staffId: e.target.value })}>
+                  <option value="">（未設定）</option>
+                  {staffList.data?.map((st) => (
+                    <option key={st.id} value={st.id}>
+                      {st.name}
+                    </option>
+                  ))}
+                </select>
+                <div className="mt-0.5 text-xs text-slate-400">この事件から作る Chatwork タスクは担当者に振ります。メンバーは設定 → 事務局メンバーで登録</div>
+              </div>
+              <div>
+                <label className="label">事件専用の Chatwork ルーム</label>
+                <select className="input" value={form.chatworkRoomId} onChange={(e) => setForm({ ...form, chatworkRoomId: e.target.value })}>
+                  <option value="">（なし。全体ルームの伝言は本文の依頼者名で振り分け）</option>
+                  {rooms.data?.map((r) => (
+                    <option key={r.roomId} value={r.roomId}>
+                      {r.name}
+                    </option>
+                  ))}
+                  {form.chatworkRoomId && !rooms.data?.some((r) => String(r.roomId) === form.chatworkRoomId) && <option value={form.chatworkRoomId}>ルーム {form.chatworkRoomId}</option>}
+                </select>
+                <div className="mt-0.5 text-xs text-slate-400">このルームのメッセージはすべてこの事件の記録に入ります</div>
+              </div>
               <div>
                 <label className="label">方針メモ {c.policyUpdatedAt && <span className="font-normal text-slate-400">（更新 {fmtDate(c.policyUpdatedAt)}）</span>}</label>
                 <textarea className="input min-h-32" value={form.policy} onChange={(e) => setForm({ ...form, policy: e.target.value })} placeholder="今後の方針、争点、依頼者の希望など" />

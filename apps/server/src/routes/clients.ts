@@ -1,4 +1,7 @@
 import { Hono } from 'hono';
+import { listStaff, createStaff, updateStaff, deleteStaff, listChatworkAccounts } from '../services/staff.js';
+import { listRooms } from '../channels/chatwork.js';
+import { isConfigured } from '../config.js';
 import { z } from 'zod';
 import { eq, desc } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
@@ -130,8 +133,10 @@ clientRoutes.put('/case-types', async (c) => {
 // ---- 事件 ----
 clientRoutes.get('/cases', (c) => c.json(listCases({ clientId: c.req.query('clientId') ? Number(c.req.query('clientId')) : undefined, status: c.req.query('status') || undefined })));
 
+const caseExtra = { caseType: z.string().optional(), stage: z.string().optional().nullable(), policy: z.string().optional().nullable(), staffId: z.number().int().nullable().optional(), chatworkRoomId: z.number().int().nullable().optional() };
+
 clientRoutes.post('/cases', async (c) => {
-  const body = caseInputSchema.extend({ caseType: z.string().optional(), stage: z.string().optional().nullable(), policy: z.string().optional().nullable() }).parse(await c.req.json());
+  const body = caseInputSchema.extend(caseExtra).parse(await c.req.json());
   return c.json(createCase(body));
 });
 
@@ -143,8 +148,31 @@ clientRoutes.get('/cases/:id', (c) => {
 
 clientRoutes.get('/cases/:id/timeline', (c) => c.json(caseTimeline(Number(c.req.param('id')))));
 
+// ---- 事務局メンバー ----
+clientRoutes.get('/staff', (c) => c.json(listStaff({ includeInactive: c.req.query('all') === '1' })));
+clientRoutes.post('/staff', async (c) => {
+  const body = z.object({ name: z.string().min(1), kana: z.string().nullable().optional(), chatworkAccountId: z.number().int().nullable().optional(), note: z.string().nullable().optional() }).parse(await c.req.json());
+  return c.json(createStaff(body));
+});
+clientRoutes.put('/staff/:id', async (c) => {
+  const body = z.object({ name: z.string().min(1).optional(), kana: z.string().nullable().optional(), chatworkAccountId: z.number().int().nullable().optional(), note: z.string().nullable().optional(), active: z.boolean().optional() }).parse(await c.req.json());
+  return c.json(updateStaff(Number(c.req.param('id')), body));
+});
+clientRoutes.delete('/staff/:id', (c) => {
+  deleteStaff(Number(c.req.param('id')));
+  return c.json({ ok: true });
+});
+/** Chatwork の参加ルームのメンバー一覧（事務局メンバー登録の候補） */
+clientRoutes.get('/staff/chatwork-accounts', async (c) => c.json(await listChatworkAccounts()));
+/** Chatwork の参加ルーム一覧（事件専用ルームの指定用） */
+clientRoutes.get('/chatwork/rooms', async (c) => {
+  if (!isConfigured('chatwork')) return c.json([]);
+  const rooms = await listRooms();
+  return c.json(rooms.filter((r) => r.type !== 'my').map((r) => ({ roomId: r.room_id, name: r.name, type: r.type })));
+});
+
 clientRoutes.put('/cases/:id', async (c) => {
-  const body = caseInputSchema.partial().extend({ caseType: z.string().optional(), stage: z.string().optional().nullable(), policy: z.string().optional().nullable() }).parse(await c.req.json());
+  const body = caseInputSchema.partial().extend(caseExtra).parse(await c.req.json());
   return c.json(updateCase(Number(c.req.param('id')), body));
 });
 
