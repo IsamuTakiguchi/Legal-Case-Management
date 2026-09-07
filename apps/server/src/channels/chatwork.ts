@@ -258,18 +258,20 @@ export const chatworkAdapter: ChannelAdapter = {
 
 export const CHATWORK_FILE_LIMIT = 5 * 1024 * 1024;
 
-/** 本文が自分宛か（[To:自分] または [toall]） */
+/** 本文が自分宛か（[To:自分]、自分への返信 [rp aid=自分 ...]、または [toall]） */
 export function isAddressedToMe(body: string, myAccountId: number | null): boolean {
   if (/\[toall\]/i.test(body)) return true;
   if (myAccountId === null) return false;
-  return new RegExp(`\\[To:${myAccountId}\\]`).test(body);
+  if (new RegExp(`\\[To:${myAccountId}\\]`).test(body)) return true;
+  // 返信（re）: [rp aid=12345 to=roomid-messageid]
+  return new RegExp(`\\[rp aid=${myAccountId}\\b`).test(body);
 }
 
 export type ChatworkScope = 'all' | 'to_me';
 
 /**
  * 取込範囲の判定。
- * to_me のときは、自分宛の To・全員宛・ダイレクトチャット・自分に振られたタスクのメッセージだけ取り込む。
+ * to_me のときは、自分宛の To・自分への返信（re）・全員宛・ダイレクトチャット・自分に振られたタスクのメッセージだけ取り込む。
  * 自分の発言は、すでに取り込んでいる会話への返信として文脈が要るので、会話が存在する場合だけ取り込む。
  */
 export function chatworkInScope(

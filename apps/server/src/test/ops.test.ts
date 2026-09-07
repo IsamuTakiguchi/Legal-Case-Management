@@ -424,6 +424,9 @@ describe('Chatwork の取込範囲', () => {
     expect(isAddressedToMe('[To:12345]瀧口さん お願いします', me)).toBe(true);
     expect(isAddressedToMe('[To:123456]別の人', me)).toBe(false);
     expect(isAddressedToMe('[toall] 皆さん', me)).toBe(true);
+    // 自分のメッセージへの返信（re）
+    expect(isAddressedToMe('[rp aid=12345 to=1234567-9876543210]瀧口さん 承知しました', me)).toBe(true);
+    expect(isAddressedToMe('[rp aid=123456 to=1234567-9876543210]別の人への返信', me)).toBe(false);
     // all なら何でも取り込む
     expect(chatworkInScope('all', msg('雑談'), { myAccountId: me, roomType: 'group' })).toBe(true);
     // to_me
