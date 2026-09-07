@@ -242,8 +242,14 @@ export const caseNoteInputSchema = z.object({
   kind: z.enum(CASE_NOTE_KINDS).default('memo'),
   occurredAt: z.string().optional(),
   counterpart: z.string().optional().nullable(),
+  /** 電話の相手の番号 */
+  phone: z.string().optional().nullable(),
   rawText: z.string().default(''),
   gist: z.string().optional().nullable(),
+  /** 相手が言ったこと */
+  theirSaid: z.array(z.string()).default([]),
+  /** こちらが言ったこと */
+  ourSaid: z.array(z.string()).default([]),
   decisions: z.array(z.string()).default([]),
   nextActions: z.array(z.object({ title: z.string(), due: z.string().optional().nullable(), taskId: z.number().int().optional().nullable() })).default([]),
   waitingFor: z.enum(WAITING_FOR).optional().nullable(),

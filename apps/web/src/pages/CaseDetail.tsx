@@ -11,8 +11,11 @@ interface Note {
   kind: string;
   occurredAt: string;
   counterpart: string | null;
+  phone: string | null;
   rawText: string | null;
   gist: string | null;
+  theirSaid: string[];
+  ourSaid: string[];
   decisions: string[];
   nextActions: { title: string; due?: string | null; taskId?: number | null }[];
   waitingFor: string | null;
@@ -179,14 +182,23 @@ export default function CaseDetail() {
 function NoteComposer({ caseId, onSaved }: { caseId: number; onSaved: () => void }) {
   const [kind, setKind] = useState<CaseNoteKind>('phone');
   const [counterpart, setCounterpart] = useState('');
+  const [phone, setPhone] = useState('');
   const [occurredAt, setOccurredAt] = useState(toLocalInput(new Date().toISOString()));
   const [raw, setRaw] = useState('');
-  const [preview, setPreview] = useState<{ gist: string; decisions: string[]; nextActions: { title: string; due: string | null }[]; waitingFor: WaitingFor; counterpart: string | null } | null>(null);
+  const [theirSaid, setTheirSaid] = useState('');
+  const [ourSaid, setOurSaid] = useState('');
+  const [preview, setPreview] = useState<{ gist: string; theirSaid: string[]; ourSaid: string[]; phone: string | null; decisions: string[]; nextActions: { title: string; due: string | null }[]; waitingFor: WaitingFor; counterpart: string | null } | null>(null);
+  const lines = (t: string) => t.split(/\n/).map((x) => x.replace(/^[・\-\s]+/, '').trim()).filter(Boolean);
   const [createTasks, setCreateTasks] = useState(true);
   const [err, setErr] = useState('');
   const structure = useMutation({
-    mutationFn: () => api.post<typeof preview>(`/cases/${caseId}/notes/structure`, { rawText: raw, kind, counterpart: counterpart || null }),
-    onSuccess: (r) => setPreview(r),
+    mutationFn: () => api.post<NonNullable<typeof preview>>(`/cases/${caseId}/notes/structure`, { rawText: raw, kind, counterpart: counterpart || null, phone: phone || null }),
+    onSuccess: (r) => {
+      setPreview(r);
+      setTheirSaid(r.theirSaid.map((x) => `・${x}`).join('\n'));
+      setOurSaid(r.ourSaid.map((x) => `・${x}`).join('\n'));
+      if (!phone && r.phone) setPhone(r.phone);
+    },
     onError: (e) => setErr((e as Error).message),
   });
   const save = useMutation({
@@ -194,9 +206,12 @@ function NoteComposer({ caseId, onSaved }: { caseId: number; onSaved: () => void
       api.post(`/cases/${caseId}/notes`, {
         kind,
         counterpart: counterpart || preview?.counterpart || null,
+        phone: phone || preview?.phone || null,
         occurredAt: fromLocalInput(occurredAt),
         rawText: raw,
         gist: preview?.gist ?? null,
+        theirSaid: lines(theirSaid),
+        ourSaid: lines(ourSaid),
         decisions: preview?.decisions ?? [],
         nextActions: preview?.nextActions ?? [],
         waitingFor: preview?.waitingFor ?? null,
@@ -204,6 +219,9 @@ function NoteComposer({ caseId, onSaved }: { caseId: number; onSaved: () => void
       }),
     onSuccess: () => {
       setRaw('');
+      setTheirSaid('');
+      setOurSaid('');
+      setPhone('');
       setPreview(null);
       setErr('');
       onSaved();
@@ -222,12 +240,23 @@ function NoteComposer({ caseId, onSaved }: { caseId: number; onSaved: () => void
           ))}
         </select>
         <input className="input w-40" placeholder="相手（例: 相手方代理人）" value={counterpart} onChange={(e) => setCounterpart(e.target.value)} />
+        {kind === 'phone' && <input type="tel" className="input w-40" placeholder="電話番号" value={phone} onChange={(e) => setPhone(e.target.value)} />}
         <input type="datetime-local" className="input w-auto" value={occurredAt} onChange={(e) => setOccurredAt(e.target.value)} />
       </div>
       <textarea className="input min-h-28" placeholder="走り書きで OK。例: 相手方代理人から電話。和解案として300万を提示。依頼者に持ち帰り、来週金曜までに回答。証拠の追加提出は不要とのこと。" value={raw} onChange={(e) => setRaw(e.target.value)} />
+      <div className="grid gap-2 md:grid-cols-2">
+        <div>
+          <label className="label">相手が言ったこと（1 行 1 項目。AI 整理で自動入力、手で直せます）</label>
+          <textarea className="input min-h-20 text-sm" value={theirSaid} onChange={(e) => setTheirSaid(e.target.value)} placeholder="・和解案として 300 万円を提示&#10;・証拠の追加提出は不要" />
+        </div>
+        <div>
+          <label className="label">こちらが言ったこと</label>
+          <textarea className="input min-h-20 text-sm" value={ourSaid} onChange={(e) => setOurSaid(e.target.value)} placeholder="・依頼者に持ち帰って検討する&#10;・来週金曜までに回答する" />
+        </div>
+      </div>
       <div className="flex flex-wrap items-center gap-2">
         <button className="btn" onClick={() => structure.mutate()} disabled={!raw.trim() || structure.isPending}>
-          {structure.isPending ? '整理中…' : 'AI で要旨・決定事項・次のアクションに整理'}
+          {structure.isPending ? '整理中…' : 'AI で要旨・発言の整理・決定事項・次のアクションに整理'}
         </button>
         <label className="flex items-center gap-1 text-sm">
           <input type="checkbox" checked={createTasks} onChange={(e) => setCreateTasks(e.target.checked)} /> 次のアクションをタスク化
@@ -284,7 +313,34 @@ function NoteView({ n, onDeleted }: { n: Note; onDeleted: () => void }) {
           削除
         </button>
       </div>
+      {n.phone && (
+        <div className="text-xs text-slate-500">
+          ☎ <a href={`tel:${n.phone.replace(/[^\d+]/g, '')}`} className="hover:underline">{n.phone}</a>
+        </div>
+      )}
       <div className="mt-1 whitespace-pre-wrap">{n.gist ?? n.rawText}</div>
+      {(n.theirSaid.length > 0 || n.ourSaid.length > 0) && (
+        <div className="mt-2 grid gap-2 md:grid-cols-2">
+          <div className="rounded bg-slate-50 p-2">
+            <div className="mb-1 text-xs font-semibold text-slate-500">{n.counterpart ? `${n.counterpart}の発言` : '相手の発言'}</div>
+            {n.theirSaid.length === 0 && <div className="text-xs text-slate-400">（記録なし）</div>}
+            <ul className="ml-4 list-disc text-slate-700">
+              {n.theirSaid.map((t, i) => (
+                <li key={i}>{t}</li>
+              ))}
+            </ul>
+          </div>
+          <div className="rounded bg-blue-50 p-2">
+            <div className="mb-1 text-xs font-semibold text-slate-500">こちらの発言</div>
+            {n.ourSaid.length === 0 && <div className="text-xs text-slate-400">（記録なし）</div>}
+            <ul className="ml-4 list-disc text-slate-700">
+              {n.ourSaid.map((t, i) => (
+                <li key={i}>{t}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
       {n.decisions.length > 0 && <div className="mt-1 text-slate-700">決定: {n.decisions.join(' / ')}</div>}
       {n.nextActions.length > 0 && (
         <ul className="mt-1 ml-4 list-disc text-slate-700">

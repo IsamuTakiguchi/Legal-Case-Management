@@ -400,6 +400,21 @@ describe('会話からの予定登録', () => {
   });
 });
 
+describe('電話記録', () => {
+  it('電話番号と相手・こちらの発言を保存できる', async () => {
+    const { addCaseNote } = await import('../services/cases.js');
+    const client = db().insert(schema.clients).values({ name: '電話 太郎', kana: 'でんわ たろう' }).returning().get();
+    const kase = db().insert(schema.cases).values({ clientId: client.id, title: '電話テスト事件', caseType: 'civil', status: 'active' }).returning().get();
+    const row = await addCaseNote({ caseId: kase.id, kind: 'phone', counterpart: '相手方代理人', phone: '06-1234-5678', rawText: '和解案の提示あり', gist: null, theirSaid: ['和解案として300万円を提示', '証拠の追加提出は不要'], ourSaid: ['依頼者に持ち帰る'], decisions: [], nextActions: [], attachments: [] });
+    expect(row.phone).toBe('06-1234-5678');
+    expect(row.theirSaid).toEqual(['和解案として300万円を提示', '証拠の追加提出は不要']);
+    expect(row.ourSaid).toEqual(['依頼者に持ち帰る']);
+    db().delete(schema.caseNotes).where(eq(schema.caseNotes.id, row.id)).run();
+    db().delete(schema.cases).where(eq(schema.cases.id, kase.id)).run();
+    db().delete(schema.clients).where(eq(schema.clients.id, client.id)).run();
+  });
+});
+
 describe('受信箱の表示範囲', () => {
   it('inboundOnly なら自分の送信だけの会話を除く', async () => {
     const { listConversations } = await import('../services/inbox.js');

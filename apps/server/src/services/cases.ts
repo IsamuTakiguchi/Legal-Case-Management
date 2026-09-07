@@ -129,6 +129,9 @@ export function caseTimeline(id: number, limit = 200) {
 
 const phoneMemoSchema = z.object({
   gist: z.string().describe('要旨（2〜3 文）'),
+  theirSaid: z.array(z.string()).describe('相手が言ったこと・相手の主張や要望を、1 項目ずつ簡潔に。メモに無ければ空'),
+  ourSaid: z.array(z.string()).describe('こちら（弁護士側）が言ったこと・伝えたこと・回答を、1 項目ずつ簡潔に。メモに無ければ空'),
+  phone: z.string().nullable().describe('メモに電話番号があればそのまま（ハイフン付き）。無ければ null'),
   decisions: z.array(z.string()).describe('決定事項・合意事項'),
   nextActions: z.array(z.object({ title: z.string(), due: z.string().nullable().describe('期限 YYYY-MM-DD。不明なら null'), owner: z.enum(['self', 'client', 'counterpart', 'court', 'other']) })),
   waitingFor: z.enum(WAITING_FOR).describe('この後、誰の対応待ちになるか'),
@@ -136,11 +139,14 @@ const phoneMemoSchema = z.object({
 });
 
 /** 走り書きのメモを要旨・決定事項・次のアクションに整理 */
-export async function structureNote(rawText: string, ctx: { caseTitle?: string; clientName?: string; kind: string; counterpart?: string | null }) {
+export async function structureNote(rawText: string, ctx: { caseTitle?: string; clientName?: string; kind: string; counterpart?: string | null; phone?: string | null }) {
   const today = formatJaDateTime(new Date()).replace(/\d+時.*$/, '');
   return generateStructured({
-    system: '法律事務所の事務補助者として、弁護士の走り書きメモを整理します。事実の創作はせず、メモにある内容だけを使います。日付は今日を基準に解釈します。',
-    user: `今日: ${today}\n事件: ${ctx.caseTitle ?? '不明'}\n依頼者: ${ctx.clientName ?? '不明'}\n種別: ${ctx.kind}\n相手: ${ctx.counterpart ?? '（メモから判断）'}\n\nメモ:\n${rawText}`,
+    system: [
+      '法律事務所の事務補助者として、弁護士の走り書きメモを整理します。事実の創作はせず、メモにある内容だけを使います。日付は今日を基準に解釈します。',
+      '「相手が言ったこと」と「こちら（弁護士）が言ったこと」は必ず分けてください。「〜とのこと」「〜と言われた」「先方は〜」は相手の発言、「〜と伝えた」「〜と回答」「こちらからは〜」は自分の発言です。どちらか判然としない場合は文脈で判断し、決定事項と重複しても構いません。',
+    ].join('\n'),
+    user: `今日: ${today}\n事件: ${ctx.caseTitle ?? '不明'}\n依頼者: ${ctx.clientName ?? '不明'}\n種別: ${ctx.kind}\n相手: ${ctx.counterpart ?? '（メモから判断）'}\n電話番号: ${ctx.phone ?? '（メモから判断）'}\n\nメモ:\n${rawText}`,
     schema: phoneMemoSchema,
     effort: 'low',
     maxTokens: 2000,
@@ -156,13 +162,19 @@ export async function addCaseNote(input: CaseNoteInput, opts: { structure?: bool
   let nextActions = input.nextActions;
   let waitingFor = input.waitingFor ?? null;
   let counterpart = input.counterpart ?? null;
+  let phone = input.phone?.trim() || null;
+  let theirSaid = input.theirSaid;
+  let ourSaid = input.ourSaid;
   if (opts.structure && input.rawText.trim()) {
-    const s = await structureNote(input.rawText, { caseTitle: c.title, clientName: client?.name, kind: input.kind, counterpart });
+    const s = await structureNote(input.rawText, { caseTitle: c.title, clientName: client?.name, kind: input.kind, counterpart, phone });
     gist = s.gist;
     decisions = s.decisions;
     nextActions = s.nextActions.map((a) => ({ title: a.title, due: a.due }));
     waitingFor = s.waitingFor;
     counterpart = counterpart ?? s.counterpart ?? null;
+    phone = phone ?? s.phone ?? null;
+    theirSaid = s.theirSaid;
+    ourSaid = s.ourSaid;
   }
   const row = db()
     .insert(schema.caseNotes)
@@ -172,8 +184,11 @@ export async function addCaseNote(input: CaseNoteInput, opts: { structure?: bool
       kind: input.kind,
       occurredAt: input.occurredAt ?? new Date().toISOString(),
       counterpart,
+      phone,
       rawText: input.rawText,
       gist,
+      theirSaid,
+      ourSaid,
       decisions,
       nextActions,
       waitingFor,
