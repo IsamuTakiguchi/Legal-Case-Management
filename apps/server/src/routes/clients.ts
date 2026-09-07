@@ -156,10 +156,10 @@ clientRoutes.post('/cases/:id/summary', async (c) => {
 /** 電話メモなどの整理（保存前プレビュー） */
 clientRoutes.post('/cases/:id/notes/structure', async (c) => {
   const id = Number(c.req.param('id'));
-  const body = z.object({ rawText: z.string().min(1), kind: z.string().default('phone'), counterpart: z.string().optional().nullable() }).parse(await c.req.json());
+  const body = z.object({ rawText: z.string().min(1), kind: z.string().default('phone'), counterpart: z.string().optional().nullable(), phone: z.string().optional().nullable() }).parse(await c.req.json());
   const kase = getCase(id);
   if (!kase) return c.json({ error: 'not found' }, 404);
-  const r = await structureNote(body.rawText, { caseTitle: kase.title, clientName: kase.client?.name, kind: body.kind, counterpart: body.counterpart });
+  const r = await structureNote(body.rawText, { caseTitle: kase.title, clientName: kase.client?.name, kind: body.kind, counterpart: body.counterpart, phone: body.phone });
   return c.json(r);
 });
 

@@ -56,8 +56,14 @@ export const caseNotes = sqliteTable(
     kind: text('kind').notNull().default('memo'), // phone | meeting | court | memo | progress | policy
     occurredAt: text('occurred_at').notNull(),
     counterpart: text('counterpart'),
+    /** 電話の場合の相手の電話番号 */
+    phone: text('phone'),
     rawText: text('raw_text'),
     gist: text('gist'),
+    /** 相手が言ったこと */
+    theirSaid: text('their_said', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    /** こちらが言ったこと */
+    ourSaid: text('our_said', { mode: 'json' }).$type<string[]>().notNull().default([]),
     decisions: text('decisions', { mode: 'json' }).$type<string[]>().notNull().default([]),
     nextActions: text('next_actions', { mode: 'json' }).$type<{ title: string; due?: string | null; taskId?: number | null }[]>().notNull().default([]),
     waitingFor: text('waiting_for'),
