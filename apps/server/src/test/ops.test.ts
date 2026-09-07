@@ -301,6 +301,40 @@ describe('受信ファイルの扱い', () => {
     db().delete(schema.conversations).where(eq(schema.conversations.id, conv.id)).run();
     db().delete(schema.clients).where(eq(schema.clients.id, client.id)).run();
   });
+
+  it('取得中のまま止まった添付は再処理され、件数は状態別・チャネル別に数えられる', async () => {
+    const { processAttachment, requeueStuckAttachments, attachmentSummary } = await import('../services/attachments.js');
+    const { setAdapter } = await import('../channels/registry.js');
+    setAdapter('line', {
+      channel: 'line',
+      isConfigured: () => true,
+      fetchAttachment: async () => Buffer.from('LINE-PHOTO'),
+      send: async () => ({ externalId: 'x', externalThreadId: 'y', sentAt: new Date().toISOString() }),
+    });
+    const now = new Date().toISOString();
+    const old = new Date(Date.now() - 60 * 60_000).toISOString();
+    const conv = db().insert(schema.conversations).values({ channel: 'line', externalThreadId: 'line-stuck', lastMessageAt: now, lastInboundAt: now }).returning().get();
+    const m = db().insert(schema.messages).values({ conversationId: conv.id, channel: 'line', externalId: 'line-stuck-1', direction: 'in', sentAt: now, body: '[画像]' }).returning().get();
+    // 1 時間前に受信したまま pending（再起動で取得が途切れた想定）と、受信直後の pending
+    const stuck = db().insert(schema.attachments).values({ messageId: m.id, filename: 'image_stuck.jpg', mime: 'image/jpeg', channelRef: { messageId: 's1', type: 'image' }, createdAt: old }).returning().get();
+    const fresh = db().insert(schema.attachments).values({ messageId: m.id, filename: 'image_fresh.jpg', mime: 'image/jpeg', channelRef: { messageId: 's2', type: 'image' } }).returning().get();
+    expect(attachmentSummary().byChannel.line?.pending).toBeGreaterThanOrEqual(2);
+
+    const n = await requeueStuckAttachments(10);
+    expect(n).toBe(1); // 直後のものは触らない
+    const st = (id: number) => db().select().from(schema.attachments).where(eq(schema.attachments.id, id)).get()!.status;
+    expect(st(stuck.id)).toBe('held'); // 依頼者未紐付けなので控えを取って未保存に
+    expect(st(fresh.id)).toBe('pending');
+    const sum = attachmentSummary();
+    expect(sum.byChannel.line?.held).toBeGreaterThanOrEqual(1);
+    expect(sum.byStatus.held).toBeGreaterThanOrEqual(sum.byChannel.line?.held ?? 0);
+
+    await processAttachment(fresh.id);
+    expect(st(fresh.id)).toBe('held');
+    db().delete(schema.attachments).where(inArray(schema.attachments.id, [stuck.id, fresh.id])).run();
+    db().delete(schema.messages).where(eq(schema.messages.id, m.id)).run();
+    db().delete(schema.conversations).where(eq(schema.conversations.id, conv.id)).run();
+  });
 });
 
 describe('予定の登録・編集・削除', () => {

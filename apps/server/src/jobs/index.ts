@@ -14,7 +14,7 @@ import { ignoreOutboundAttachments } from '../services/attachments.js';
 import { getSyncState, setSyncState } from '../services/settings.js';
 import { indexForms } from '../services/forms.js';
 import { casesNeedingSummary, generateCaseSummary } from '../services/cases.js';
-import { retryFailedAttachments } from '../services/attachments.js';
+import { retryFailedAttachments, requeueStuckAttachments } from '../services/attachments.js';
 import { isGoogleConnected } from '../integrations/google.js';
 import { getSettingInt } from '../services/settings.js';
 import { refreshLineTokenIfNeeded } from '../services/lineSetup.js';
@@ -69,7 +69,7 @@ export const JOBS: JobDef[] = [
   { name: 'styleProfiles', label: '文体プロファイルの自動更新（チャネル別）', cron: '30 19 * * *', run: refreshStyleProfiles, enabled: () => isConfigured('anthropic') },
   { name: 'lineToken', label: 'LINE トークンの自動更新', cron: '15 18 * * *', run: refreshLineTokenIfNeeded, enabled: () => isConfigured('line') },
   { name: 'backup', label: 'バックアップ（OneDrive に世代保存）', cron: '0 18 * * *', run: runBackup, enabled: () => true },
-  { name: 'retryAttachments', label: '添付の再取得', cron: '40 */3 * * *', run: async () => ({ retried: await retryFailedAttachments() }), enabled: () => true },
+  { name: 'retryAttachments', label: '添付の再取得（失敗・取得中のまま止まったもの）', cron: '40 * * * *', run: async () => ({ requeued: await requeueStuckAttachments(), retried: await retryFailedAttachments() }), enabled: () => true },
 ];
 
 const scheduled: Cron[] = [];
@@ -83,6 +83,10 @@ export function startJobs() {
         .catch((err) => logger.warn({ err }, '送信添付の整理に失敗'));
     });
   }
+  // 再起動・再デプロイで取得の途中で止まった添付を拾い直す（起動直後は少し待つ）
+  setTimeout(() => {
+    requeueStuckAttachments(2).catch((err) => logger.warn({ err }, '取得中の添付の再処理に失敗'));
+  }, 15_000).unref();
   if (!env().JOBS_ENABLED) {
     logger.warn('JOBS_ENABLED=false のためジョブは起動しません');
     return;

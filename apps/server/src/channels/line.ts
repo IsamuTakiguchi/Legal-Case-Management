@@ -123,6 +123,30 @@ async function waitForContent(messageId: string): Promise<void> {
   }
 }
 
+/**
+ * 画像・ファイルの中身を取得する。受信直後はまだ用意できていないことがある（404）ほか、
+ * 混雑（429）や一時的なエラー（5xx）もあるので、少し待って数回まで取り直す。1 回の取得は 30 秒で打ち切る。
+ */
+export async function fetchLineContent(messageId: string, opts: { attempts?: number; waitMs?: number } = {}): Promise<Buffer> {
+  const attempts = opts.attempts ?? 4;
+  const waitMs = opts.waitMs ?? 1500;
+  let lastErr: unknown = null;
+  for (let i = 0; i < attempts; i++) {
+    if (i > 0) await new Promise((r) => setTimeout(r, waitMs * i));
+    try {
+      const res = await fetch(`${DATA_API}/message/${messageId}/content`, { headers: await authHeaders(), signal: AbortSignal.timeout(30_000) });
+      if (res.ok) return Buffer.from(await res.arrayBuffer());
+      const retryable = res.status === 404 || res.status === 429 || res.status >= 500;
+      lastErr = new Error(`LINE コンテンツ取得失敗 ${res.status}${res.status === 404 ? '（保存期間を過ぎたか、まだ用意できていません）' : res.status === 401 || res.status === 403 ? '（チャネルアクセストークンを確認してください）' : ''}`);
+      if (!retryable) throw lastErr;
+    } catch (err) {
+      lastErr = err;
+      // ネットワークエラー・タイムアウトも取り直す
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
 export interface LineSendResult extends SendResult {
   pushed: boolean;
 }
@@ -152,9 +176,7 @@ export const lineAdapter: ChannelAdapter = {
     }
     if (!ref.messageId) throw new Error('LINE 添付の参照情報がありません');
     if (ref.type === 'video' || ref.type === 'audio') await waitForContent(ref.messageId);
-    const res = await fetch(`${DATA_API}/message/${ref.messageId}/content`, { headers: await authHeaders() });
-    if (!res.ok) throw new Error(`LINE コンテンツ取得失敗 ${res.status}`);
-    return Buffer.from(await res.arrayBuffer());
+    return fetchLineContent(ref.messageId);
   },
   async send(opts) {
     // Messaging API はファイル送信不可: リンク文または手動送付案内を本文に付ける

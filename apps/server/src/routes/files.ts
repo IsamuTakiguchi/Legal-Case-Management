@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { streamSSE } from 'hono/streaming';
-import { listAttachments, assignAttachment, processAttachment, retryFailedAttachments, saveAttachment, ignoreAttachment, fetchAttachmentData, bulkAttachments } from '../services/attachments.js';
+import { listAttachments, assignAttachment, processAttachment, retryFailedAttachments, saveAttachment, ignoreAttachment, fetchAttachmentData, bulkAttachments, attachmentSummary, requeueStuckAttachments } from '../services/attachments.js';
 import { indexForms, searchForms, updateForm, formStats, draftFromForms } from '../services/forms.js';
 import { formDraftRequestSchema } from '@lcm/shared';
 import { storage } from '../integrations/storage.js';
@@ -9,6 +9,12 @@ import { db, schema } from '../db/index.js';
 import { eq } from 'drizzle-orm';
 
 export const fileRoutes = new Hono();
+
+/** 状態別・チャネル別の件数 */
+fileRoutes.get('/attachments/summary', (c) => c.json(attachmentSummary()));
+
+/** 取得中のまま止まっているものをすぐ処理し直す */
+fileRoutes.post('/attachments/requeue-stuck', async (c) => c.json({ requeued: await requeueStuckAttachments(0) }));
 
 fileRoutes.get('/attachments', (c) => {
   const q = c.req.query();
