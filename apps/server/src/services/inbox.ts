@@ -180,7 +180,7 @@ export function listConversations(filter: {
     return {
       ...r,
       client: r.clientId ? (byId.get(r.clientId) ?? null) : null,
-      lastMessage: last ? { body: last.body.slice(0, 120), direction: last.direction, sentAt: last.sentAt } : null,
+      lastMessage: last ? { body: last.body.slice(0, 600), truncated: last.body.length > 600, direction: last.direction, sentAt: last.sentAt } : null,
     };
   });
 }
