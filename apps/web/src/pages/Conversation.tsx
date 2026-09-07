@@ -162,7 +162,8 @@ export default function Conversation() {
 
   if (!c) return <div className="text-slate-500">読み込み中…</div>;
 
-  const name = c.client?.name ?? c.counterpartName ?? c.counterpartAddress ?? '（不明）';
+  // Chatwork のグループチャットは相手個人ではなくルーム（件名に保持）を会話名にする
+  const name = c.client?.name ?? (c.channel === 'chatwork' && c.subject ? c.subject : null) ?? c.counterpartName ?? c.counterpartAddress ?? '（不明）';
 
   return (
     <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
@@ -178,7 +179,7 @@ export default function Conversation() {
               依頼者ページ
             </Link>
           )}
-          {c.subject && <span className="text-sm text-slate-500">件名: {c.subject}</span>}
+          {c.subject && !(c.channel === 'chatwork' && !c.client) && <span className="text-sm text-slate-500">件名: {c.subject}</span>}
           <div className="ml-auto flex gap-2">
             <button className="btn btn-sm" onClick={() => toggle.mutate({ needsReply: !c.needsReply })}>
               {c.needsReply ? '対応済みにする' : '要返信にする'}

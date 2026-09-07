@@ -206,7 +206,7 @@ export function normalizeChatworkMessage(roomId: number, m: ChatworkMessage, myA
     externalId: m.message_id,
     direction: isMine ? 'out' : 'in',
     sentAt: new Date(m.send_time * 1000).toISOString(),
-    senderName: m.account.name,
+    senderName: m.account.name || null,
     senderAddress: String(m.account.account_id),
     body: stripChatworkMarkup(m.body),
     attachments: files.map((f) => ({ filename: f.filename, ref: { roomId, fileId: f.fileId } })),

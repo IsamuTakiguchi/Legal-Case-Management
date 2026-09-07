@@ -16,7 +16,7 @@ interface ConversationListItem {
   unread: number;
   needsReply: boolean;
   staff?: boolean;
-  lastMessage: { body: string; truncated?: boolean; direction: string; sentAt: string } | null;
+  lastMessage: { body: string; truncated?: boolean; direction: string; sentAt: string; senderName?: string | null } | null;
 }
 
 export default function Inbox() {
@@ -48,6 +48,16 @@ export default function Inbox() {
       else next.add(id);
       return next;
     });
+  // 行ごとの対応済み／アーカイブ（チェック不要）
+  const rowAction = useMutation({
+    mutationFn: (v: { id: number; action: 'resolve' | 'archive' | 'unarchive' }) => api.post<{ updated: number }>('/conversations/bulk', { ids: [v.id], action: v.action }),
+    onSuccess: (_r, v) => {
+      qc.invalidateQueries({ queryKey: ['conversations'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      setMsg(v.action === 'resolve' ? '対応済みにしました' : v.action === 'archive' ? 'アーカイブしました' : 'アーカイブを解除しました');
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
   const bulk = useMutation({
     mutationFn: (action: 'resolve' | 'archive' | 'unarchive' | 'read') => api.post<{ updated: number }>('/conversations/bulk', { ids: [...selected], action }),
     onSuccess: (r, action) => {
@@ -143,7 +153,7 @@ export default function Inbox() {
                     <span className="shrink-0 md:hidden">
                       <span className={channelBadge(c.channel)}>{channelLabel(c.channel)}</span>
                     </span>
-                    <span className={`min-w-0 truncate ${c.unread ? 'font-bold' : 'font-medium'}`}>{c.client?.name ?? c.counterpartName ?? c.counterpartAddress ?? '（不明）'}</span>
+                    <span className={`min-w-0 truncate ${c.unread ? 'font-bold' : 'font-medium'}`}>{c.client?.name ?? (c.channel === 'chatwork' && c.subject ? c.subject : null) ?? c.counterpartName ?? c.counterpartAddress ?? '（不明）'}</span>
                     <span className="ml-auto shrink-0 whitespace-nowrap text-xs text-slate-400">{fmtRelative(c.lastMessageAt)}</span>
                   </div>
                   {(!c.clientId || c.needsReply || c.unread > 0 || c.subject || c.staff) && (
@@ -152,12 +162,28 @@ export default function Inbox() {
                       {!c.clientId && !c.staff && <span className="badge badge-orange shrink-0 whitespace-nowrap">未紐付け</span>}
                       {c.needsReply && <span className="badge badge-blue shrink-0 whitespace-nowrap">要返信</span>}
                       {c.unread > 0 && <span className="badge badge-blue shrink-0">{c.unread}</span>}
-                      {c.subject && <span className="min-w-0 truncate text-xs text-slate-500">{c.subject}</span>}
+                      {c.subject && !(c.channel === 'chatwork' && !c.client) && <span className="min-w-0 truncate text-xs text-slate-500">{c.subject}</span>}
                     </div>
                   )}
-                  {c.lastMessage && <MessagePreview body={c.lastMessage.body} truncated={!!c.lastMessage.truncated} mine={c.lastMessage.direction === 'out'} />}
+                  {c.lastMessage && <MessagePreview body={c.lastMessage.body} truncated={!!c.lastMessage.truncated} mine={c.lastMessage.direction === 'out'} sender={c.channel === 'chatwork' && c.lastMessage.direction === 'in' ? c.lastMessage.senderName ?? null : null} />}
                 </div>
               </Link>
+              <div className="flex shrink-0 flex-col gap-1 self-center px-2 md:px-3">
+                {filter.archived !== '1' && c.needsReply && (
+                  <button type="button" className="btn btn-sm whitespace-nowrap" onClick={() => rowAction.mutate({ id: c.id, action: 'resolve' })} disabled={rowAction.isPending} title="要返信を外して既読にします">
+                    対応済み
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-sm whitespace-nowrap text-slate-600"
+                  onClick={() => rowAction.mutate({ id: c.id, action: filter.archived === '1' ? 'unarchive' : 'archive' })}
+                  disabled={rowAction.isPending}
+                  title={filter.archived === '1' ? 'アーカイブを解除して受信箱に戻します' : '受信箱から外します（「アーカイブ」で見られます）'}
+                >
+                  {filter.archived === '1' ? '解除' : 'アーカイブ'}
+                </button>
+              </div>
             </li>
           ))}
         </ul>
@@ -167,13 +193,14 @@ export default function Inbox() {
 }
 
 /** 最新メッセージの本文。短ければ全文、長文（目安 300 字 or 8 行超）は 4 行で折りたたみ「続きを表示」で開く */
-function MessagePreview({ body, truncated, mine }: { body: string; truncated: boolean; mine: boolean }) {
+function MessagePreview({ body, truncated, mine, sender }: { body: string; truncated: boolean; mine: boolean; sender?: string | null }) {
   const [open, setOpen] = useState(false);
   const long = body.length > 300 || body.split('\n').length > 8;
   return (
     <div className="text-sm text-slate-600">
       <div className={`whitespace-pre-wrap break-words ${long && !open ? 'line-clamp-4' : ''}`}>
         {mine && <span className="text-slate-400">自分: </span>}
+        {!mine && sender && <span className="text-slate-400">{sender}: </span>}
         {body}
         {open && truncated && <span className="text-slate-400">…（続きは会話を開いて確認）</span>}
       </div>
