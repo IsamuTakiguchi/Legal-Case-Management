@@ -20,6 +20,10 @@ interface Message {
   body: string;
   sentAt: string;
   attachments: Attachment[];
+  clientId?: number | null;
+  caseId?: number | null;
+  clientName?: string | null;
+  caseTitle?: string | null;
 }
 interface Conv {
   id: number;
@@ -30,6 +34,7 @@ interface Conv {
   clientId: number | null;
   needsReply: boolean;
   archived: boolean;
+  staff?: boolean;
   client: { id: number; name: string; onedriveFolderPath: string | null; preferredChannel: string | null } | null;
   cases: { id: number; title: string; summary: string | null }[];
   messages: Message[];
@@ -184,7 +189,13 @@ export default function Conversation() {
           </div>
         </div>
 
-        {!c.clientId && (
+        {c.staff && !c.clientId && (
+          <div className="card border-slate-200 bg-slate-50 text-sm text-slate-600">
+            <span className="badge badge-gray mr-2">事務局</span>
+            事務局メンバーからの伝言です。どの依頼者・事件の話かは、伝言ごとに「紐付け」で指定します（本文に依頼者名があれば自動で付きます）。「タスク化」でそのままタスクにできます。
+          </div>
+        )}
+        {!c.clientId && !c.staff && (
           <div className="card border-orange-200 bg-orange-50">
             <div className="mb-2 text-sm font-semibold text-orange-800">この連絡先はまだ依頼者に紐付いていません</div>
             <div className="flex flex-wrap items-center gap-2">
@@ -207,6 +218,7 @@ export default function Conversation() {
                   {m.direction === 'out' ? '自分' : (m.senderName ?? name)} ・ {fmtDateTime(m.sentAt)}
                 </div>
                 <div className="whitespace-pre-wrap break-words">{m.body}</div>
+                {c.channel === 'chatwork' && m.direction === 'in' && <MessageTools m={m} onChanged={invalidate} />}
                 {m.attachments.length > 0 && (
                   <ul className="mt-1 space-y-0.5">
                     {m.attachments.map((a) => (
@@ -729,6 +741,111 @@ function ExtractSchedulePanel({ conversationId, cases, onDone }: { conversationI
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** 事務局の伝言など、メッセージ単位の紐付けとタスク化 */
+function MessageTools({ m, onChanged }: { m: Message; onChanged: () => void }) {
+  const qc = useQueryClient();
+  const [mode, setMode] = useState<'link' | 'task' | null>(null);
+  const [clientId, setClientId] = useState(m.clientId ? String(m.clientId) : '');
+  const [caseId, setCaseId] = useState(m.caseId ? String(m.caseId) : '');
+  const [title, setTitle] = useState(m.body.split('\n').map((l) => l.trim()).find(Boolean)?.slice(0, 120) ?? '');
+  const [due, setDue] = useState('');
+  const [sync, setSync] = useState(false);
+  const [err, setErr] = useState('');
+  const cases = useQuery({ queryKey: ['cases', 'open'], queryFn: () => api.get<{ id: number; title: string; clientId: number; clientName: string }[]>('/cases?status=open'), enabled: mode === 'link' });
+  const caseOptions = (cases.data ?? []).filter((k) => !clientId || k.clientId === Number(clientId));
+  const link = useMutation({
+    mutationFn: () => api.put(`/messages/${m.id}/link`, { clientId: clientId ? Number(clientId) : null, caseId: caseId ? Number(caseId) : null }),
+    onSuccess: () => {
+      setMode(null);
+      setErr('');
+      onChanged();
+    },
+    onError: (e) => setErr((e as Error).message),
+  });
+  const task = useMutation({
+    mutationFn: () => api.post<{ id: number }>(`/messages/${m.id}/task`, { title, followUpAt: due ? fromLocalInput(`${due}T09:00`) : null, syncToChatwork: sync }),
+    onSuccess: () => {
+      setMode(null);
+      setErr('');
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+      onChanged();
+    },
+    onError: (e) => setErr((e as Error).message),
+  });
+  return (
+    <div className="mt-1 text-xs">
+      <div className="flex flex-wrap items-center gap-1 text-slate-500">
+        {m.clientId ? (
+          <span>
+            →{' '}
+            <Link to={`/clients/${m.clientId}`} className="text-blue-700 hover:underline">
+              {m.clientName ?? '依頼者'}
+            </Link>
+            {m.caseId && (
+              <>
+                {' / '}
+                <Link to={`/cases/${m.caseId}`} className="text-blue-700 hover:underline">
+                  {m.caseTitle ?? '事件'}
+                </Link>
+              </>
+            )}
+          </span>
+        ) : (
+          <span className="text-slate-400">依頼者の紐付けなし</span>
+        )}
+        <button type="button" className="rounded border border-slate-300 bg-white px-1.5 text-slate-700 hover:bg-slate-50" onClick={() => setMode(mode === 'link' ? null : 'link')}>
+          紐付け
+        </button>
+        <button type="button" className="rounded border border-slate-300 bg-white px-1.5 text-slate-700 hover:bg-slate-50" onClick={() => setMode(mode === 'task' ? null : 'task')}>
+          タスク化
+        </button>
+      </div>
+      {mode === 'link' && (
+        <div className="mt-1 flex flex-wrap items-center gap-1 rounded border border-slate-200 bg-white p-2">
+          <ClientPicker
+            value={clientId}
+            onChange={(v) => {
+              setClientId(v);
+              setCaseId('');
+            }}
+            emptyLabel="（依頼者なし）"
+            selectClassName="w-44"
+          />
+          <select className="input w-44" value={caseId} onChange={(e) => setCaseId(e.target.value)} aria-label="事件">
+            <option value="">（事件なし）</option>
+            {caseOptions.map((k) => (
+              <option key={k.id} value={k.id}>
+                {clientId ? k.title : `${k.clientName} / ${k.title}`}
+              </option>
+            ))}
+          </select>
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => link.mutate()} disabled={link.isPending}>
+            保存
+          </button>
+        </div>
+      )}
+      {mode === 'task' && (
+        <div className="mt-1 space-y-1 rounded border border-slate-200 bg-white p-2">
+          <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="タスク名" />
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-1">
+              期限 <input type="date" className="input w-auto py-0.5" value={due} onChange={(e) => setDue(e.target.value)} />
+            </label>
+            <label className="flex items-center gap-1">
+              <input type="checkbox" checked={sync} onChange={(e) => setSync(e.target.checked)} /> 担当事務局の Chatwork タスクにも登録
+            </label>
+            <button type="button" className="btn btn-primary btn-sm ml-auto" onClick={() => task.mutate()} disabled={!title.trim() || task.isPending}>
+              タスクを作る
+            </button>
+          </div>
+          <div className="text-slate-400">紐付いている依頼者・事件のタスクになります。Chatwork に登録する場合、事件に担当事務局と専用ルームが設定されていればその担当者に振ります。</div>
+        </div>
+      )}
+      {err && <div className="text-red-600">{err}</div>}
     </div>
   );
 }

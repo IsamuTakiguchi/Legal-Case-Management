@@ -5,6 +5,7 @@ import { findClientByIdentity, raiseUnlinkedContact } from './identity.js';
 import { processAttachment } from './attachments.js';
 import { logger } from '../logger.js';
 import { onInboundForTasks } from './tasks.js';
+import { staffByChatworkAccount, caseForChatworkRoom, guessClientFromText } from './staff.js';
 import { linkGmailMessageToCreditor } from './creditors.js';
 import { getSetting } from './settings.js';
 import { NON_PRIMARY_CATEGORIES, type GmailCategory } from '../channels/gmail.js';
@@ -25,8 +26,11 @@ export async function ingestMessage(
     .get();
   const counterpartName = m.direction === 'in' ? (m.senderName ?? m.identity.displayName ?? null) : (m.identity.displayName ?? null);
   const counterpartAddress = m.identity.email ?? m.identity.lineUserId ?? (m.identity.chatworkAccountId ? String(m.identity.chatworkAccountId) : null);
+  // Chatwork: 事務局メンバーからの伝言か／事件専用ルームか
+  const staff = m.channel === 'chatwork' && m.direction === 'in' ? staffByChatworkAccount(m.identity.chatworkAccountId) : null;
+  const roomCase = m.channel === 'chatwork' ? caseForChatworkRoom(m.identity.chatworkRoomId) : null;
   if (!conv) {
-    const client = findClientByIdentity(m.identity);
+    const client = findClientByIdentity(m.identity) ?? (roomCase ? (d.select().from(schema.clients).where(eq(schema.clients.id, roomCase.clientId)).get() ?? null) : null);
     conv = d
       .insert(schema.conversations)
       .values({
@@ -36,18 +40,36 @@ export async function ingestMessage(
         subject: m.subject ?? null,
         counterpartName,
         counterpartAddress,
-        meta: m.threadMeta ?? {},
+        meta: { ...(m.threadMeta ?? {}), ...(staff ? { staff: true } : {}) },
       })
       .returning()
       .get();
-    if (!client && m.direction === 'in') raiseUnlinkedContact(conv.id, m.identity, counterpartName);
+    if (!client && m.direction === 'in' && !staff) raiseUnlinkedContact(conv.id, m.identity, counterpartName);
   } else if (!conv.clientId) {
-    const client = findClientByIdentity(m.identity);
+    const client = findClientByIdentity(m.identity) ?? (roomCase ? (d.select().from(schema.clients).where(eq(schema.clients.id, roomCase.clientId)).get() ?? null) : null);
     if (client) {
       d.update(schema.conversations).set({ clientId: client.id }).where(eq(schema.conversations.id, conv.id)).run();
       conv = { ...conv, clientId: client.id };
-    } else if (m.direction === 'in') {
+    } else if (m.direction === 'in' && !staff) {
       raiseUnlinkedContact(conv.id, m.identity, counterpartName);
+    }
+  }
+  if (staff && !(conv.meta as { staff?: boolean }).staff) {
+    const meta = { ...(conv.meta as Record<string, unknown>), staff: true };
+    d.update(schema.conversations).set({ meta }).where(eq(schema.conversations.id, conv.id)).run();
+    conv = { ...conv, meta };
+  }
+  // メッセージ単位の紐付け: 事件専用ルームならその事件、事務局の伝言なら本文の依頼者名から推定
+  let msgClientId: number | null = null;
+  let msgCaseId: number | null = null;
+  if (roomCase) {
+    msgClientId = roomCase.clientId;
+    msgCaseId = roomCase.id;
+  } else if (staff) {
+    const g = guessClientFromText(m.body);
+    if (g) {
+      msgClientId = g.clientId;
+      msgCaseId = g.caseId;
     }
   }
 
@@ -70,6 +92,8 @@ export async function ingestMessage(
       body: m.body,
       sentAt: m.sentAt,
       raw: m.raw ?? null,
+      clientId: msgClientId,
+      caseId: msgCaseId,
       replyToken: m.replyToken ?? null,
       replyTokenAt: m.replyToken ? new Date().toISOString() : null,
     })
@@ -179,6 +203,7 @@ export function listConversations(filter: {
     const last = d.select().from(schema.messages).where(eq(schema.messages.conversationId, r.id)).orderBy(desc(schema.messages.sentAt)).limit(1).get();
     return {
       ...r,
+      staff: !!(r.meta as { staff?: boolean }).staff,
       client: r.clientId ? (byId.get(r.clientId) ?? null) : null,
       lastMessage: last ? { body: last.body.slice(0, 600), truncated: last.body.length > 600, direction: last.direction, sentAt: last.sentAt } : null,
     };
@@ -204,12 +229,48 @@ export function getConversation(id: number) {
   const atts = msgIds.length ? d.select().from(schema.attachments).where(inArray(schema.attachments.messageId, msgIds)).all() : [];
   const client = conv.clientId ? d.select().from(schema.clients).where(eq(schema.clients.id, conv.clientId)).get() : null;
   const cases = conv.clientId ? d.select().from(schema.cases).where(eq(schema.cases.clientId, conv.clientId)).all() : [];
+  const msgClientIds = [...new Set(messages.map((m) => m.clientId).filter((x): x is number => !!x))];
+  const msgCaseIds = [...new Set(messages.map((m) => m.caseId).filter((x): x is number => !!x))];
+  const msgClients = msgClientIds.length ? d.select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients).where(inArray(schema.clients.id, msgClientIds)).all() : [];
+  const msgCases = msgCaseIds.length ? d.select({ id: schema.cases.id, title: schema.cases.title }).from(schema.cases).where(inArray(schema.cases.id, msgCaseIds)).all() : [];
   return {
     ...conv,
+    staff: !!(conv.meta as { staff?: boolean }).staff,
     client: client ?? null,
     cases,
-    messages: messages.map((m) => ({ ...m, raw: undefined, attachments: atts.filter((a) => a.messageId === m.id) })),
+    messages: messages.map((m) => ({
+      ...m,
+      raw: undefined,
+      attachments: atts.filter((a) => a.messageId === m.id),
+      clientName: m.clientId ? (msgClients.find((c) => c.id === m.clientId)?.name ?? null) : null,
+      caseTitle: m.caseId ? (msgCases.find((c) => c.id === m.caseId)?.title ?? null) : null,
+    })),
   };
+}
+
+/** メッセージ単位の紐付け（事務局の伝言をどの依頼者・事件の話か指定する） */
+export function linkMessage(id: number, patch: { clientId?: number | null; caseId?: number | null }) {
+  const d = db();
+  const m = d.select().from(schema.messages).where(eq(schema.messages.id, id)).get();
+  if (!m) throw new Error('メッセージが見つかりません');
+  let clientId = m.clientId;
+  let caseId = m.caseId;
+  if (patch.caseId !== undefined) {
+    caseId = patch.caseId;
+    if (caseId) {
+      const c = d.select().from(schema.cases).where(eq(schema.cases.id, caseId)).get();
+      if (!c) throw new Error('事件が見つかりません');
+      clientId = c.clientId;
+    } else if (patch.clientId !== undefined) {
+      clientId = patch.clientId;
+    }
+  } else if (patch.clientId !== undefined) {
+    // 依頼者だけ変えた（または外した）ときは、事件の紐付けは付け直しになる
+    clientId = patch.clientId;
+    if (clientId !== m.clientId) caseId = null;
+  }
+  d.update(schema.messages).set({ clientId, caseId }).where(eq(schema.messages.id, id)).run();
+  return d.select().from(schema.messages).where(eq(schema.messages.id, id)).get()!;
 }
 
 export function markRead(id: number) {

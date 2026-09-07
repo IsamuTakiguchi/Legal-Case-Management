@@ -95,6 +95,16 @@ export async function listRooms(): Promise<ChatworkRoom[]> {
   return cw('/rooms');
 }
 
+export interface ChatworkMember {
+  account_id: number;
+  name: string;
+  role?: string;
+}
+
+export async function roomMembers(roomId: number): Promise<ChatworkMember[]> {
+  return cw(`/rooms/${roomId}/members`);
+}
+
 export async function myChatRoomId(): Promise<number | null> {
   const configured = env().CHATWORK_NOTIFY_ROOM_ID;
   if (configured) return Number(configured);

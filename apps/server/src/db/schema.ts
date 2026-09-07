@@ -43,8 +43,23 @@ export const cases = sqliteTable('cases', {
   summary: text('summary'),
   summaryGeneratedAt: text('summary_generated_at'),
   nextHearingAt: text('next_hearing_at'),
+  /** 担当事務局（staff_members） */
+  staffId: integer('staff_id'),
+  /** この事件専用の Chatwork グループチャット */
+  chatworkRoomId: integer('chatwork_room_id'),
   createdAt: text('created_at').notNull().default(now()),
   updatedAt: text('updated_at').notNull().default(now()),
+});
+
+/** 事務局メンバー（Chatwork で伝言をくれる内部スタッフ） */
+export const staffMembers = sqliteTable('staff_members', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  name: text('name').notNull(),
+  kana: text('kana'),
+  chatworkAccountId: integer('chatwork_account_id'),
+  note: text('note'),
+  active: integer('active', { mode: 'boolean' }).notNull().default(true),
+  createdAt: text('created_at').notNull().default(now()),
 });
 
 export const caseNotes = sqliteTable(
@@ -180,6 +195,9 @@ export const messages = sqliteTable(
     body: text('body').notNull().default(''),
     sentAt: text('sent_at').notNull(),
     raw: text('raw', { mode: 'json' }).$type<Record<string, unknown>>(),
+    /** メッセージ単位の紐付け（事務局からの伝言など、会話全体が 1 依頼者に属さない場合） */
+    clientId: integer('client_id').references(() => clients.id),
+    caseId: integer('case_id').references(() => cases.id),
     replyToken: text('reply_token'),
     replyTokenAt: text('reply_token_at'),
     draftId: integer('draft_id'),

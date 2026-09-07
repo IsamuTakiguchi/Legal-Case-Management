@@ -25,7 +25,7 @@ export function upsertCaseType(ct: { key: string; label: string; sortOrder?: num
   }
 }
 
-export function createCase(input: CaseInput & { caseType?: string; stage?: string | null; policy?: string | null }): CaseRow {
+export function createCase(input: CaseInput & { caseType?: string; stage?: string | null; policy?: string | null; staffId?: number | null; chatworkRoomId?: number | null }): CaseRow {
   const client = db().select({ id: schema.clients.id }).from(schema.clients).where(eq(schema.clients.id, input.clientId)).get();
   if (!client) throw new Error('依頼者が見つかりません');
   const row = db()
@@ -39,6 +39,8 @@ export function createCase(input: CaseInput & { caseType?: string; stage?: strin
       status: input.status,
       stage: input.stage ?? null,
       policy: input.policy ?? null,
+      staffId: input.staffId ?? null,
+      chatworkRoomId: input.chatworkRoomId ?? null,
     })
     .returning()
     .get();
@@ -49,12 +51,12 @@ export function createCase(input: CaseInput & { caseType?: string; stage?: strin
   return row;
 }
 
-export function updateCase(id: number, patch: Partial<CaseInput & { caseType: string; stage: string | null; policy: string | null }>): CaseRow {
+export function updateCase(id: number, patch: Partial<CaseInput & { caseType: string; stage: string | null; policy: string | null; staffId: number | null; chatworkRoomId: number | null }>): CaseRow {
   const cur = db().select().from(schema.cases).where(eq(schema.cases.id, id)).get();
   if (!cur) throw new Error('事件が見つかりません');
   const now = new Date().toISOString();
   const set: Partial<typeof schema.cases.$inferInsert> = { updatedAt: now };
-  for (const k of ['title', 'courtName', 'caseNumber', 'status', 'caseType', 'stage'] as const) {
+  for (const k of ['title', 'courtName', 'caseNumber', 'status', 'caseType', 'stage', 'staffId', 'chatworkRoomId'] as const) {
     if (patch[k] !== undefined) (set as Record<string, unknown>)[k] = patch[k] ?? null;
   }
   if (patch.policy !== undefined && patch.policy !== cur.policy) {
@@ -81,14 +83,15 @@ export function listCases(filter: { clientId?: number; status?: string }) {
   if (filter.status === 'open') conds.push(inArray(schema.cases.status, OPEN_CASE_STATUSES));
   else if (filter.status) conds.push(eq(schema.cases.status, filter.status));
   return db()
-    .select({ c: schema.cases, clientName: schema.clients.name, clientKana: schema.clients.kana, caseTypeLabel: schema.caseTypes.label, hasCreditors: schema.caseTypes.hasCreditors })
+    .select({ c: schema.cases, clientName: schema.clients.name, clientKana: schema.clients.kana, caseTypeLabel: schema.caseTypes.label, hasCreditors: schema.caseTypes.hasCreditors, staffName: schema.staffMembers.name })
     .from(schema.cases)
     .innerJoin(schema.clients, eq(schema.clients.id, schema.cases.clientId))
     .leftJoin(schema.caseTypes, eq(schema.caseTypes.key, schema.cases.caseType))
+    .leftJoin(schema.staffMembers, eq(schema.staffMembers.id, schema.cases.staffId))
     .where(conds.length ? and(...conds) : undefined)
     .orderBy(desc(schema.cases.updatedAt))
     .all()
-    .map((r) => ({ ...r.c, clientName: r.clientName, clientKana: r.clientKana, caseTypeLabel: r.caseTypeLabel ?? r.c.caseType, hasCreditors: !!r.hasCreditors }));
+    .map((r) => ({ ...r.c, clientName: r.clientName, clientKana: r.clientKana, caseTypeLabel: r.caseTypeLabel ?? r.c.caseType, hasCreditors: !!r.hasCreditors, staffName: r.staffName ?? null }));
 }
 
 export function getCase(id: number) {
@@ -100,7 +103,8 @@ export function getCase(id: number) {
   const tasks = db().select().from(schema.tasks).where(eq(schema.tasks.caseId, id)).orderBy(desc(schema.tasks.updatedAt)).all();
   const events = db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.caseId, id)).orderBy(desc(schema.calendarEvents.startAt)).all();
   const conversations = client ? db().select().from(schema.conversations).where(eq(schema.conversations.clientId, client.id)).orderBy(desc(schema.conversations.lastMessageAt)).all() : [];
-  return { ...c, client, caseType, notes, tasks, events, conversations };
+  const staff = c.staffId ? (db().select().from(schema.staffMembers).where(eq(schema.staffMembers.id, c.staffId)).get() ?? null) : null;
+  return { ...c, client, caseType, notes, tasks, events, conversations, staff };
 }
 
 /** タイムライン: ノート＋メッセージ＋カレンダー＋タスク完了を時系列に */
@@ -114,10 +118,18 @@ export function caseTimeline(id: number, limit = 200) {
   }
   const convs = db().select().from(schema.conversations).where(eq(schema.conversations.clientId, c.clientId)).all();
   const convIds = convs.map((x) => x.id);
+  const seen = new Set<number>();
+  const pushMsg = (m: typeof schema.messages.$inferSelect, tag = '') => {
+    if (seen.has(m.id)) return;
+    seen.add(m.id);
+    items.push({ at: m.sentAt, type: `message:${m.direction}`, title: `${m.direction === 'in' ? '受信' : '送信'}（${m.channel}）${m.senderName ? ` ${m.senderName}` : ''}${tag}`, body: m.body.slice(0, 200), ref: { conversationId: m.conversationId, messageId: m.id } });
+  };
   if (convIds.length) {
     const msgs = db().select().from(schema.messages).where(inArray(schema.messages.conversationId, convIds)).orderBy(desc(schema.messages.sentAt)).limit(limit).all();
-    for (const m of msgs) items.push({ at: m.sentAt, type: `message:${m.direction}`, title: `${m.direction === 'in' ? '受信' : '送信'}（${m.channel}）${m.senderName ? ` ${m.senderName}` : ''}`, body: m.body.slice(0, 200), ref: { conversationId: m.conversationId, messageId: m.id } });
+    for (const m of msgs) pushMsg(m);
   }
+  // 事務局の伝言など、メッセージ単位でこの事件に紐付いたもの
+  for (const m of db().select().from(schema.messages).where(eq(schema.messages.caseId, id)).orderBy(desc(schema.messages.sentAt)).limit(limit).all()) pushMsg(m, ' 伝言');
   for (const e of db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.caseId, id)).all()) {
     items.push({ at: e.startAt, type: `event:${e.kind}`, title: e.title, body: e.location, ref: { eventId: e.id } });
   }

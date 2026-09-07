@@ -150,11 +150,24 @@ export function checkOverdueWaitingTasks(): number {
 export async function syncTaskToChatwork(taskId: number): Promise<void> {
   const t = db().select().from(schema.tasks).where(eq(schema.tasks.id, taskId)).get();
   if (!t || t.chatworkTaskId) return;
-  const roomId = await cw.myChatRoomId();
-  if (!roomId) return;
   const me = await cw.chatworkMe();
+  // 事件に担当事務局と専用ルームがあれば、そのルームで担当者に振る。無ければ自分のマイチャットに自分宛
+  let roomId: number | null = null;
+  let assignee = me.account_id;
+  if (t.caseId) {
+    const kase = db().select().from(schema.cases).where(eq(schema.cases.id, t.caseId)).get();
+    const staff = kase?.staffId ? db().select().from(schema.staffMembers).where(eq(schema.staffMembers.id, kase.staffId)).get() : null;
+    const client = kase ? db().select().from(schema.clients).where(eq(schema.clients.id, kase.clientId)).get() : null;
+    const candidateRoom = kase?.chatworkRoomId ?? client?.chatworkRoomId ?? null;
+    if (staff?.chatworkAccountId && candidateRoom) {
+      roomId = candidateRoom;
+      assignee = staff.chatworkAccountId;
+    }
+  }
+  if (!roomId) roomId = await cw.myChatRoomId();
+  if (!roomId) return;
   const limit = t.followUpAt ? Math.floor(new Date(t.followUpAt).getTime() / 1000) : undefined;
-  const res = await cw.createTask(roomId, `${t.title}${t.note ? `\n${t.note}` : ''}`, [me.account_id], limit);
+  const res = await cw.createTask(roomId, `${t.title}${t.note ? `\n${t.note}` : ''}`, [assignee], limit);
   const cwId = res.task_ids[0];
   if (cwId) db().update(schema.tasks).set({ chatworkRoomId: roomId, chatworkTaskId: cwId }).where(eq(schema.tasks.id, taskId)).run();
 }
