@@ -10,6 +10,8 @@ import { checkOverdueWaitingTasks, importChatworkTasks } from '../services/tasks
 import { checkStaleSessions } from '../services/scheduling.js';
 import { checkCreditorOverdue } from '../services/creditors.js';
 import { flushAlertNotifications } from '../services/notify.js';
+import { ignoreOutboundAttachments } from '../services/attachments.js';
+import { getSyncState, setSyncState } from '../services/settings.js';
 import { indexForms } from '../services/forms.js';
 import { casesNeedingSummary, generateCaseSummary } from '../services/cases.js';
 import { retryFailedAttachments } from '../services/attachments.js';
@@ -73,6 +75,14 @@ export const JOBS: JobDef[] = [
 const scheduled: Cron[] = [];
 
 export function startJobs() {
+  // 一度だけの後始末: 以前の版で受信ファイルに入っていた自分の送信添付を外す
+  if (!getSyncState('cleanup:outbound_attachments')) {
+    setImmediate(() => {
+      ignoreOutboundAttachments()
+        .then(() => setSyncState('cleanup:outbound_attachments', new Date().toISOString()))
+        .catch((err) => logger.warn({ err }, '送信添付の整理に失敗'));
+    });
+  }
   if (!env().JOBS_ENABLED) {
     logger.warn('JOBS_ENABLED=false のためジョブは起動しません');
     return;

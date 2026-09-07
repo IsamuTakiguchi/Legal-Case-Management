@@ -115,7 +115,8 @@ export async function ingestMessage(
   if (m.subject && !conv.subject) patch.subject = m.subject;
   d.update(schema.conversations).set(patch).where(eq(schema.conversations.id, conv.id)).run();
 
-  for (const a of m.attachments) {
+  // 受信ファイルは相手から届いたものだけ。自分が送った添付は登録しない
+  for (const a of m.direction === 'in' ? m.attachments : []) {
     const row = d
       .insert(schema.attachments)
       .values({

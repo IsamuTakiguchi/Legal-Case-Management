@@ -50,7 +50,10 @@ export function extractBodyAndAttachments(msg: GmailMessage): { text: string; at
     if (!p) return;
     const mime = p.mimeType ?? '';
     if (p.filename && p.body?.attachmentId) {
-      attachments.push({ filename: p.filename, mime, size: p.body.size ?? null, ref: { messageId: msg.id, attachmentId: p.body.attachmentId } });
+      // 本文に埋め込まれた画像（署名のロゴなど。Content-Disposition: inline かつ Content-ID あり）は受信ファイルにしない
+      const h = (name: string) => p.headers?.find((x) => (x.name ?? '').toLowerCase() === name.toLowerCase())?.value ?? '';
+      const inlineImage = mime.startsWith('image/') && /inline/i.test(h('Content-Disposition')) && !!h('Content-ID');
+      if (!inlineImage) attachments.push({ filename: p.filename, mime, size: p.body.size ?? null, ref: { messageId: msg.id, attachmentId: p.body.attachmentId } });
     } else if (mime === 'text/plain' && p.body?.data && !plain) {
       plain = decodeBody(p.body.data);
     } else if (mime === 'text/html' && p.body?.data && !html) {

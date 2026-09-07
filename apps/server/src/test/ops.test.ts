@@ -542,6 +542,36 @@ describe('事務局メンバー候補', () => {
   });
 });
 
+describe('受信ファイルの対象', () => {
+  it('自分の送信メッセージの添付は登録せず、Gmail のインライン画像は添付にしない', async () => {
+    const { ingestMessage } = await import('../services/inbox.js');
+    const { extractBodyAndAttachments } = await import('../channels/gmail.js');
+    const now = new Date().toISOString();
+    const r = await ingestMessage(
+      { channel: 'gmail', externalThreadId: 'out-att', externalId: 'out-att-1', direction: 'out', sentAt: now, senderAddress: 'me@example.com', body: '送ります', attachments: [{ filename: '送付.pdf', ref: { messageId: 'x', attachmentId: 'y' } }], identity: { channel: 'gmail', email: 'client@example.com' } },
+      { processAttachments: false },
+    );
+    expect(db().select().from(schema.attachments).where(eq(schema.attachments.messageId, r.message.id)).all().length).toBe(0);
+    db().delete(schema.messages).where(eq(schema.messages.id, r.message.id)).run();
+    db().delete(schema.conversations).where(eq(schema.conversations.id, r.conversation.id)).run();
+
+    const parsed = extractBodyAndAttachments({
+      id: 'g1',
+      threadId: 't',
+      payload: {
+        mimeType: 'multipart/mixed',
+        parts: [
+          { mimeType: 'text/plain', body: { data: Buffer.from('本文').toString('base64') } },
+          { mimeType: 'image/png', filename: 'logo.png', headers: [{ name: 'Content-Disposition', value: 'inline; filename="logo.png"' }, { name: 'Content-ID', value: '<logo@x>' }], body: { attachmentId: 'a1', size: 1000 } },
+          { mimeType: 'image/jpeg', filename: 'photo.jpg', headers: [{ name: 'Content-Disposition', value: 'attachment; filename="photo.jpg"' }], body: { attachmentId: 'a2', size: 50000 } },
+          { mimeType: 'application/pdf', filename: '資料.pdf', body: { attachmentId: 'a3', size: 2000 } },
+        ],
+      },
+    });
+    expect(parsed.attachments.map((a) => a.filename)).toEqual(['photo.jpg', '資料.pdf']);
+  });
+});
+
 describe('受信箱の表示範囲', () => {
   it('inboundOnly なら自分の送信だけの会話を除く', async () => {
     const { listConversations } = await import('../services/inbox.js');
