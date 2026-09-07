@@ -31,6 +31,15 @@ const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean; 
       { value: 'primary', label: 'メインだけ' },
     ],
   },
+  {
+    key: 'chatwork_scope',
+    label: 'Chatwork の取込範囲',
+    hint: '「自分宛だけ」にすると、[To] で自分が指定されたもの・全員宛（toall）・ダイレクトチャット・自分に振られたタスクのメッセージだけを受信箱に取り込みます。それ以外のグループチャットの雑談は取り込みません',
+    options: [
+      { value: 'all', label: 'すべて（参加しているルームの全メッセージ）' },
+      { value: 'to_me', label: '自分宛だけ（To・全員宛・ダイレクト・自分宛タスク）' },
+    ],
+  },
   { key: 'lawyer_name', label: '弁護士名' },
   { key: 'office_name', label: '事務所名' },
   { key: 'office_location', label: '事務所所在地（カレンダーの場所欄）' },
