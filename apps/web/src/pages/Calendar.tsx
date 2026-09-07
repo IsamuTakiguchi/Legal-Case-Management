@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { EVENT_KINDS, EVENT_KIND_LABEL, type EventKind } from '@lcm/shared';
+import { EVENT_KINDS, EVENT_KIND_LABEL, parseHoldText, type EventKind } from '@lcm/shared';
 import { api } from '../lib/api';
 import { ClientPicker } from '../lib/ClientPicker';
 import { toLocalInput, fromLocalInput } from '../lib/format';
@@ -501,7 +501,26 @@ function HoldForm({ defaultDay, onClose, onSaved, onError }: { defaultDay: strin
   const [counterpartName, setCounterpartName] = useState('');
   const [location, setLocation] = useState('');
   const [duration, setDuration] = useState('60');
-  const [slots, setSlots] = useState<string[]>([`${defaultDay}T10:00`, `${defaultDay}T14:00`]);
+  const [slots, setSlots] = useState<{ start: string; end: string }[]>([
+    { start: `${defaultDay}T10:00`, end: `${defaultDay}T11:00` },
+    { start: `${defaultDay}T14:00`, end: `${defaultDay}T15:00` },
+  ]);
+  const [text, setText] = useState('');
+  const [textErr, setTextErr] = useState<string[]>([]);
+  const mins = () => Math.max(15, Number(duration) || 60);
+  const plus = (local: string, m: number) => toLocalInput(new Date(new Date(fromLocalInput(local)).getTime() + m * 60_000).toISOString());
+  /** 「12/21（月）10～11：30　13～15」のような文字列を候補に変換して追加 */
+  const readText = () => {
+    const r = parseHoldText(text, { defaultMinutes: mins() });
+    setTextErr(r.errors);
+    if (r.slots.length) {
+      const parsed = r.slots.map((x) => ({ start: toLocalInput(x.startAt), end: toLocalInput(x.endAt) }));
+      // 既定の空行（未編集の初期値）は置き換え、入力済みなら追加
+      const untouched = slots.every((x) => x.start.endsWith('T10:00') || x.start.endsWith('T14:00')) && slots.length <= 2;
+      setSlots((untouched ? parsed : [...slots, ...parsed]).slice(0, 10));
+      setText('');
+    }
+  };
   const clients = useQuery({ queryKey: ['clients'], queryFn: () => api.get<{ id: number; name: string }[]>('/clients') });
   const cases = useQuery({ queryKey: ['cases', 'open'], queryFn: () => api.get<{ id: number; title: string; clientId: number; clientName: string }[]>('/cases?status=open') });
   const caseOptions = (cases.data ?? []).filter((c) => !clientId || c.clientId === Number(clientId));
@@ -510,12 +529,11 @@ function HoldForm({ defaultDay, onClose, onSaved, onError }: { defaultDay: strin
 
   const addSlot = () => {
     const last = slots[slots.length - 1];
-    const next = last ? toLocalInput(new Date(new Date(fromLocalInput(last)).getTime() + 86400_000).toISOString()) : `${defaultDay}T10:00`;
-    setSlots([...slots, next]);
+    const start = last ? plus(last.start, 24 * 60) : `${defaultDay}T10:00`;
+    setSlots([...slots, { start, end: plus(start, mins()) }]);
   };
   const save = useMutation({
     mutationFn: () => {
-      const mins = Math.max(15, Number(duration) || 60);
       const body = {
         title,
         kind,
@@ -524,10 +542,11 @@ function HoldForm({ defaultDay, onClose, onSaved, onError }: { defaultDay: strin
         counterpartName: clientId ? null : counterpartName || null,
         location: location || null,
         slots: slots
-          .filter(Boolean)
+          .filter((v) => v.start)
           .map((v) => {
-            const start = new Date(fromLocalInput(v));
-            return { startAt: start.toISOString(), endAt: new Date(start.getTime() + mins * 60_000).toISOString() };
+            const start = new Date(fromLocalInput(v.start));
+            const end = v.end ? new Date(fromLocalInput(v.end)) : new Date(start.getTime() + mins() * 60_000);
+            return { startAt: start.toISOString(), endAt: (end > start ? end : new Date(start.getTime() + mins() * 60_000)).toISOString() };
           }),
       };
       return api.post<{ sessionId: number; events: unknown[] }>('/calendar/holds', body);
@@ -605,18 +624,35 @@ function HoldForm({ defaultDay, onClose, onSaved, onError }: { defaultDay: strin
           <input className="input" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="例: 事務所 / Zoom" />
         </div>
         <div className="md:col-span-2">
-          <label className="label">候補日時（開始）</label>
+          <label className="label">候補をまとめて入力（1 行に日付と時間帯。例: 12/21（月）10～11：30　13～15）</label>
+          <div className="flex flex-wrap items-start gap-2">
+            <textarea className="input min-h-16 flex-1 text-sm" value={text} onChange={(e) => setText(e.target.value)} placeholder={'12/21（月）10～11：30　13～15\n12/22 14～16'} />
+            <button type="button" className="btn" onClick={readText} disabled={!text.trim()}>
+              読み取って候補に追加
+            </button>
+          </div>
+          {textErr.length > 0 && <div className="mt-1 text-xs text-red-600">{textErr.join(' / ')}</div>}
+          <div className="mt-1 text-xs text-slate-500">終了時刻を書かない場合は「所要時間」の長さで終了を補います。読み取った候補は下で 1 件ずつ直せます。</div>
+        </div>
+        <div className="md:col-span-2">
+          <label className="label">候補日時（開始 〜 終了）</label>
           <div className="space-y-2">
             {slots.map((v, i) => (
-              <div key={i} className="flex items-center gap-2">
+              <div key={i} className="flex flex-wrap items-center gap-2">
                 <span className="w-6 text-xs text-slate-500">{i + 1}.</span>
                 <input
                   type="datetime-local"
                   className="input w-auto"
-                  value={v}
-                  onChange={(e) => setSlots(slots.map((x, j) => (j === i ? e.target.value : x)))}
+                  value={v.start}
+                  onChange={(e) => {
+                    const start = e.target.value;
+                    const prevDur = Math.max(15, (new Date(fromLocalInput(v.end)).getTime() - new Date(fromLocalInput(v.start)).getTime()) / 60_000 || mins());
+                    setSlots(slots.map((x, j) => (j === i ? { start, end: start ? plus(start, prevDur) : x.end } : x)));
+                  }}
                   required
                 />
+                <span className="text-slate-400">〜</span>
+                <input type="datetime-local" className="input w-auto" value={v.end} onChange={(e) => setSlots(slots.map((x, j) => (j === i ? { ...x, end: e.target.value } : x)))} />
                 <button type="button" className="btn btn-sm" onClick={() => setSlots(slots.filter((_, j) => j !== i))} disabled={slots.length <= 1} aria-label="この候補を外す">
                   ×
                 </button>
@@ -630,7 +666,7 @@ function HoldForm({ defaultDay, onClose, onSaved, onError }: { defaultDay: strin
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <button className="btn btn-primary" disabled={save.isPending}>
-          {save.isPending ? '登録中…' : `${slots.filter(Boolean).length} 件を仮押さえ`}
+          {save.isPending ? '登録中…' : `${slots.filter((v) => v.start).length} 件を仮押さえ`}
         </button>
         <span className="text-xs text-slate-500">件名: {preview}</span>
       </div>

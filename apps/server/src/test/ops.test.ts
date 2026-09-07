@@ -439,6 +439,31 @@ describe('Chatwork の取込範囲', () => {
   });
 });
 
+describe('仮押さえの文字入力の読み取り', () => {
+  it('「12/21（月）10～11：30　13～15」を候補に分解する', async () => {
+    const { parseHoldText } = await import('@lcm/shared');
+    const now = new Date('2026-09-07T01:00:00+09:00');
+    const r = parseHoldText('12/21（月）10～11：30　13～15', { now, defaultMinutes: 60 });
+    expect(r.errors).toEqual([]);
+    expect(r.slots.map((s) => s.label)).toEqual(['12/21(月) 10:00〜11:30', '12/21(月) 13:00〜15:00']);
+    expect(r.slots[0].startAt).toBe(new Date('2026-12-21T10:00:00+09:00').toISOString());
+    expect(r.slots[0].endAt).toBe(new Date('2026-12-21T11:30:00+09:00').toISOString());
+    expect(r.slots[1].endAssumed).toBe(false);
+
+    // 複数行・終了なし・全角・時半・年の繰り上げ
+    const r2 = parseHoldText('１／８(木) １４時半\n1月9日 10:00-11:00、15', { now, defaultMinutes: 90 });
+    expect(r2.errors).toEqual([]);
+    expect(r2.slots.map((s) => s.label)).toEqual(['1/8(金) 14:30〜16:00', '1/9(土) 10:00〜11:00', '1/9(土) 15:00〜16:30']);
+    expect(r2.slots[0].startAt).toBe(new Date('2027-01-08T14:30:00+09:00').toISOString());
+    expect(r2.slots[0].endAssumed).toBe(true);
+
+    // 日付の無い行はエラー、時刻の無い行もエラー
+    const r3 = parseHoldText('10～11\n12/25 未定', { now });
+    expect(r3.slots).toEqual([]);
+    expect(r3.errors.length).toBe(2);
+  });
+});
+
 describe('受信箱の表示範囲', () => {
   it('inboundOnly なら自分の送信だけの会話を除く', async () => {
     const { listConversations } = await import('../services/inbox.js');
