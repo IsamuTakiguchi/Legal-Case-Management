@@ -114,7 +114,7 @@ export default function Tasks() {
                       <span className="font-medium">{t.title}</span>
                     )}
                     {t.chatworkTaskId && <span className="badge badge-chatwork ml-1">CW</span>}
-                    {t.note && <div className="line-clamp-1 text-xs text-slate-500">{t.note}</div>}
+                    {t.note && <TaskNote text={t.note} />}
                   </td>
                   <td className="whitespace-nowrap px-3 py-2">{t.clientId ? <Link to={`/clients/${t.clientId}`} className="hover:underline">{t.clientName}</Link> : ''}</td>
                   <td className="w-px whitespace-nowrap px-3 py-2 text-xs text-slate-600">
@@ -154,6 +154,22 @@ export default function Tasks() {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+/** タスクのメモ。短ければ全文、長文（目安 300 字 or 8 行超）は折りたたんで「続きを表示」で開く */
+function TaskNote({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > 300 || text.split('\n').length > 8;
+  return (
+    <div className="text-xs text-slate-500">
+      <div className={`whitespace-pre-wrap ${long && !open ? 'line-clamp-4' : ''}`}>{text}</div>
+      {long && (
+        <button type="button" className="mt-0.5 text-blue-700 hover:underline" onClick={() => setOpen(!open)}>
+          {open ? '折りたたむ' : '続きを表示'}
+        </button>
+      )}
     </div>
   );
 }
