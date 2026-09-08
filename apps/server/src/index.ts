@@ -47,7 +47,13 @@ export function createApp() {
   // 本文サイズの上限。Excel 取込だけ大きめに許可
   const LIMIT_DEFAULT = 2 * 1024 * 1024;
   const LIMIT_UPLOAD = 25 * 1024 * 1024;
-  app.use('*', (c, next) => bodyLimit({ maxSize: c.req.path.includes('/creditors/import') ? LIMIT_UPLOAD : LIMIT_DEFAULT, onError: (cc) => cc.json({ error: 'リクエストが大きすぎます' }, 413) })(c, next));
+  const LIMIT_RESTORE = 512 * 1024 * 1024;
+  app.use('*', (c, next) =>
+    bodyLimit({
+      maxSize: c.req.path.includes('/backup/restore') ? LIMIT_RESTORE : c.req.path.includes('/creditors/import') ? LIMIT_UPLOAD : LIMIT_DEFAULT,
+      onError: (cc) => cc.json({ error: 'リクエストが大きすぎます' }, 413),
+    })(c, next),
+  );
 
   app.onError((err, c) => {
     if (err instanceof ZodError) return c.json({ error: '入力が不正です', issues: err.issues }, 400);

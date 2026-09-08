@@ -19,6 +19,7 @@ interface Status {
 interface BackupInfo {
   local: { name: string; size: number; createdAt: string }[];
   remoteFolder: string;
+  last: { at: string | null; ok: boolean | null; error: string | null; file: string | null; remote: boolean };
 }
 
 const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean; options?: { value: string; label: string }[] }[] = [
@@ -151,6 +152,24 @@ export default function Settings() {
     },
     onError: (e) => setBackupMsg((e as Error).message),
   });
+  const [restoreFile, setRestoreFile] = useState<File | null>(null);
+  const [restoreMsg, setRestoreMsg] = useState('');
+  const restore = useMutation({
+    mutationFn: (v: { file?: File; name?: string }) => {
+      if (v.name) return api.post<{ restoredFrom: string; clients: number; messages: number; safetyBackup: string }>(`/backup/restore/${encodeURIComponent(v.name)}`);
+      const fd = new FormData();
+      fd.append('file', v.file!);
+      return api.upload<{ restoredFrom: string; clients: number; messages: number; safetyBackup: string }>('/backup/restore', fd);
+    },
+    onSuccess: (r) => {
+      setRestoreMsg(`${r.restoredFrom} から復元しました（依頼者 ${r.clients} 名・メッセージ ${r.messages} 件）。復元前の状態は ${r.safetyBackup} に残しています。画面を読み直します…`);
+      setRestoreFile(null);
+      setTimeout(() => location.reload(), 2500);
+    },
+    onError: (e) => setRestoreMsg((e as Error).message),
+  });
+  const confirmRestore = (label: string) =>
+    confirm(`${label} からデータベースを復元します。\n\nいまのデータはこのバックアップの内容に置き換わります（復元前の状態は自動でバックアップに残します）。\nよろしいですか？`) && confirm('本当に復元しますか？ この操作は取り消せません（復元前のバックアップから戻すことはできます）。');
   const [demoMsg, setDemoMsg] = useState('');
   const demo = useMutation({
     mutationFn: (action: 'seed' | 'clear') => api.post<{ ok: boolean; clients?: number; deleted?: number }>(`/demo/${action}`),
@@ -345,8 +364,15 @@ export default function Settings() {
       <section className="card">
         <h2 className="mb-1 font-semibold">バックアップ</h2>
         <p className="mb-3 text-xs text-slate-500">
-          毎日 3:00（JST）にデータベースのスナップショットを圧縮し、サーバー内と OneDrive の <code>{backup.data?.remoteFolder ?? '…'}</code> に世代保存します。復元手順は手順書（deploy.md）を参照してください。
+          毎日 3:00（JST）にデータベースのスナップショットを圧縮し、サーバー内と OneDrive の <code>{backup.data?.remoteFolder ?? '…'}</code> に世代保存します。下の「復元」でバックアップから戻せます。
         </p>
+        {backup.data?.last && (
+          <div className={`mb-3 rounded border p-2 text-sm ${backup.data.last.ok === false ? 'border-red-200 bg-red-50 text-red-700' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
+            最終バックアップ: {backup.data.last.at ? fmtDateTime(backup.data.last.at) : 'まだありません'}
+            {backup.data.last.ok === false && <span className="ml-2">失敗: {backup.data.last.error}</span>}
+            {backup.data.last.ok && <span className="ml-2 text-xs text-slate-500">{backup.data.last.remote ? 'OneDrive にも保存済み' : 'サーバー内のみ（OneDrive 未接続）'}</span>}
+          </div>
+        )}
         <div className="grid gap-3 md:grid-cols-3">
           {BACKUP_FIELDS.map((f) => (
             <div key={f.key}>
@@ -369,15 +395,45 @@ export default function Settings() {
             <div className="mb-1 text-slate-500">サーバー内の世代（クリックでダウンロード）</div>
             <ul className="flex flex-wrap gap-2">
               {backup.data.local.map((b) => (
-                <li key={b.name}>
-                  <a className="btn btn-sm" href={`/api/backup/${b.name}`}>
+                <li key={b.name} className="flex items-center gap-1">
+                  <a className="btn btn-sm" href={`/api/backup/${b.name}`} title="この世代をダウンロード">
                     {b.name}（{fmtBytes(b.size)}）
                   </a>
+                  <button
+                    className="text-slate-400 hover:text-red-600 hover:underline"
+                    onClick={() => {
+                      if (confirmRestore(b.name)) restore.mutate({ name: b.name });
+                    }}
+                    disabled={restore.isPending}
+                    title="この世代の内容に戻す"
+                  >
+                    この世代に戻す
+                  </button>
                 </li>
               ))}
             </ul>
           </div>
         )}
+        <div className="mt-4 rounded border border-orange-200 bg-orange-50 p-3 text-sm">
+          <div className="mb-1 font-semibold text-orange-800">復元（バックアップファイルから戻す）</div>
+          <p className="mb-2 text-xs text-slate-600">
+            ダウンロードしておいた <code>.db.gz</code>（または <code>.db</code>）を選んで「復元」を押すと、いまのデータがその内容に置き換わります。復元前の状態は自動でバックアップに残るので、間違えても戻せます。
+            接続情報（Google・Microsoft・各サービスのキー）は別のサーバーで作ったバックアップだと引き継げないため、初期設定で入れ直してください。
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <input type="file" accept=".gz,.db,application/gzip,application/x-gzip,application/octet-stream" onChange={(e) => setRestoreFile(e.target.files?.[0] ?? null)} className="text-xs" />
+            <button
+              className="btn btn-sm"
+              disabled={!restoreFile || restore.isPending}
+              onClick={() => {
+                if (restoreFile && confirmRestore(restoreFile.name)) restore.mutate({ file: restoreFile });
+              }}
+            >
+              {restore.isPending ? '復元中…' : '復元'}
+            </button>
+            {restoreMsg && <span className="text-xs text-slate-700">{restoreMsg}</span>}
+          </div>
+        </div>
       </section>
 
       <section className="card">

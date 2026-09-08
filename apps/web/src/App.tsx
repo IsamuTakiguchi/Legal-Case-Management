@@ -1,7 +1,8 @@
 import { Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { api } from './lib/api';
+import { fmtDateTime } from './lib/format';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Inbox from './pages/Inbox';
@@ -64,7 +65,9 @@ export default function App() {
             </NavLink>
           ))}
         </nav>
-        <div className="mt-auto p-2">
+        <div className="mt-auto space-y-2 p-2">
+          <RefreshButtons />
+          <BackupStatus />
           <LogoutButton className="w-full justify-center" />
         </div>
       </aside>
@@ -89,6 +92,46 @@ export default function App() {
       </main>
       <MobileTabs alertCount={alerts.data?.length ?? 0} />
     </div>
+  );
+}
+
+/** 「更新」= 受信を取り込み直して画面のデータを読み直す。「再読み込み」= アプリ自体を読み直す（新しい版に更新されたときなど） */
+function RefreshButtons() {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const refresh = async () => {
+    setBusy(true);
+    try {
+      await api.post('/sync/now').catch(() => null);
+      await qc.invalidateQueries();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="flex gap-1">
+      <button type="button" className="btn btn-sm flex-1 justify-center" onClick={refresh} disabled={busy} title="Gmail・Chatwork の受信を取り込み直し、表示を最新にします">
+        {busy ? '更新中…' : '⟳ 更新'}
+      </button>
+      <button type="button" className="btn btn-sm text-slate-500" onClick={() => location.reload()} title="アプリを読み直します（画面がおかしいとき・新しい版に更新されたとき）">
+        再読み込み
+      </button>
+    </div>
+  );
+}
+
+/** 最終バックアップの状況（設定 → バックアップへのリンク） */
+function BackupStatus() {
+  const q = useQuery({ queryKey: ['backup', 'status'], queryFn: () => api.get<{ last: { at: string | null; ok: boolean | null; error: string | null } }>('/backup'), staleTime: 5 * 60_000, refetchInterval: 10 * 60_000 });
+  const last = q.data?.last;
+  if (!last) return null;
+  const stale = !last.at || Date.now() - new Date(last.at).getTime() > 2 * 86400_000;
+  const bad = last.ok === false || stale;
+  return (
+    <NavLink to="/settings" className={`block truncate text-center text-[11px] ${bad ? 'text-orange-600' : 'text-slate-400'} hover:underline`} title={last.error ?? 'バックアップの設定・復元は設定画面から'}>
+      バックアップ: {last.at ? fmtDateTime(last.at) : '未実施'}
+      {last.ok === false ? '（失敗）' : ''}
+    </NavLink>
   );
 }
 
@@ -135,8 +178,12 @@ function MobileTabs({ alertCount }: { alertCount: number }) {
                 </NavLink>
               ))}
             </div>
-            <div className="mt-3 flex justify-end">
-              <LogoutButton />
+            <div className="mt-3 space-y-2">
+              <RefreshButtons />
+              <BackupStatus />
+              <div className="flex justify-end">
+                <LogoutButton />
+              </div>
             </div>
           </div>
         </div>

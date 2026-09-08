@@ -14,6 +14,12 @@ export { schema };
 
 let dbInstance: DB | null = null;
 let sqliteInstance: Database.Database | null = null;
+let currentFile: string | null = null;
+
+/** いま開いている DB ファイルのパス（復元で差し替える先） */
+export function currentDatabasePath(): string {
+  return currentFile ?? dbPath();
+}
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const migrationsFolder = path.resolve(here, '../../drizzle');
@@ -35,6 +41,7 @@ export function openDatabase(file: string = dbPath()): DB {
   seedDefaults(sqlite);
   dbInstance = db;
   sqliteInstance = sqlite;
+  currentFile = file;
   return db;
 }
 
