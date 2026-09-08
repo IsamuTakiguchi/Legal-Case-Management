@@ -780,6 +780,41 @@ describe('期日連絡', () => {
   });
 });
 
+describe('記録の編集', () => {
+  it('種別・日時・要旨・発言・決定事項・次のアクションを差し替え、タスク化済みの結び付きは保つ', async () => {
+    const { updateCaseNote } = await import('../services/cases.js');
+    const client = db().insert(schema.clients).values({ name: '編集 太郎', kana: 'へんしゅう たろう' }).returning().get();
+    const kase = db().insert(schema.cases).values({ clientId: client.id, title: '編集テスト事件', caseType: 'civil', status: 'active' }).returning().get();
+    const note = db()
+      .insert(schema.caseNotes)
+      .values({ caseId: kase.id, kind: 'phone', occurredAt: '2026-09-01T01:00:00.000Z', gist: '古い要旨', theirSaid: ['a'], ourSaid: [], decisions: [], nextActions: [{ title: '書面作成', due: '2026-09-10', taskId: 42 }], createdBy: 'ai' })
+      .returning()
+      .get();
+    const r = updateCaseNote(note.id, {
+      kind: 'court',
+      occurredAt: '2026-09-02T05:00:00.000Z',
+      gist: ' 新しい要旨 ',
+      theirSaid: ['相手方は和解案を提示', ' '],
+      ourSaid: ['持ち帰って検討'],
+      decisions: ['次回までに回答'],
+      nextActions: [{ title: '書面作成', due: '2026-09-12' }, { title: '依頼者に連絡', due: null }],
+      waitingFor: 'client',
+    });
+    expect(r.kind).toBe('court');
+    expect(r.occurredAt).toBe('2026-09-02T05:00:00.000Z');
+    expect(r.gist).toBe('新しい要旨');
+    expect(r.theirSaid).toEqual(['相手方は和解案を提示']);
+    expect(r.decisions).toEqual(['次回までに回答']);
+    expect(r.nextActions).toEqual([{ title: '書面作成', due: '2026-09-12', taskId: 42 }, { title: '依頼者に連絡', due: null, taskId: null }]);
+    expect(r.waitingFor).toBe('client');
+    expect(updateCaseNote(note.id, { waitingFor: null, counterpart: '  ' }).waitingFor).toBeNull();
+    expect(() => updateCaseNote(999999, { gist: 'x' })).toThrow('記録');
+    db().delete(schema.caseNotes).where(eq(schema.caseNotes.id, note.id)).run();
+    db().delete(schema.cases).where(eq(schema.cases.id, kase.id)).run();
+    db().delete(schema.clients).where(eq(schema.clients.id, client.id)).run();
+  });
+});
+
 describe('事務局メンバー候補', () => {
   it('取込済みメッセージの送信者から候補を出す（Chatwork 未接続でも動く）', async () => {
     const { chatworkAccountsFromMessages, listChatworkAccounts } = await import('../services/staff.js');

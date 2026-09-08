@@ -9,7 +9,7 @@ import { clientInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputS
 import { searchClients } from '../services/identity.js';
 import { storage, FolderNotFoundError } from '../integrations/storage.js';
 import { clientFolder } from '../services/attachments.js';
-import { listCaseTypes, upsertCaseType, createCase, updateCase, listCases, getCase, caseTimeline, addCaseNote, deleteCaseNote, generateCaseSummary, structureNote } from '../services/cases.js';
+import { listCaseTypes, upsertCaseType, createCase, updateCase, listCases, getCase, caseTimeline, addCaseNote, updateCaseNote, deleteCaseNote, generateCaseSummary, structureNote } from '../services/cases.js';
 import * as creditors from '../services/creditors.js';
 import { onedriveCandidates, chatworkCandidates, applyImport, deleteClient } from '../services/clientImport.js';
 import { clientFolderParents, defaultClientFolderRel } from '../services/clientFolders.js';
@@ -237,6 +237,11 @@ clientRoutes.post('/cases/:id/notes', async (c) => {
 clientRoutes.post('/case-notes/:id/hearing-notice', async (c) => {
   const body = z.object({ channel: z.enum(['gmail', 'line', 'chatwork']).optional() }).parse(await c.req.json().catch(() => ({})));
   return c.json(await prepareHearingNotice(Number(c.req.param('id')), { channel: body.channel }));
+});
+
+clientRoutes.put('/case-notes/:id', async (c) => {
+  const patch = caseNoteInputSchema.omit({ caseId: true }).partial().parse(await c.req.json());
+  return c.json(updateCaseNote(Number(c.req.param('id')), patch));
 });
 
 clientRoutes.delete('/case-notes/:id', (c) => {
