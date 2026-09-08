@@ -738,6 +738,48 @@ describe('バックアップからの復元', () => {
   });
 });
 
+describe('期日連絡', () => {
+  it('期日の記録から依頼者宛の連絡文を用意し、会話が無ければ作る（AI 未設定ならテンプレート）', async () => {
+    const { prepareHearingNotice, ensureClientConversation, availableChannels } = await import('../services/hearingNotice.js');
+    const { setAdapter } = await import('../channels/registry.js');
+    setAdapter('gmail', { channel: 'gmail', isConfigured: () => true, fetchAttachment: async () => Buffer.from(''), send: async () => ({ externalId: 'x', externalThreadId: 'y', sentAt: new Date().toISOString() }) });
+    const client = db().insert(schema.clients).values({ name: '期日 連絡子', kana: 'きじつ れんらくこ', emails: ['renraku@example.com'], preferredChannel: 'gmail' }).returning().get();
+    const kase = db().insert(schema.cases).values({ clientId: client.id, title: '貸金返還請求事件', caseType: 'civil', status: 'active' }).returning().get();
+    expect(availableChannels(client).map((c) => c.channel)).toContain('gmail');
+    const note = db()
+      .insert(schema.caseNotes)
+      .values({ caseId: kase.id, kind: 'court', occurredAt: new Date().toISOString(), gist: '第2回弁論。相手方から答弁書が出た。', decisions: ['次回までに反論書面を提出'], nextActions: [{ title: '反論書面の作成', due: '2027-01-20' }], createdBy: 'user' })
+      .returning()
+      .get();
+    const next = new Date(Date.now() + 14 * 86400_000).toISOString();
+    db().insert(schema.calendarEvents).values({ googleEventId: 'local-hearing-test', caseId: kase.id, clientId: client.id, kind: 'hearing', title: '期日 第3回弁論', startAt: next, endAt: new Date(new Date(next).getTime() + 3600_000).toISOString(), location: '奈良地裁 302' }).run();
+
+    const r = await prepareHearingNotice(note.id);
+    expect(r.channel).toBe('gmail');
+    expect(r.to).toBe('renraku@example.com');
+    expect(r.nextHearingAt).toBe(next);
+    expect(r.text).toContain('期日');
+    expect(r.text).toContain('答弁書');
+    expect(r.text).toContain('奈良地裁');
+    // 会話が無かったので仮 ID で作られる。2 回目は同じ会話
+    const conv = db().select().from(schema.conversations).where(eq(schema.conversations.id, r.conversationId)).get()!;
+    expect(conv.externalThreadId.startsWith('new:')).toBe(true);
+    expect(conv.clientId).toBe(client.id);
+    expect(ensureClientConversation(client, 'gmail').id).toBe(conv.id);
+    // 連絡先が無い依頼者は明確なエラー
+    const noContact = db().insert(schema.clients).values({ name: '連絡先 無太郎', kana: 'れんらくさき なしたろう' }).returning().get();
+    const kase2 = db().insert(schema.cases).values({ clientId: noContact.id, title: 'テスト', caseType: 'civil', status: 'active' }).returning().get();
+    const note2 = db().insert(schema.caseNotes).values({ caseId: kase2.id, kind: 'court', occurredAt: new Date().toISOString(), gist: 'x', createdBy: 'user' }).returning().get();
+    await expect(prepareHearingNotice(note2.id)).rejects.toThrow('連絡先');
+
+    db().delete(schema.calendarEvents).where(eq(schema.calendarEvents.googleEventId, 'local-hearing-test')).run();
+    db().delete(schema.caseNotes).where(inArray(schema.caseNotes.id, [note.id, note2.id])).run();
+    db().delete(schema.conversations).where(eq(schema.conversations.id, conv.id)).run();
+    db().delete(schema.cases).where(inArray(schema.cases.id, [kase.id, kase2.id])).run();
+    db().delete(schema.clients).where(inArray(schema.clients.id, [client.id, noContact.id])).run();
+  });
+});
+
 describe('事務局メンバー候補', () => {
   it('取込済みメッセージの送信者から候補を出す（Chatwork 未接続でも動く）', async () => {
     const { chatworkAccountsFromMessages, listChatworkAccounts } = await import('../services/staff.js');

@@ -85,6 +85,10 @@ export async function sendToConversation(conversationId: number, input: SendMess
     inReplyTo: reply,
   });
   if (channel === 'line') recordLinePush(1);
+  // 仮の ID（new:…）で作った Gmail の会話は、初回送信で決まった実際のスレッド ID に置き換える
+  if (conv.externalThreadId.startsWith('new:') && result.externalThreadId !== conv.externalThreadId) {
+    d.update(schema.conversations).set({ externalThreadId: result.externalThreadId }).where(eq(schema.conversations.id, conv.id)).run();
+  }
 
   const { message } = await ingestMessage(
     {
