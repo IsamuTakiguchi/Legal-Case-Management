@@ -69,6 +69,27 @@ export async function generateStructured<T extends z.ZodType>(opts: {
   return res.parsed_output as z.infer<T>;
 }
 
+/** 構造化出力（画像や PDF などのコンテンツブロックを渡せる版） */
+export async function generateStructuredFromContent<T extends z.ZodType>(opts: {
+  system: string;
+  content: Anthropic.ContentBlockParam[];
+  schema: T;
+  maxTokens?: number;
+  effort?: Effort;
+}): Promise<z.infer<T>> {
+  const res = await anthropic().messages.parse({
+    model: model(),
+    max_tokens: opts.maxTokens ?? 4000,
+    system: opts.system,
+    messages: [{ role: 'user', content: opts.content }],
+    thinking: { type: 'adaptive' },
+    output_config: { effort: opts.effort ?? 'low', format: zodOutputFormat(opts.schema) },
+  });
+  if (res.stop_reason === 'refusal') throw new Error('生成が拒否されました');
+  if (!res.parsed_output) throw new Error('構造化出力の解析に失敗しました');
+  return res.parsed_output as z.infer<T>;
+}
+
 export function resetAnthropicClient() {
   client = null;
 }
