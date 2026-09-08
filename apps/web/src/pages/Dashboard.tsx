@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { fmtDateTime, fmtRelative } from '../lib/format';
 import { ALERT_TYPE_LABEL, TASK_STATUS_LABEL, EVENT_KIND_LABEL, type AlertType, type TaskStatus, type EventKind } from '@lcm/shared';
+import { Icon, type IconName } from '../lib/icons';
 
 interface DashboardData {
   alerts: { id: number; type: string; title: string; body: string | null; createdAt: string }[];
@@ -49,10 +50,10 @@ export default function Dashboard() {
         </div>
       )}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
-        <Stat label="未返信の会話" value={d.needsReply} to="/inbox?needsReply=1" icon="✉" tone={d.needsReply ? 'blue' : 'gray'} />
-        <Stat label="返信待ち" value={d.waiting.length} to="/tasks" icon="⏳" tone={d.waiting.length ? 'blue' : 'gray'} />
-        <Stat label="要確認" value={d.alerts.length} to="/alerts" icon="⚠" tone={d.alerts.length ? 'orange' : 'gray'} />
-        <Stat label="LINE 今月送信" value={d.lineQuota ? `${d.lineQuota.used} / ${d.lineQuota.limit}` : '未設定'} icon="💬" tone="green" />
+        <Stat label="未返信の会話" value={d.needsReply} to="/inbox?needsReply=1" icon="mail" tone={d.needsReply ? 'blue' : 'gray'} />
+        <Stat label="返信待ち" value={d.waiting.length} to="/tasks" icon="clock" tone={d.waiting.length ? 'blue' : 'gray'} />
+        <Stat label="要確認" value={d.alerts.length} to="/alerts" icon="alert" tone={d.alerts.length ? 'orange' : 'gray'} />
+        <Stat label="LINE 今月送信" value={d.lineQuota ? `${d.lineQuota.used} / ${d.lineQuota.limit}` : '未設定'} icon="chat" tone="green" />
       </div>
       <div className="grid gap-4 md:grid-cols-2">
         <section className="card">
@@ -112,28 +113,26 @@ export default function Dashboard() {
   );
 }
 
-const STAT_TONE: Record<string, { value: string; icon: string; bar: string }> = {
-  blue: { value: 'text-blue-700', icon: 'bg-blue-50 text-blue-700', bar: 'from-blue-500 to-blue-400' },
-  orange: { value: 'text-orange-600', icon: 'bg-orange-50 text-orange-600', bar: 'from-orange-500 to-amber-400' },
-  green: { value: 'text-emerald-700', icon: 'bg-emerald-50 text-emerald-700', bar: 'from-emerald-500 to-emerald-400' },
-  gray: { value: 'text-slate-600', icon: 'bg-slate-100 text-slate-500', bar: 'from-slate-300 to-slate-200' },
+// iOS のアプリアイコン風の色付き角丸に線画アイコンを載せる
+const STAT_TONE: Record<string, { value: string; icon: string }> = {
+  blue: { value: 'text-[var(--accent)]', icon: 'bg-[var(--accent)] text-white' },
+  orange: { value: 'text-[#ff9500]', icon: 'bg-[#ff9500] text-white' },
+  green: { value: 'text-[#248a3d]', icon: 'bg-[#34c759] text-white' },
+  gray: { value: 'text-[var(--text-2)]', icon: 'bg-black/[0.08] text-[var(--text-2)]' },
 };
 
-function Stat({ label, value, to, icon, tone = 'blue' }: { label: string; value: number | string; to?: string; icon?: string; tone?: 'blue' | 'orange' | 'gray' | 'green' }) {
+function Stat({ label, value, to, icon, tone = 'blue' }: { label: string; value: number | string; to?: string; icon?: IconName; tone?: 'blue' | 'orange' | 'gray' | 'green' }) {
   const t = STAT_TONE[tone];
   const inner = (
-    <div className={`card relative overflow-hidden ${to ? 'transition-all duration-150 hover:-translate-y-0.5 hover:shadow-[0_2px_4px_rgba(15,23,42,0.06),0_12px_28px_-16px_rgba(15,23,42,0.25)]' : ''}`}>
-      <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${t.bar}`} />
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="text-xs font-medium text-slate-500">{label}</div>
-          <div className={`mt-1 text-2xl font-bold tabular-nums tracking-tight ${t.value}`}>{value}</div>
-        </div>
-        {icon && (
-          <span className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-lg ${t.icon}`} aria-hidden="true">
-            {icon}
-          </span>
-        )}
+    <div className={`card flex items-center gap-3.5 ${to ? 'transition-[transform,box-shadow] duration-200 hover:-translate-y-0.5 hover:shadow-[var(--shadow-float)]' : ''}`}>
+      {icon && (
+        <span className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-[12px] shadow-[inset_0_-1px_0_rgba(0,0,0,0.08)] ${t.icon}`}>
+          <Icon name={icon} className="h-[22px] w-[22px]" strokeWidth={1.9} />
+        </span>
+      )}
+      <div className="min-w-0">
+        <div className="text-[12px] font-medium text-slate-500">{label}</div>
+        <div className={`mt-0.5 text-[26px] font-semibold leading-none tabular-nums tracking-[-0.02em] ${t.value}`}>{value}</div>
       </div>
     </div>
   );

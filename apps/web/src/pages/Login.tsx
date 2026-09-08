@@ -48,13 +48,13 @@ export default function Login() {
     }
   };
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(900px_500px_at_50%_-10%,rgba(43,76,126,0.18),transparent_60%)] p-4">
-      <div className="card w-full max-w-sm space-y-5 p-6">
-        <div className="flex items-center gap-3">
-          <img src="/icon.svg?v=2" alt="" className="h-12 w-12 rounded-2xl shadow-md" />
+    <div className="flex min-h-screen items-center justify-center p-4">
+      <div className="card w-full max-w-[380px] space-y-6 p-8 shadow-[var(--shadow-float)]">
+        <div className="flex flex-col items-center gap-3 text-center">
+          <img src="/icon.svg?v=2" alt="" className="h-16 w-16 rounded-[16px] shadow-[0_4px_14px_rgba(0,0,0,0.16)]" />
           <div>
-            <h1 className="text-lg font-bold tracking-tight text-slate-900">統合コミュニケーション管理</h1>
-            <p className="text-xs text-slate-500">登大路総合法律事務所</p>
+            <h1 className="text-[19px] font-semibold tracking-[-0.01em]">統合コミュニケーション管理</h1>
+            <p className="mt-0.5 text-xs text-slate-500">登大路総合法律事務所</p>
           </div>
         </div>
         {error && <div className="rounded bg-red-50 p-2 text-sm text-red-700">{error}</div>}

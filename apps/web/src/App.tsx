@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './lib/api';
 import { fmtDateTime } from './lib/format';
+import { Icon, type IconName } from './lib/icons';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Inbox from './pages/Inbox';
@@ -19,18 +20,18 @@ import Files from './pages/Files';
 import Settings from './pages/Settings';
 import Setup from './pages/Setup';
 
-const NAV = [
-  { to: '/', label: 'ダッシュボード', icon: '◎' },
-  { to: '/inbox', label: '受信箱', icon: '✉' },
-  { to: '/calendar', label: '予定', icon: '📅' },
-  { to: '/clients', label: '依頼者', icon: '👤' },
-  { to: '/cases', label: '事件', icon: '⚖' },
-  { to: '/tasks', label: 'タスク・返信待ち', icon: '☑' },
-  { to: '/alerts', label: '要確認', icon: '⚠' },
-  { to: '/files', label: 'ファイル', icon: '📎' },
-  { to: '/forms', label: '書式ライブラリ', icon: '📄' },
-  { to: '/setup', label: '初期設定', icon: '🔌' },
-  { to: '/settings', label: '設定', icon: '⚙' },
+const NAV: { to: string; label: string; icon: IconName }[] = [
+  { to: '/', label: 'ダッシュボード', icon: 'home' },
+  { to: '/inbox', label: '受信箱', icon: 'inbox' },
+  { to: '/calendar', label: '予定', icon: 'calendar' },
+  { to: '/clients', label: '依頼者', icon: 'person' },
+  { to: '/cases', label: '事件', icon: 'scale' },
+  { to: '/tasks', label: 'タスク・返信待ち', icon: 'check' },
+  { to: '/alerts', label: '要確認', icon: 'bell' },
+  { to: '/files', label: 'ファイル', icon: 'clip' },
+  { to: '/forms', label: '書式ライブラリ', icon: 'doc' },
+  { to: '/setup', label: '初期設定', icon: 'plug' },
+  { to: '/settings', label: '設定', icon: 'gear' },
 ];
 
 export default function App() {
@@ -44,21 +45,21 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen">
-      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-slate-200/80 bg-white/90 backdrop-blur md:flex">
-        <div className="flex items-center gap-3 px-4 py-4">
-          <img src="/icon.svg?v=2" alt="" className="h-9 w-9 rounded-xl shadow-sm" />
+      <aside className="sticky top-0 hidden h-screen w-[232px] shrink-0 flex-col border-r border-[var(--hairline)] bg-white/60 backdrop-blur-2xl md:flex">
+        <div className="flex items-center gap-3 px-4 pb-3 pt-5">
+          <img src="/icon.svg?v=2" alt="" className="h-9 w-9 rounded-[10px] shadow-[0_2px_6px_rgba(0,0,0,0.12)]" />
           <div className="min-w-0">
-            <div className="truncate text-sm font-bold tracking-tight text-slate-900">統合コミュニケーション管理</div>
-            <div className="text-[11px] text-slate-500">LINE公式・Chatwork・Gmail</div>
+            <div className="truncate text-[13px] font-semibold tracking-tight">統合コミュニケーション管理</div>
+            <div className="truncate whitespace-nowrap text-[11px] text-slate-500">LINE公式・Chatwork・Gmail</div>
           </div>
         </div>
-        <nav className="flex flex-col gap-0.5 px-2 pt-1">
+        <nav className="flex flex-col gap-px px-3 pt-2">
           {NAV.map((n, i) => (
             <div key={n.to}>
-              {i === NAV.length - 2 && <div className="mx-3 my-2 border-t border-slate-200/80" />}
+              {i === NAV.length - 2 && <div className="mx-1 my-2 border-t border-[var(--hairline)]" />}
               <NavLink to={n.to} end={n.to === '/'} className={({ isActive }) => `nav-item ${isActive ? 'nav-item-active' : ''}`}>
-                <span className="nav-icon" aria-hidden="true">
-                  {n.icon}
+                <span className="nav-icon">
+                  <Icon name={n.icon} className="h-[18px] w-[18px]" />
                 </span>
                 <span className="min-w-0 flex-1 truncate">{n.label}</span>
                 {n.to === '/alerts' && (alerts.data?.length ?? 0) > 0 && <span className="badge badge-orange">{alerts.data!.length}</span>}
@@ -66,13 +67,13 @@ export default function App() {
             </div>
           ))}
         </nav>
-        <div className="mt-auto space-y-2 border-t border-slate-200/80 p-3">
+        <div className="mt-auto space-y-2 border-t border-[var(--hairline)] p-3">
           <RefreshButtons />
           <BackupStatus />
-          <LogoutButton className="w-full justify-center" />
+          <LogoutButton className="w-full" />
         </div>
       </aside>
-      <main className="min-w-0 flex-1 p-3 pb-24 md:p-6 md:pb-8 lg:px-8">
+      <main className="mx-auto w-full min-w-0 max-w-[1280px] flex-1 p-4 pb-24 md:px-8 md:py-7 md:pb-10">
         <PullToRefresh />
         <Routes>
           <Route path="/" element={<Dashboard />} />
@@ -179,8 +180,9 @@ function RefreshButtons() {
   const { refresh, busy } = useRefresh();
   return (
     <div className="flex gap-1">
-      <button type="button" className="btn btn-sm flex-1 justify-center" onClick={refresh} disabled={busy} title="Gmail・Chatwork の受信を取り込み直し、表示を最新にします">
-        {busy ? '更新中…' : '⟳ 更新'}
+      <button type="button" className="btn btn-sm flex-1" onClick={refresh} disabled={busy} title="Gmail・Chatwork の受信を取り込み直し、表示を最新にします">
+        <Icon name="refresh" className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} />
+        {busy ? '更新中…' : '更新'}
       </button>
       <button type="button" className="btn btn-sm text-slate-500" onClick={() => location.reload()} title="アプリを読み直します（画面がおかしいとき・新しい版に更新されたとき）">
         再読み込み
@@ -216,7 +218,7 @@ function LogoutButton({ className = '' }: { className?: string }) {
     }
   };
   return (
-    <button type="button" className={`btn btn-sm text-slate-600 ${className}`} onClick={logout} disabled={busy}>
+    <button type="button" className={`btn btn-sm ${className}`} onClick={logout} disabled={busy}>
       ログアウト
     </button>
   );
@@ -237,12 +239,12 @@ function MobileTabs({ alertCount }: { alertCount: number }) {
     <>
       {open && (
         <div className="fixed inset-0 z-30 bg-slate-900/40 md:hidden" onClick={() => setOpen(false)}>
-          <div className="absolute inset-x-0 bottom-0 rounded-t-2xl bg-white p-3 pb-[calc(env(safe-area-inset-bottom)+72px)] shadow-xl" onClick={(e) => e.stopPropagation()}>
+          <div className="absolute inset-x-0 bottom-0 rounded-t-[22px] bg-white/95 p-4 pb-[calc(env(safe-area-inset-bottom)+72px)] shadow-[0_-8px_40px_rgba(0,0,0,0.18)] backdrop-blur-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-slate-300" />
             <div className="grid grid-cols-3 gap-2">
               {rest.map((n) => (
-                <NavLink key={n.to} to={n.to} className={({ isActive }) => `flex flex-col items-center gap-1 rounded-lg border px-2 py-3 text-xs ${isActive ? 'border-blue-300 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-700'}`}>
-                  <span className="text-lg">{n.icon}</span>
+                <NavLink key={n.to} to={n.to} className={({ isActive }) => `flex flex-col items-center gap-1.5 rounded-2xl px-2 py-3 text-xs ${isActive ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'bg-black/[0.04] text-slate-700'}`}>
+                  <Icon name={n.icon} className="h-6 w-6" strokeWidth={1.6} />
                   {n.label}
                 </NavLink>
               ))}
@@ -257,20 +259,16 @@ function MobileTabs({ alertCount }: { alertCount: number }) {
           </div>
         </div>
       )}
-      <nav className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-slate-200/80 bg-white/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-4px_16px_-8px_rgba(15,23,42,0.15)] backdrop-blur md:hidden" aria-label="主要メニュー">
+      <nav className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-[var(--hairline)] bg-white/80 pb-[env(safe-area-inset-bottom)] backdrop-blur-2xl md:hidden" aria-label="主要メニュー">
         {primary.map((n) => (
-          <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => `relative flex flex-col items-center gap-0.5 py-1.5 text-[11px] ${isActive ? 'font-semibold text-blue-700' : 'text-slate-600'}`}>
-            {({ isActive }) => (
-              <>
-                <span className={`inline-flex h-7 w-11 items-center justify-center rounded-full text-lg leading-none transition-colors ${isActive ? 'bg-blue-50' : ''}`}>{n.icon}</span>
-                {short(n.label)}
-                {n.to === '/alerts' && alertCount > 0 && <span className="absolute right-3 top-0.5 rounded-full bg-orange-500 px-1.5 text-[10px] font-semibold text-white shadow">{alertCount}</span>}
-              </>
-            )}
+          <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => `relative flex flex-col items-center gap-0.5 pb-1 pt-2 text-[10px] font-medium ${isActive ? 'text-[var(--accent)]' : 'text-slate-500'}`}>
+            <Icon name={n.icon} className="h-6 w-6" strokeWidth={1.6} />
+            {short(n.label)}
+            {n.to === '/alerts' && alertCount > 0 && <span className="absolute right-4 top-1 rounded-full bg-[#ff3b30] px-1.5 text-[10px] font-semibold text-white">{alertCount}</span>}
           </NavLink>
         ))}
-        <button type="button" onClick={() => setOpen((v) => !v)} className={`flex flex-col items-center gap-0.5 py-1.5 text-[11px] ${open || restActive ? 'font-semibold text-blue-700' : 'text-slate-600'}`} aria-expanded={open}>
-          <span className={`inline-flex h-7 w-11 items-center justify-center rounded-full text-lg leading-none ${open || restActive ? 'bg-blue-50' : ''}`}>☰</span>
+        <button type="button" onClick={() => setOpen((v) => !v)} className={`flex flex-col items-center gap-0.5 pb-1 pt-2 text-[10px] font-medium ${open || restActive ? 'text-[var(--accent)]' : 'text-slate-500'}`} aria-expanded={open}>
+          <Icon name="menu" className="h-6 w-6" strokeWidth={1.6} />
           その他
         </button>
       </nav>
