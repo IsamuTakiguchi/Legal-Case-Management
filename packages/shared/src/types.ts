@@ -112,6 +112,24 @@ export const taskInputSchema = z.object({
 });
 export type TaskInput = z.infer<typeof taskInputSchema>;
 
+const HM = /^\d{1,2}:\d{2}$/;
+/** 相手（依頼者）の日程の希望。候補日の検索に反映する */
+export const schedulePreferencesSchema = z.object({
+  /** この日以降（YYYY-MM-DD） */
+  earliest: z.string().nullable().optional(),
+  /** この日まで（YYYY-MM-DD） */
+  latest: z.string().nullable().optional(),
+  /** 希望の曜日（0=日〜6=土）。空なら指定なし */
+  weekdays: z.array(z.number().int().min(0).max(6)).optional(),
+  /** 希望の時間帯（HH:MM〜HH:MM）。空なら営業時間すべて */
+  timeRanges: z.array(z.object({ from: z.string().regex(HM), to: z.string().regex(HM) })).optional(),
+  /** 都合が悪い日時（ISO 8601 の区間） */
+  avoid: z.array(z.object({ from: z.string(), to: z.string(), quote: z.string().optional() })).optional(),
+  /** 相手が具体的に挙げた希望日時（空いていれば最優先で候補にする） */
+  requested: z.array(z.object({ startAt: z.string(), quote: z.string().optional() })).optional(),
+});
+export type SchedulePreferences = z.infer<typeof schedulePreferencesSchema>;
+
 export const proposeSlotsSchema = z.object({
   conversationId: z.number().int(),
   kind: z.enum(SCHEDULING_KINDS),
@@ -120,6 +138,11 @@ export const proposeSlotsSchema = z.object({
   durationMinutes: z.number().int().min(15).max(480).default(60),
   maxCandidates: z.number().int().min(1).max(10).default(3),
   preferredHours: z.array(z.number().int().min(0).max(23)).optional(),
+  preferences: schedulePreferencesSchema.optional(),
+  /** 外出予定の前後に空ける移動時間（分）。省略時は設定値 */
+  travelBufferMinutes: z.number().int().min(0).max(240).optional(),
+  /** 予定と予定の間に空ける時間（分）。省略時は設定値 */
+  gapMinutes: z.number().int().min(0).max(120).optional(),
 });
 export type ProposeSlotsInput = z.infer<typeof proposeSlotsSchema>;
 

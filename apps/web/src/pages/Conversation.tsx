@@ -412,15 +412,76 @@ function FilePicker({ clientId, selectedPaths, onToggle }: { clientId: number; s
   );
 }
 
+interface Prefs {
+  found: boolean;
+  earliest: string | null;
+  latest: string | null;
+  weekdays: number[];
+  timeRanges: { from: string; to: string }[];
+  avoid: { from: string; to: string; quote?: string }[];
+  requested: { startAt: string; quote?: string }[];
+  web: boolean | null;
+  durationMinutes: number | null;
+  note: string;
+  summary: string;
+}
+const WD_JA = ['日', '月', '火', '水', '木', '金', '土'];
+
+/** "13:00-17:00, 10:00〜12:00" → [{from,to}] */
+function parseTimeRanges(text: string): { from: string; to: string }[] {
+  const out: { from: string; to: string }[] = [];
+  const norm = text.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0)).replace(/[：]/g, ':');
+  for (const m of norm.matchAll(/(\d{1,2}):(\d{2})\s*[-〜~～]\s*(\d{1,2}):(\d{2})/g)) {
+    out.push({ from: `${m[1].padStart(2, '0')}:${m[2]}`, to: `${m[3].padStart(2, '0')}:${m[4]}` });
+  }
+  return out;
+}
+
 function SchedulePanel({ conversationId, onText, onDone }: { conversationId: number; onText: (t: string) => void; onDone: () => void }) {
   const [kind, setKind] = useState<string>('面談');
   const [from, setFrom] = useState(todayLocalInput(9).slice(0, 10));
   const [to, setTo] = useState(new Date(Date.now() + 14 * 86400_000 + 9 * 3600_000).toISOString().slice(0, 10));
   const [duration, setDuration] = useState(60);
   const [max, setMax] = useState(3);
+  const [travel, setTravel] = useState('');
+  const [weekdays, setWeekdays] = useState<number[]>([]);
+  const [timeRanges, setTimeRanges] = useState('');
+  const [avoid, setAvoid] = useState<Prefs['avoid']>([]);
+  const [requested, setRequested] = useState<Prefs['requested']>([]);
+  const [prefNote, setPrefNote] = useState('');
   const [err, setErr] = useState('');
+  const readPrefs = useMutation({
+    mutationFn: () => api.post<Prefs>(`/conversations/${conversationId}/schedule/preferences`),
+    onSuccess: (r) => {
+      setErr('');
+      if (!r.found) {
+        setPrefNote('相手の希望は読み取れませんでした（条件は手で指定できます）');
+        return;
+      }
+      if (r.earliest) setFrom(r.earliest);
+      if (r.latest) setTo(r.latest);
+      setWeekdays(r.weekdays);
+      setTimeRanges(r.timeRanges.map((t) => `${t.from}-${t.to}`).join(', '));
+      setAvoid(r.avoid);
+      setRequested(r.requested);
+      if (r.durationMinutes) setDuration(r.durationMinutes);
+      if (r.web === true) setKind('WEB');
+      setPrefNote(`${r.note}${r.summary ? `（${r.summary}）` : ''}`);
+    },
+    onError: (e) => setErr((e as Error).message),
+  });
   const propose = useMutation({
-    mutationFn: () => api.post<{ text: string; session: Session }>('/scheduling/propose', { conversationId, kind, from: `${from}T00:00:00+09:00`, to: `${to}T23:59:59+09:00`, durationMinutes: duration, maxCandidates: max }),
+    mutationFn: () =>
+      api.post<{ text: string; session: Session; slots: { startAt: string; requested?: boolean }[] }>('/scheduling/propose', {
+        conversationId,
+        kind,
+        from: `${from}T00:00:00+09:00`,
+        to: `${to}T23:59:59+09:00`,
+        durationMinutes: duration,
+        maxCandidates: max,
+        preferences: { weekdays, timeRanges: parseTimeRanges(timeRanges), avoid, requested },
+        ...(travel.trim() ? { travelBufferMinutes: Math.max(0, Math.min(240, Number(travel))) } : {}),
+      }),
     onSuccess: (r) => {
       onText(`ご都合はいかがでしょうか。\n${r.text}`);
       onDone();
@@ -428,9 +489,16 @@ function SchedulePanel({ conversationId, onText, onDone }: { conversationId: num
     },
     onError: (e) => setErr((e as Error).message),
   });
+  const toggleWd = (w: number) => setWeekdays((prev) => (prev.includes(w) ? prev.filter((x) => x !== w) : [...prev, w].sort()));
   return (
     <div className="rounded border border-slate-200 p-3 text-sm">
-      <div className="mb-2 font-semibold">候補日を提案して仮押さえ</div>
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="font-semibold">候補日を提案して仮押さえ</span>
+        <button type="button" className="btn btn-sm" onClick={() => readPrefs.mutate()} disabled={readPrefs.isPending} title="このやり取りから、相手が述べた期間・曜日・時間帯・都合の悪い日・希望日時を読み取って下の条件に入れます">
+          {readPrefs.isPending ? '読み取り中…' : '相手の希望を読み取る（AI）'}
+        </button>
+        {prefNote && <span className="text-xs text-slate-600">{prefNote}</span>}
+      </div>
       <div className="flex flex-wrap items-end gap-2">
         <div>
           <label className="label">種別</label>
@@ -456,12 +524,66 @@ function SchedulePanel({ conversationId, onText, onDone }: { conversationId: num
           <label className="label">候補数</label>
           <input type="number" className="input w-16" value={max} onChange={(e) => setMax(Number(e.target.value))} />
         </div>
+        <div>
+          <label className="label">移動時間（分）</label>
+          <input type="number" className="input w-20" placeholder="設定値" value={travel} onChange={(e) => setTravel(e.target.value)} title="外出予定（裁判所など）の前後に空ける時間。空欄なら設定の値" />
+        </div>
+      </div>
+      <div className="mt-2 flex flex-wrap items-end gap-3">
+        <div>
+          <label className="label">曜日（指定なしなら平日すべて）</label>
+          <div className="flex gap-2">
+            {[1, 2, 3, 4, 5].map((w) => (
+              <label key={w} className="flex items-center gap-1">
+                <input type="checkbox" checked={weekdays.includes(w)} onChange={() => toggleWd(w)} /> {WD_JA[w]}
+              </label>
+            ))}
+          </div>
+        </div>
+        <div>
+          <label className="label">時間帯（例: 13:00-17:00, 10:00-12:00）</label>
+          <input className="input w-64" placeholder="空欄なら営業時間すべて" value={timeRanges} onChange={(e) => setTimeRanges(e.target.value)} />
+        </div>
+      </div>
+      {(requested.length > 0 || avoid.length > 0) && (
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+          {requested.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="text-slate-500">相手の希望日時（空いていれば最優先）:</span>
+              {requested.map((r, i) => (
+                <span key={i} className="badge badge-blue" title={r.quote}>
+                  {fmtDateTime(r.startAt)}
+                  <button type="button" className="ml-1 text-slate-500 hover:text-red-600" onClick={() => setRequested(requested.filter((_, j) => j !== i))} aria-label="外す">
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          {avoid.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="text-slate-500">相手の都合が悪い日時:</span>
+              {avoid.map((a, i) => (
+                <span key={i} className="badge badge-orange" title={a.quote}>
+                  {fmtDateTime(a.from)}〜{fmtDateTime(a.to)}
+                  <button type="button" className="ml-1 text-slate-500 hover:text-red-600" onClick={() => setAvoid(avoid.filter((_, j) => j !== i))} aria-label="外す">
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      <div className="mt-2">
         <button className="btn btn-primary" onClick={() => propose.mutate()} disabled={propose.isPending}>
           {propose.isPending ? '確認中…' : '空きを探して仮押さえ'}
         </button>
       </div>
       {err && <div className="mt-2 text-red-600">{err}</div>}
-      <div className="mt-2 text-xs text-slate-500">Google カレンダーの空きから候補を出し、「{'{姓} {内容} 仮'}」として仮押さえします。候補文は返信欄に追加されます。</div>
+      <div className="mt-2 text-xs text-slate-500">
+        Google カレンダーの空きから候補を出し、「{'{姓} {内容} 仮'}」として仮押さえします。外出予定の前後は移動時間を、予定同士の間は設定の間隔を空けます。候補文は返信欄に追加されます。
+      </div>
     </div>
   );
 }

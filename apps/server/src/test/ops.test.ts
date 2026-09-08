@@ -350,6 +350,79 @@ describe('依頼者フォルダ', () => {
   });
 });
 
+describe('候補日の検索（営業時間・移動時間・相手の希望）', () => {
+  it('営業時間を 10:00 のように分で指定でき、読めない値は既定に戻る', async () => {
+    const { parseHm, businessHours, fmtHm } = await import('../services/settings.js');
+    expect(parseHm('10:00', 0)).toBe(600);
+    expect(parseHm('9', 0)).toBe(540);
+    expect(parseHm('９：３０', 0)).toBe(570);
+    expect(parseHm('abc', 123)).toBe(123);
+    setSetting('business_hours_start', '10:00');
+    setSetting('business_hours_end', '18:00');
+    expect(businessHours()).toEqual({ startMin: 600, endMin: 1080 });
+    expect(fmtHm(600)).toBe('10:00');
+    setSetting('business_hours_start', '18:00');
+    setSetting('business_hours_end', '10:00');
+    expect(businessHours()).toEqual({ startMin: 540, endMin: 1080 }); // 逆転していれば既定
+    setSetting('business_hours_start', '10:00');
+    setSetting('business_hours_end', '18:00');
+  });
+
+  it('外出予定の前後に移動時間を空け、相手の曜日・時間帯・NG・希望日時を反映する', async () => {
+    const { pickSlots, needsTravel } = await import('../services/scheduling.js');
+    setSetting('business_hours_start', '10:00');
+    setSetting('business_hours_end', '18:00');
+    setSetting('travel_buffer_minutes', '60');
+    setSetting('slot_gap_minutes', '0');
+    setSetting('slot_step_minutes', '30');
+    setSetting('holidays', '');
+    setSetting('office_location', '登大路総合法律事務所（奈良市登大路町5番地 修徳ビル1階）');
+    expect(needsTravel({ location: '奈良地方裁判所' })).toBe(true);
+    expect(needsTravel({ location: '登大路総合法律事務所' })).toBe(false);
+    expect(needsTravel({ location: 'https://zoom.us/j/123' })).toBe(false);
+    expect(needsTravel({ location: '' })).toBe(false);
+
+    // 2027-01-11(月)〜01-15(金)。火曜 13:00-14:00 に裁判所の期日（外出）
+    const now = new Date('2027-01-10T00:00:00+09:00');
+    const from = new Date('2027-01-11T00:00:00+09:00');
+    const to = new Date('2027-01-15T23:59:59+09:00');
+    const court = { start: '2027-01-12T04:00:00.000Z', end: '2027-01-12T05:00:00.000Z', travel: true, title: '期日' };
+
+    // 条件なし: 月曜 10:00 が最初の候補（営業開始が 10:00）
+    const plain = pickSlots([court], { from, to, durationMinutes: 60, maxCandidates: 5, now });
+    expect(plain[0].startAt).toBe('2027-01-11T01:00:00.000Z');
+    expect(plain).toHaveLength(5); // 1 日 1 枠
+
+    // 火・木の 13:00-17:00 希望、木曜は終日 NG → 火曜だけ。13:00 の期日の前後 1 時間を空けて 15:00
+    const prefs = { weekdays: [2, 4], timeRanges: [{ from: '13:00', to: '17:00' }], avoid: [{ from: '2027-01-14T00:00:00+09:00', to: '2027-01-15T00:00:00+09:00' }] };
+    const r = pickSlots([court], { from, to, durationMinutes: 60, maxCandidates: 5, now, preferences: prefs });
+    expect(r.map((x) => x.startAt)).toEqual(['2027-01-12T06:00:00.000Z']);
+
+    // 移動時間 0 なら期日の直後 14:00 に入る
+    const r0 = pickSlots([court], { from, to, durationMinutes: 60, maxCandidates: 5, now, preferences: prefs, travelBufferMinutes: 0 });
+    expect(r0.map((x) => x.startAt)).toEqual(['2027-01-12T05:00:00.000Z']);
+
+    // 外出でない予定は移動時間を空けない
+    const office = { ...court, travel: false };
+    const r1 = pickSlots([office], { from, to, durationMinutes: 60, maxCandidates: 5, now, preferences: prefs });
+    expect(r1.map((x) => x.startAt)).toEqual(['2027-01-12T05:00:00.000Z']);
+
+    // 相手が挙げた希望日時（金曜 11:00）は曜日・時間帯の希望に関係なく、空いていれば最優先で候補に
+    const r2 = pickSlots([court], { from, to, durationMinutes: 60, maxCandidates: 5, now, preferences: { ...prefs, requested: [{ startAt: '2027-01-15T11:00:00+09:00' }] } });
+    expect(r2.map((x) => `${x.startAt}${x.requested ? '*' : ''}`)).toEqual(['2027-01-12T06:00:00.000Z', '2027-01-15T02:00:00.000Z*']);
+
+    // 希望日時が埋まっていれば候補にしない
+    const r3 = pickSlots([{ start: '2027-01-15T01:30:00.000Z', end: '2027-01-15T03:00:00.000Z' }], { from, to, durationMinutes: 60, maxCandidates: 1, now, preferences: { requested: [{ startAt: '2027-01-15T11:00:00+09:00' }] } });
+    expect(r3.map((x) => x.startAt)).toEqual(['2027-01-11T01:00:00.000Z']);
+
+    // 期間の希望（earliest）と、予定間の間隔
+    const r4 = pickSlots([{ start: '2027-01-13T01:00:00.000Z', end: '2027-01-13T02:00:00.000Z' }], { from, to, durationMinutes: 60, maxCandidates: 1, now, preferences: { earliest: '2027-01-13' }, gapMinutes: 30 });
+    expect(r4.map((x) => x.startAt)).toEqual(['2027-01-13T02:30:00.000Z']);
+    setSetting('business_hours_start', '9:00');
+    setSetting('business_hours_end', '18:00');
+  });
+});
+
 describe('予定の登録・編集・削除', () => {
   it('Google 未接続ならアプリ内に保存し、同期で消されず、期日は事件の次回期日に反映される', async () => {
     const { createCalendarEvent, editCalendarEvent, removeCalendarEvent, listCalendarEvents, isLocalEventId } = await import('../services/court.js');

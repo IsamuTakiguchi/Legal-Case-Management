@@ -4,9 +4,9 @@ import { db, schema } from '../db/index.js';
 import * as cal from '../integrations/calendar.js';
 import { createZoomMeeting, deleteZoomMeeting } from '../integrations/zoom.js';
 import { generateStructured } from '../integrations/anthropic.js';
-import { getSetting, getSettingInt, holidaySet } from './settings.js';
+import { getSetting, getSettingInt, holidaySet, businessHours, parseHm } from './settings.js';
 import { upsertAlert, resolveAlertsByKeyPrefix } from './alerts.js';
-import { addBusinessDays, familyName, formatJaDateTime, isJstWeekend, jstDate, toJstParts, type ConfirmSlotInput, type ProposeSlotsInput } from '@lcm/shared';
+import { addBusinessDays, familyName, formatJaDateTime, isJstWeekend, jstDate, toJstParts, type ConfirmSlotInput, type ProposeSlotsInput, type SchedulePreferences } from '@lcm/shared';
 import { isConfigured } from '../config.js';
 import { isGoogleConnected } from '../integrations/google.js';
 
@@ -15,43 +15,138 @@ export type SchedulingRow = typeof schema.schedulingSessions.$inferSelect;
 export interface Slot {
   startAt: string;
   endAt: string;
+  /** 相手が挙げた希望日時そのもの */
+  requested?: boolean;
 }
 
-/** 営業時間内の空き枠を列挙 */
-export async function findFreeSlots(opts: { from: Date; to: Date; durationMinutes: number; preferredHours?: number[]; maxCandidates: number }): Promise<Slot[]> {
-  const busy = await cal.freeBusy(opts.from, opts.to);
-  const startHour = getSettingInt('business_hours_start', 9);
-  const endHour = getSettingInt('business_hours_end', 18);
+/** 空き検索で避ける予定 */
+export interface BusyBlock {
+  start: string;
+  end: string;
+  /** 外出を伴う予定（前後に移動時間を空ける） */
+  travel?: boolean;
+  title?: string;
+}
+
+export interface FreeSlotOptions {
+  from: Date;
+  to: Date;
+  durationMinutes: number;
+  maxCandidates: number;
+  /** 旧: 候補にする時（0-23）。preferences.timeRanges があればそちらを優先 */
+  preferredHours?: number[];
+  /** 相手の希望（期間・曜日・時間帯・NG・希望日時） */
+  preferences?: SchedulePreferences | null;
+  /** 外出予定の前後の移動時間（分）。省略時は設定値 */
+  travelBufferMinutes?: number | null;
+  /** 予定と予定の間隔（分）。省略時は設定値 */
+  gapMinutes?: number | null;
+  /** テスト用の現在時刻 */
+  now?: Date;
+}
+
+/** 予定に移動が必要か: 場所があり、それが事務所でも WEB 会議でもない */
+export function needsTravel(ev: { location?: string | null; title?: string | null }, office = getSetting('office_location')): boolean {
+  const loc = (ev.location ?? '').trim();
+  if (!loc) return false;
+  if (/^https?:\/\//i.test(loc) || /zoom|meet\.google|teams|webex|オンライン|WEB/i.test(loc)) return false;
+  const norm = (x: string) => x.replace(/[\s\u3000（）()]/g, '');
+  const o = norm(office);
+  const l = norm(loc);
+  if (o && l && (o.includes(l) || l.includes(o))) return false;
+  if (/事務所|当所|来所/.test(loc)) return false;
+  return true;
+}
+
+/** Google カレンダーの予定を、空き検索用のブロックにする（「予定なし」扱いのものは除く） */
+export async function busyBlocks(from: Date, to: Date): Promise<BusyBlock[]> {
+  const events = await cal.listEvents(new Date(from.getTime() - 86400_000), new Date(to.getTime() + 86400_000));
+  return events.filter((e) => !e.transparent).map((e) => ({ start: e.startAt, end: e.endAt, travel: needsTravel(e), title: e.title }));
+}
+
+const pad2 = (n: number) => String(n).padStart(2, '0');
+
+/**
+ * 空き枠を選ぶ（純粋関数）。
+ * - 営業時間は分単位（10:00 など）。slot_step_minutes ごとに開始時刻を試す
+ * - 予定の前後に slot_gap_minutes、外出予定の前後にはさらに travel_buffer_minutes を空ける
+ * - 相手の希望（期間・曜日・時間帯・NG）に合う枠だけを候補にし、相手が挙げた希望日時は空いていれば最優先
+ * - 候補日を分散させるため、希望日時を除き 1 日 1 枠
+ */
+export function pickSlots(busy: BusyBlock[], opts: FreeSlotOptions): Slot[] {
+  const { startMin, endMin } = businessHours();
+  const step = Math.max(5, getSettingInt('slot_step_minutes', 30));
+  const travel = opts.travelBufferMinutes ?? getSettingInt('travel_buffer_minutes', 60);
+  const gap = opts.gapMinutes ?? getSettingInt('slot_gap_minutes', 0);
   const holidays = holidaySet();
-  const out: Slot[] = [];
+  const pref = opts.preferences ?? {};
   const dur = opts.durationMinutes * 60_000;
-  const isBusy = (s: Date, e: Date) => busy.some((b) => new Date(b.start).getTime() < e.getTime() && new Date(b.end).getTime() > s.getTime());
-  let cursor = new Date(Math.max(opts.from.getTime(), Date.now() + 3600_000));
-  const usedDays = new Map<string, number>();
-  while (cursor < opts.to && out.length < opts.maxCandidates) {
-    const p = toJstParts(cursor);
-    const dayKey = `${p.year}-${p.month}-${p.day}`;
-    if (isJstWeekend(cursor) || holidays.has(`${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`)) {
-      cursor = jstDate(p.year, p.month, p.day + 1, startHour, 0);
-      continue;
-    }
-    const hours = opts.preferredHours?.length ? opts.preferredHours : Array.from({ length: endHour - startHour }, (_, i) => startHour + i);
-    let found = false;
-    for (const h of hours) {
-      const s = jstDate(p.year, p.month, p.day, h, 0);
-      const e = new Date(s.getTime() + dur);
-      if (s < cursor) continue;
-      if (toJstParts(e).hour > endHour || (toJstParts(e).hour === endHour && toJstParts(e).minute > 0)) continue;
-      if (isBusy(s, e)) continue;
-      out.push({ startAt: s.toISOString(), endAt: e.toISOString() });
-      usedDays.set(dayKey, (usedDays.get(dayKey) ?? 0) + 1);
-      found = true;
-      break; // 1 日 1 枠まで（候補日を分散させる）
-    }
-    void found;
-    cursor = jstDate(p.year, p.month, p.day + 1, startHour, 0);
+  const now = opts.now ?? new Date();
+  const notBefore = Math.max(opts.from.getTime(), now.getTime() + 3600_000);
+  const blocks = busy.map((b) => {
+    const pad = (gap + (b.travel ? travel : 0)) * 60_000;
+    return { s: new Date(b.start).getTime() - pad, e: new Date(b.end).getTime() + pad };
+  });
+  for (const a of pref.avoid ?? []) {
+    const s = new Date(a.from).getTime();
+    const e = new Date(a.to).getTime();
+    if (Number.isFinite(s) && Number.isFinite(e) && e > s) blocks.push({ s, e });
   }
-  return out;
+  const isFree = (s: number, e: number) => !blocks.some((b) => b.s < e && b.e > s);
+  const ranges = (pref.timeRanges ?? []).map((r) => ({ from: parseHm(r.from, -1), to: parseHm(r.to, -1) })).filter((r) => r.from >= 0 && r.to > r.from);
+  const inRanges = (sMin: number, eMin: number) => ranges.length === 0 || ranges.some((r) => sMin >= r.from && eMin <= r.to);
+  const weekdays = new Set(pref.weekdays ?? []);
+  const dateKey = (p: { year: number; month: number; day: number }) => `${p.year}-${pad2(p.month)}-${pad2(p.day)}`;
+  const dayOk = (d: Date, strict: boolean) => {
+    const p = toJstParts(d);
+    const key = dateKey(p);
+    if (holidays.has(key)) return false;
+    if (pref.earliest && key < pref.earliest) return false;
+    if (pref.latest && key > pref.latest) return false;
+    if (!strict) return true;
+    if (isJstWeekend(d)) return false;
+    if (weekdays.size && !weekdays.has(p.weekday)) return false;
+    return true;
+  };
+  const out: Slot[] = [];
+  const usedDays = new Set<string>();
+  // 相手が挙げた希望日時は、空いていればそのまま候補に（曜日・時間帯の希望より優先）
+  for (const r of pref.requested ?? []) {
+    const s = new Date(r.startAt).getTime();
+    if (!Number.isFinite(s) || s < notBefore || s > opts.to.getTime()) continue;
+    const e = s + dur;
+    const d = new Date(s);
+    if (!dayOk(d, false) || !isFree(s, e)) continue;
+    if (out.some((o) => o.startAt === d.toISOString())) continue;
+    out.push({ startAt: d.toISOString(), endAt: new Date(e).toISOString(), requested: true });
+    usedDays.add(dateKey(toJstParts(d)));
+    if (out.length >= opts.maxCandidates) break;
+  }
+  const p0 = toJstParts(new Date(notBefore));
+  const hours = opts.preferredHours?.length && ranges.length === 0 ? new Set(opts.preferredHours) : null;
+  for (let day = jstDate(p0.year, p0.month, p0.day); day.getTime() < opts.to.getTime() && out.length < opts.maxCandidates; day = new Date(day.getTime() + 86400_000)) {
+    const p = toJstParts(day);
+    const key = dateKey(p);
+    if (usedDays.has(key) || !dayOk(day, true)) continue;
+    for (let m = startMin; m + opts.durationMinutes <= endMin; m += step) {
+      if (hours && !hours.has(Math.floor(m / 60))) continue;
+      if (!inRanges(m, m + opts.durationMinutes)) continue;
+      const s = jstDate(p.year, p.month, p.day, Math.floor(m / 60), m % 60).getTime();
+      if (s < notBefore) continue;
+      const e = s + dur;
+      if (!isFree(s, e)) continue;
+      out.push({ startAt: new Date(s).toISOString(), endAt: new Date(e).toISOString() });
+      usedDays.add(key);
+      break;
+    }
+  }
+  return out.sort((a, b) => a.startAt.localeCompare(b.startAt));
+}
+
+/** 営業時間内の空き枠を列挙（Google カレンダーの予定を避ける） */
+export async function findFreeSlots(opts: FreeSlotOptions): Promise<Slot[]> {
+  const busy = await busyBlocks(opts.from, opts.to);
+  return pickSlots(busy, opts);
 }
 
 export function holdTitle(clientName: string, kind: string): string {
@@ -76,8 +171,11 @@ export async function proposeSlots(input: ProposeSlotsInput): Promise<{ session:
     durationMinutes: input.durationMinutes,
     preferredHours: input.preferredHours,
     maxCandidates: input.maxCandidates,
+    preferences: input.preferences ?? null,
+    travelBufferMinutes: input.travelBufferMinutes ?? null,
+    gapMinutes: input.gapMinutes ?? null,
   });
-  if (slots.length === 0) throw new Error('指定期間に空き枠がありません');
+  if (slots.length === 0) throw new Error('指定期間に空き枠がありません（相手の希望や移動時間の条件を緩めると見つかることがあります）');
   const session = db()
     .insert(schema.schedulingSessions)
     .values({ clientId: conv.clientId ?? null, conversationId: conv.id, kind: input.kind, state: 'proposing', candidates: slots, proposedAt: new Date().toISOString() })

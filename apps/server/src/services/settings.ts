@@ -15,8 +15,11 @@ Mail takiguchi@noborilaw.com
   access_note: `なお、契約車以外の駐車場がございませんので、お車でお越しの際は、修徳ビル隣のモータープール(有料)をご利用ください。
 アクセス方法は、次のＵＲＬをご覧下さい。
 http://www.noboriohji.com/access/`,
-  business_hours_start: '9',
-  business_hours_end: '18',
+  business_hours_start: '9:00',
+  business_hours_end: '18:00',
+  travel_buffer_minutes: '60',
+  slot_gap_minutes: '0',
+  slot_step_minutes: '30',
   default_meeting_minutes: '60',
   waiting_followup_business_days: '3',
   scheduling_stale_business_days: '3',
@@ -64,6 +67,32 @@ export function getSetting(key: string): string {
   const v = row?.value ?? SETTING_DEFAULTS[key] ?? '';
   cache.set(key, v);
   return v;
+}
+
+/** "10:00" / "10" / "９：３０" → 0 時からの分。読めなければ fallback */
+export function parseHm(v: string | null | undefined, fallback: number): number {
+  const m = String(v ?? '')
+    .trim()
+    .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .replace(/[：]/g, ':')
+    .match(/^(\d{1,2})(?::(\d{1,2}))?(?:時)?$/);
+  if (!m) return fallback;
+  const h = Number(m[1]);
+  const mi = Number(m[2] ?? 0);
+  if (h > 24 || mi > 59) return fallback;
+  return h * 60 + mi;
+}
+
+/** 分 → "10:00" */
+export function fmtHm(min: number): string {
+  return `${Math.floor(min / 60)}:${String(min % 60).padStart(2, '0')}`;
+}
+
+/** 営業時間（分単位。設定は "10:00" のように分まで指定できる） */
+export function businessHours(): { startMin: number; endMin: number } {
+  const startMin = parseHm(getSetting('business_hours_start'), 9 * 60);
+  const endMin = parseHm(getSetting('business_hours_end'), 18 * 60);
+  return endMin > startMin ? { startMin, endMin } : { startMin: 9 * 60, endMin: 18 * 60 };
 }
 
 export function getSettingInt(key: string, fallback = 0): number {
