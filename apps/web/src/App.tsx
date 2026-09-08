@@ -1,6 +1,6 @@
 import { Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './lib/api';
 import { fmtDateTime } from './lib/format';
 import Login from './pages/Login';
@@ -72,6 +72,7 @@ export default function App() {
         </div>
       </aside>
       <main className="min-w-0 flex-1 p-3 pb-24 md:p-6 md:pb-6">
+        <PullToRefresh />
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/inbox" element={<Inbox />} />
@@ -95,11 +96,11 @@ export default function App() {
   );
 }
 
-/** 「更新」= 受信を取り込み直して画面のデータを読み直す。「再読み込み」= アプリ自体を読み直す（新しい版に更新されたときなど） */
-function RefreshButtons() {
+/** 受信を取り込み直して（Gmail・Chatwork）、画面のデータをすべて読み直す */
+function useRefresh() {
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     setBusy(true);
     try {
       await api.post('/sync/now').catch(() => null);
@@ -107,7 +108,74 @@ function RefreshButtons() {
     } finally {
       setBusy(false);
     }
-  };
+  }, [qc]);
+  return { refresh, busy };
+}
+
+/**
+ * スマホ用「引っ張って更新」。ページ最上部で下に引っ張り、一定以上で離すと更新する。
+ * ホーム画面から起動した PWA ではブラウザ標準の引っ張り更新が効かないため、アプリ側で用意する
+ */
+const PULL_THRESHOLD = 72;
+function PullToRefresh() {
+  const { refresh, busy } = useRefresh();
+  const [pull, setPull] = useState(0);
+  const startY = useRef<number | null>(null);
+  const pulling = useRef(false);
+  useEffect(() => {
+    if (!window.matchMedia('(pointer: coarse)').matches) return; // タッチ端末だけ
+    const onStart = (e: TouchEvent) => {
+      if (window.scrollY > 0 || busy || e.touches.length !== 1) return;
+      startY.current = e.touches[0].clientY;
+      pulling.current = false;
+    };
+    const onMove = (e: TouchEvent) => {
+      if (startY.current === null) return;
+      const dy = e.touches[0].clientY - startY.current;
+      if (dy <= 0 || window.scrollY > 0) {
+        if (pulling.current) setPull(0);
+        pulling.current = false;
+        return;
+      }
+      // 入力欄やスクロールする箱の中では邪魔をしない
+      const t = e.target as HTMLElement | null;
+      if (t?.closest('textarea, input, select, [data-no-pull], .overflow-y-auto')) return;
+      pulling.current = true;
+      setPull(Math.min(PULL_THRESHOLD * 1.6, dy * 0.5));
+      if (dy > 10 && e.cancelable) e.preventDefault();
+    };
+    const onEnd = () => {
+      if (pulling.current && pull >= PULL_THRESHOLD) void refresh();
+      startY.current = null;
+      pulling.current = false;
+      setPull(0);
+    };
+    document.addEventListener('touchstart', onStart, { passive: true });
+    document.addEventListener('touchmove', onMove, { passive: false });
+    document.addEventListener('touchend', onEnd);
+    document.addEventListener('touchcancel', onEnd);
+    return () => {
+      document.removeEventListener('touchstart', onStart);
+      document.removeEventListener('touchmove', onMove);
+      document.removeEventListener('touchend', onEnd);
+      document.removeEventListener('touchcancel', onEnd);
+    };
+  }, [pull, busy, refresh]);
+  const visible = pull > 0 || busy;
+  if (!visible) return null;
+  const ready = pull >= PULL_THRESHOLD;
+  return (
+    <div className="pointer-events-none fixed inset-x-0 top-0 z-50 flex justify-center md:hidden" style={{ transform: `translateY(${busy ? 12 : Math.min(pull, PULL_THRESHOLD) - 40}px)`, transition: pull === 0 ? 'transform 150ms' : undefined }} aria-live="polite">
+      <div className={`rounded-full border px-3 py-1 text-xs shadow ${ready || busy ? 'border-blue-300 bg-blue-50 text-blue-700' : 'border-slate-200 bg-white text-slate-500'}`}>
+        {busy ? '更新中…' : ready ? '離して更新' : '↓ 引っ張って更新'}
+      </div>
+    </div>
+  );
+}
+
+/** 「更新」= 受信を取り込み直して画面のデータを読み直す。「再読み込み」= アプリ自体を読み直す（新しい版に更新されたときなど） */
+function RefreshButtons() {
+  const { refresh, busy } = useRefresh();
   return (
     <div className="flex gap-1">
       <button type="button" className="btn btn-sm flex-1 justify-center" onClick={refresh} disabled={busy} title="Gmail・Chatwork の受信を取り込み直し、表示を最新にします">
