@@ -58,7 +58,17 @@ export function createApp() {
     return c.json({ error: message }, 500);
   });
 
-  app.get('/healthz', (c) => c.json({ ok: true }));
+  app.get('/healthz', (c) => {
+    const m = process.memoryUsage();
+    return c.json({ ok: true, uptimeSec: Math.round(process.uptime()), rssMb: Math.round(m.rss / 1048576), heapMb: Math.round(m.heapUsed / 1048576) });
+  });
+  // 応答に時間がかかった API を記録する（502 などの切り分け用）
+  app.use('/api/*', async (c, next) => {
+    const t0 = Date.now();
+    await next();
+    const ms = Date.now() - t0;
+    if (ms > 10_000) logger.warn({ path: c.req.path, method: c.req.method, ms }, 'API の応答に時間がかかりました');
+  });
   app.route('/webhooks', webhookRoutes);
   app.route('/api/auth', authRoutes);
 
@@ -97,9 +107,17 @@ async function main() {
   applyCredentialOverrides();
   ensurePasswordHash();
   const app = createApp();
-  serve({ fetch: app.fetch, port: e.PORT, hostname: '0.0.0.0' }, (info) => {
+  const server = serve({ fetch: app.fetch, port: e.PORT, hostname: '0.0.0.0' }, (info) => {
     logger.info({ port: info.port, publicBaseUrl: e.PUBLIC_BASE_URL }, 'サーバーを起動しました');
   });
+  // Railway などのプロキシ越しでは、Node 既定の keep-alive（5 秒）がプロキシ側の待ち時間より短いと
+  // 切断の瞬間に来たリクエストが「Application failed to respond」(502) になる。プロキシより長めに保つ
+  const srv = server as unknown as { keepAliveTimeout?: number; headersTimeout?: number; requestTimeout?: number };
+  if (typeof srv.keepAliveTimeout === 'number') {
+    srv.keepAliveTimeout = 120_000;
+    srv.headersTimeout = 125_000;
+    srv.requestTimeout = 300_000;
+  }
   startJobs();
 }
 
