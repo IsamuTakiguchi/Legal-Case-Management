@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
@@ -36,6 +36,7 @@ interface Conv {
   contactId?: number | null;
   needsReply: boolean;
   archived: boolean;
+  unread?: number;
   staff?: boolean;
   client: { id: number; name: string; onedriveFolderPath: string | null; preferredChannel: string | null } | null;
   contact?: { id: number; name: string; role: string; roleLabel: string; organization: string | null; caseId: number; caseTitle: string } | null;
@@ -167,6 +168,35 @@ export default function Conversation() {
 
   const c = conv.data;
   const storedAtts = useMemo(() => c?.messages.flatMap((m) => m.attachments.filter((a) => a.status === 'stored')) ?? [], [c]);
+  // 開いた時点の未読数を覚えておく（サーバーは開いた瞬間に既読にするので、取り直すと 0 になる）
+  const [unreadMark, setUnreadMark] = useState<{ id: number; count: number } | null>(null);
+  useEffect(() => {
+    if (c && unreadMark?.id !== c.id) setUnreadMark({ id: c.id, count: c.unread ?? 0 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [c?.id]);
+  // 「ここから未読」を入れる位置 = 相手からの直近 N 件の先頭
+  const firstUnreadId = useMemo(() => {
+    if (!c || !unreadMark || unreadMark.id !== c.id || unreadMark.count <= 0) return null;
+    const inbound = c.messages.filter((m) => m.direction === 'in');
+    return inbound[Math.max(0, inbound.length - unreadMark.count)]?.id ?? null;
+  }, [c, unreadMark]);
+  // 履歴の長いルームでも、開いたら最新（未読があればその先頭）が見えるようにする
+  const listRef = useRef<HTMLDivElement>(null);
+  const unreadRef = useRef<HTMLDivElement>(null);
+  const lastScrolledFor = useRef<number | null>(null);
+  useEffect(() => {
+    if (!c || !listRef.current || lastScrolledFor.current === c.id) return;
+    lastScrolledFor.current = c.id;
+    const el = listRef.current;
+    requestAnimationFrame(() => {
+      if (unreadRef.current) el.scrollTop = Math.max(0, unreadRef.current.offsetTop - el.offsetTop - 8);
+      else el.scrollTop = el.scrollHeight;
+    });
+  }, [c]);
+  const scrollToLatest = () => {
+    const el = listRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+  };
 
   useEffect(() => {
     if (c && !c.clientId && c.suggestions[0]) setLinkClientId(String(c.suggestions[0].id));
@@ -273,9 +303,24 @@ export default function Conversation() {
           </div>
         )}
 
-        <div className="card max-h-[55vh] space-y-3 overflow-y-auto">
+        <div ref={listRef} className="card relative max-h-[55vh] space-y-3 overflow-y-auto">
+          {c.messages.length > 8 && (
+            <div className="sticky top-0 z-10 flex justify-end">
+              <button type="button" className="rounded-full border border-slate-300 bg-white/90 px-2 py-0.5 text-xs text-slate-600 shadow-sm hover:bg-slate-50" onClick={scrollToLatest} title="最新のメッセージへ">
+                ↓ 最新
+              </button>
+            </div>
+          )}
           {c.messages.map((m) => (
-            <div key={m.id} className={`flex ${m.direction === 'out' ? 'justify-end' : 'justify-start'}`}>
+            <Fragment key={m.id}>
+              {m.id === firstUnreadId && (
+                <div ref={unreadRef} className="flex items-center gap-2 text-xs text-orange-600">
+                  <span className="h-px flex-1 bg-orange-200" />
+                  ここから未読
+                  <span className="h-px flex-1 bg-orange-200" />
+                </div>
+              )}
+            <div className={`flex ${m.direction === 'out' ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${m.direction === 'out' ? 'bg-blue-600 text-white' : 'bg-slate-100'}`}>
                 <div className={`mb-1 text-xs ${m.direction === 'out' ? 'text-blue-100' : 'text-slate-500'}`}>
                   {m.direction === 'out' ? '自分' : (m.senderName ?? name)} ・ {fmtDateTime(m.sentAt)}
@@ -313,6 +358,7 @@ export default function Conversation() {
                 )}
               </div>
             </div>
+            </Fragment>
           ))}
           {c.messages.length === 0 && <div className="text-sm text-slate-500">メッセージはありません</div>}
         </div>
