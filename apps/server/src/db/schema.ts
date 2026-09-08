@@ -52,6 +52,27 @@ export const cases = sqliteTable('cases', {
 });
 
 /** 事務局メンバー（Chatwork で伝言をくれる内部スタッフ） */
+/** 事件の関係者（相手方・相手方代理人・裁判所・保険会社など）。依頼者以外の連絡先を事件に紐付ける */
+export const caseContacts = sqliteTable(
+  'case_contacts',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    caseId: integer('case_id').notNull().references(() => cases.id),
+    role: text('role').notNull().default('other'),
+    name: text('name').notNull(),
+    kana: text('kana'),
+    organization: text('organization'),
+    emails: text('emails', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    lineUserId: text('line_user_id'),
+    chatworkAccountId: integer('chatwork_account_id'),
+    phone: text('phone'),
+    note: text('note'),
+    createdAt: text('created_at').notNull().default(now()),
+    updatedAt: text('updated_at').notNull().default(now()),
+  },
+  (t) => [index('contact_case').on(t.caseId)],
+);
+
 export const staffMembers = sqliteTable('staff_members', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull(),
@@ -167,6 +188,10 @@ export const conversations = sqliteTable(
     channel: text('channel').notNull(),
     externalThreadId: text('external_thread_id').notNull(),
     clientId: integer('client_id').references(() => clients.id),
+    /** 関係者との会話は事件にも紐付く */
+    caseId: integer('case_id').references(() => cases.id),
+    /** 相手が依頼者ではなく事件の関係者（相手方代理人など）のとき */
+    contactId: integer('contact_id').references(() => caseContacts.id),
     subject: text('subject'),
     counterpartName: text('counterpart_name'),
     counterpartAddress: text('counterpart_address'),

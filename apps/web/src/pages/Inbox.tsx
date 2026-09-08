@@ -16,6 +16,7 @@ interface ConversationListItem {
   unread: number;
   needsReply: boolean;
   staff?: boolean;
+  contact?: { id: number; name: string; role: string; roleLabel: string; organization: string | null; caseId: number; caseTitle: string } | null;
   lastMessage: { body: string; truncated?: boolean; direction: string; sentAt: string; senderName?: string | null } | null;
 }
 
@@ -153,7 +154,11 @@ export default function Inbox() {
                     <span className="shrink-0 md:hidden">
                       <span className={channelBadge(c.channel)}>{channelLabel(c.channel)}</span>
                     </span>
-                    <span className={`min-w-0 truncate ${c.unread ? 'font-bold' : 'font-medium'}`}>{c.client?.name ?? (c.channel === 'chatwork' && c.subject ? c.subject : null) ?? c.counterpartName ?? c.counterpartAddress ?? '（不明）'}</span>
+                    <span className={`min-w-0 truncate ${c.unread ? 'font-bold' : 'font-medium'}`}>
+                      {c.contact ? c.contact.name : (c.client?.name ?? (c.channel === 'chatwork' && c.subject ? c.subject : null) ?? c.counterpartName ?? c.counterpartAddress ?? '（不明）')}
+                    </span>
+                    {c.contact && <span className="badge badge-orange shrink-0 whitespace-nowrap">{c.contact.roleLabel}</span>}
+                    {c.contact && c.client && <span className="min-w-0 truncate text-xs text-slate-500">{c.client.name} / {c.contact.caseTitle}</span>}
                     <span className="ml-auto shrink-0 whitespace-nowrap text-xs text-slate-400">{fmtRelative(c.lastMessageAt)}</span>
                   </div>
                   {(!c.clientId || c.needsReply || c.unread > 0 || c.subject || c.staff) && (

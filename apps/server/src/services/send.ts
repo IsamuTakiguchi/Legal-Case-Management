@@ -117,10 +117,11 @@ export async function sendToConversation(conversationId: number, input: SendMess
   d.update(schema.messages).set({ draftId: input.draftId ?? null }).where(eq(schema.messages.id, message.id)).run();
 
   if (input.createWaitingTask) {
+    const contact = conv.contactId ? d.select().from(schema.caseContacts).where(eq(schema.caseContacts.id, conv.contactId)).get() : null;
     await createTask({
-      title: `${client?.name ?? conv.counterpartName ?? '相手'}からの返信待ち: ${input.text.split('\n').find((l) => l.trim())?.slice(0, 40) ?? ''}`,
+      title: `${contact?.name ?? client?.name ?? conv.counterpartName ?? '相手'}からの返信待ち: ${input.text.split('\n').find((l) => l.trim())?.slice(0, 40) ?? ''}`,
       clientId: conv.clientId ?? null,
-      caseId: null,
+      caseId: conv.caseId ?? null,
       conversationId,
       status: 'waiting_client',
       followUpAt: null,

@@ -54,6 +54,29 @@ export const ALERT_TYPE_LABEL: Record<AlertType, string> = {
 export const ATTACHMENT_STATUSES = ['pending', 'stored', 'unassigned', 'failed'] as const;
 export type AttachmentStatus = (typeof ATTACHMENT_STATUSES)[number];
 
+/** 事件の関係者の役割 */
+export const CASE_CONTACT_ROLES = ['opponent', 'opponent_counsel', 'court', 'insurer', 'other'] as const;
+export type CaseContactRole = (typeof CASE_CONTACT_ROLES)[number];
+export const CASE_CONTACT_ROLE_LABEL: Record<CaseContactRole, string> = {
+  opponent: '相手方',
+  opponent_counsel: '相手方代理人',
+  court: '裁判所',
+  insurer: '保険会社',
+  other: 'その他',
+};
+export const caseContactInputSchema = z.object({
+  role: z.enum(CASE_CONTACT_ROLES).default('other'),
+  name: z.string().min(1),
+  kana: z.string().nullable().optional(),
+  organization: z.string().nullable().optional(),
+  emails: z.array(z.string()).default([]),
+  lineUserId: z.string().nullable().optional(),
+  chatworkAccountId: z.number().int().nullable().optional(),
+  phone: z.string().nullable().optional(),
+  note: z.string().nullable().optional(),
+});
+export type CaseContactInput = z.infer<typeof caseContactInputSchema>;
+
 export const SCHEDULING_KINDS = ['面談', 'WEB', '打合せ', '期日'] as const;
 export type SchedulingKind = (typeof SCHEDULING_KINDS)[number];
 

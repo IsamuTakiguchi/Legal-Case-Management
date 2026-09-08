@@ -10,7 +10,7 @@ import { CaseStatusBadge } from './Cases';
 interface Detail extends ClientRow {
   folder: string;
   cases: { id: number; title: string; caseTypeLabel: string; status: string; nextHearingAt: string | null; stage: string | null }[];
-  conversations: { id: number; channel: string; subject: string | null; lastMessageAt: string | null; needsReply: boolean }[];
+  conversations: { id: number; channel: string; subject: string | null; lastMessageAt: string | null; needsReply: boolean; contact?: { name: string; roleLabel: string; caseTitle: string } | null }[];
   tasks: { id: number; title: string; status: string; followUpAt: string | null }[];
   events: { id: number; title: string; startAt: string; kind: string }[];
 }
@@ -132,6 +132,11 @@ export default function ClientDetail() {
             {c.conversations.map((v) => (
               <li key={v.id} className="flex items-center gap-2">
                 <span className={channelBadge(v.channel)}>{channelLabel(v.channel)}</span>
+                {v.contact && (
+                  <span className="badge badge-orange shrink-0 whitespace-nowrap" title={v.contact.caseTitle}>
+                    {v.contact.roleLabel}: {v.contact.name}
+                  </span>
+                )}
                 <Link to={`/inbox/${v.id}`} className="truncate hover:underline">
                   {v.subject ?? '（件名なし）'}
                 </Link>

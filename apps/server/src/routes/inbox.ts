@@ -5,13 +5,14 @@ import { db, schema } from '../db/index.js';
 import { listConversations, getConversation, markRead, setNeedsReply, archiveConversation, bulkUpdateConversations, linkMessage } from '../services/inbox.js';
 import { createTask } from '../services/tasks.js';
 import { linkConversationToClient, suggestClients } from '../services/identity.js';
+import { linkConversationToContact, unlinkConversation, createContact, getContact } from '../services/contacts.js';
 import { assignConversationAttachments } from '../services/attachments.js';
 import { sendToConversation } from '../services/send.js';
 import { draftReply } from '../services/style.js';
 import { judgeWaiting } from '../services/tasks.js';
 import { listTemplates } from '../services/templates.js';
 import { activeCasesForClient } from '../services/cases.js';
-import { sendMessageSchema, draftRequestSchema, type Channel } from '@lcm/shared';
+import { sendMessageSchema, draftRequestSchema, caseContactInputSchema, type Channel } from '@lcm/shared';
 
 export const inboxRoutes = new Hono();
 
@@ -81,6 +82,30 @@ inboxRoutes.post('/conversations/:id/link', async (c) => {
   return c.json({ ok: true, movedAttachments: moved });
 });
 
+/**
+ * 関係者（相手方・相手方代理人など）として紐付ける。
+ * contactId を指定すれば既存の関係者に、caseId + contact を指定すればその事件に関係者を新規登録して紐付ける
+ */
+inboxRoutes.post('/conversations/:id/link-contact', async (c) => {
+  const id = Number(c.req.param('id'));
+  const body = z
+    .object({ contactId: z.number().int().optional(), caseId: z.number().int().optional(), contact: caseContactInputSchema.partial({ emails: true }).optional() })
+    .parse(await c.req.json());
+  let contactId = body.contactId ?? null;
+  if (!contactId) {
+    if (!body.caseId || !body.contact?.name) return c.json({ error: '事件と関係者の名前を指定してください' }, 400);
+    contactId = createContact(body.caseId, { ...body.contact, role: body.contact.role ?? 'other', emails: body.contact.emails ?? [] }).id;
+  } else if (!getContact(contactId)) {
+    return c.json({ error: '関係者が見つかりません' }, 404);
+  }
+  const r = linkConversationToContact(id, contactId);
+  const moved = await assignConversationAttachments(id, r.kase.clientId);
+  return c.json({ ok: true, contactId, caseId: r.kase.id, clientId: r.kase.clientId, movedAttachments: moved });
+});
+
+/** 依頼者・事件・関係者への紐付けをすべて外す */
+inboxRoutes.post('/conversations/:id/unlink', (c) => c.json({ ok: true, conversation: unlinkConversation(Number(c.req.param('id'))) }));
+
 inboxRoutes.post('/conversations/:id/needs-reply', async (c) => {
   const body = z.object({ needsReply: z.boolean() }).parse(await c.req.json());
   setNeedsReply(Number(c.req.param('id')), body.needsReply);
@@ -106,6 +131,9 @@ inboxRoutes.post('/conversations/:id/draft', async (c) => {
       channel: conv.channel as Channel,
       clientName: conv.client?.name ?? null,
       counterpartName: conv.counterpartName,
+      contactName: conv.contact?.name ?? null,
+      contactRole: conv.contact?.roleLabel ?? null,
+      contactCaseTitle: conv.contact?.caseTitle ?? null,
       thread: conv.messages.map((m) => ({ direction: m.direction as 'in' | 'out', body: m.body, sentAt: m.sentAt, senderName: m.senderName })),
       caseSummary: activeCase?.summary ?? null,
     },

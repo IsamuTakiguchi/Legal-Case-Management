@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { fmtDateTime, fmtDate, fmtYen, toLocalInput, fromLocalInput } from '../lib/format';
-import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR_LABEL, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
+import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR_LABEL, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
 
 interface Note {
@@ -176,6 +176,7 @@ export default function CaseDetail() {
               {c.summary ? <div className="whitespace-pre-wrap text-slate-700">{c.summary}</div> : <div className="text-slate-500">未生成</div>}
               {c.summaryGeneratedAt && <div className="mt-1 text-xs text-slate-400">生成 {fmtDateTime(c.summaryGeneratedAt)}</div>}
             </section>
+            <ContactsSection caseId={c.id} />
             <section className="card text-sm">
               <h2 className="mb-2 font-semibold">未了タスク</h2>
               <ul className="space-y-1">
@@ -211,6 +212,137 @@ export default function CaseDetail() {
       )}
       {tab === 'timeline' && <Timeline caseId={c.id} />}
       {tab === 'creditors' && <Creditors caseId={c.id} stages={c.caseType?.creditorStages ?? []} />}
+    </div>
+  );
+}
+
+interface Contact {
+  id: number;
+  role: string;
+  name: string;
+  kana: string | null;
+  organization: string | null;
+  emails: string[];
+  lineUserId: string | null;
+  chatworkAccountId: number | null;
+  phone: string | null;
+  note: string | null;
+}
+const EMPTY_CONTACT = { role: 'opponent_counsel', name: '', organization: '', emails: '', phone: '', note: '' };
+
+/** 事件の関係者（相手方・相手方代理人・裁判所など）。登録したメールアドレス等からの連絡は自動でこの事件に紐付く */
+function ContactsSection({ caseId }: { caseId: number }) {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['contacts', String(caseId)], queryFn: () => api.get<Contact[]>(`/cases/${caseId}/contacts`) });
+  const [editing, setEditing] = useState<number | 'new' | null>(null);
+  const [form, setForm] = useState(EMPTY_CONTACT);
+  const [err, setErr] = useState('');
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['contacts'] });
+    qc.invalidateQueries({ queryKey: ['case', String(caseId)] });
+  };
+  const body = () => ({ role: form.role, name: form.name, organization: form.organization || null, emails: form.emails.split(/[\s,、;]+/).filter(Boolean), phone: form.phone || null, note: form.note || null });
+  const save = useMutation({
+    mutationFn: () => (editing === 'new' ? api.post(`/cases/${caseId}/contacts`, body()) : api.put(`/contacts/${editing}`, body())),
+    onSuccess: () => {
+      setEditing(null);
+      setErr('');
+      refresh();
+    },
+    onError: (e) => setErr((e as Error).message),
+  });
+  const remove = useMutation({ mutationFn: (id: number) => api.del(`/contacts/${id}`), onSuccess: refresh, onError: (e) => setErr((e as Error).message) });
+  const startEdit = (x: Contact) => {
+    setEditing(x.id);
+    setForm({ role: x.role, name: x.name, organization: x.organization ?? '', emails: x.emails.join(', '), phone: x.phone ?? '', note: x.note ?? '' });
+  };
+  return (
+    <section className="card text-sm">
+      <div className="mb-2 flex items-center gap-2">
+        <h2 className="font-semibold">関係者（相手方・代理人など）</h2>
+        <button
+          className="btn btn-sm ml-auto"
+          onClick={() => {
+            setEditing('new');
+            setForm(EMPTY_CONTACT);
+          }}
+        >
+          追加
+        </button>
+      </div>
+      <ul className="space-y-2">
+        {q.data?.map((x) => (
+          <li key={x.id} className="rounded border border-slate-100 p-2">
+            {editing === x.id ? (
+              <ContactForm form={form} setForm={setForm} onSave={() => save.mutate()} onCancel={() => setEditing(null)} busy={save.isPending} />
+            ) : (
+              <div className="flex flex-wrap items-start gap-2">
+                <span className="badge badge-orange shrink-0">{CASE_CONTACT_ROLE_LABEL[x.role as keyof typeof CASE_CONTACT_ROLE_LABEL] ?? x.role}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium">
+                    {x.name}
+                    {x.organization && <span className="ml-1 text-xs text-slate-500">{x.organization}</span>}
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    {x.emails.join(', ')}
+                    {x.phone && <span className="ml-2">☎ {x.phone}</span>}
+                    {x.lineUserId && <span className="ml-2 badge badge-line">LINE 連携済</span>}
+                    {x.chatworkAccountId && <span className="ml-2 badge badge-chatwork">Chatwork 連携済</span>}
+                  </div>
+                  {x.note && <div className="text-xs text-slate-500">{x.note}</div>}
+                </div>
+                <button className="text-xs text-blue-700 hover:underline" onClick={() => startEdit(x)}>
+                  編集
+                </button>
+                <button
+                  className="text-xs text-slate-400 hover:text-red-600 hover:underline"
+                  onClick={() => {
+                    if (confirm(`${x.name} を関係者から削除しますか？（会話は残り、関係者の紐付けだけ外れます）`)) remove.mutate(x.id);
+                  }}
+                >
+                  削除
+                </button>
+              </div>
+            )}
+          </li>
+        ))}
+        {editing === 'new' && (
+          <li className="rounded border border-slate-100 p-2">
+            <ContactForm form={form} setForm={setForm} onSave={() => save.mutate()} onCancel={() => setEditing(null)} busy={save.isPending} />
+          </li>
+        )}
+        {q.data?.length === 0 && editing !== 'new' && <li className="text-slate-500">未登録です。相手方代理人などのメールアドレスを登録しておくと、その相手からの Gmail が自動でこの事件に紐付きます。受信箱の未紐付けの会話からも登録できます。</li>}
+      </ul>
+      {err && <div className="mt-1 text-xs text-red-600">{err}</div>}
+    </section>
+  );
+}
+
+function ContactForm({ form, setForm, onSave, onCancel, busy }: { form: typeof EMPTY_CONTACT; setForm: (f: typeof EMPTY_CONTACT) => void; onSave: () => void; onCancel: () => void; busy: boolean }) {
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap gap-1">
+        <select className="input w-36" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
+          {CASE_CONTACT_ROLES.map((r) => (
+            <option key={r} value={r}>
+              {CASE_CONTACT_ROLE_LABEL[r]}
+            </option>
+          ))}
+        </select>
+        <input className="input flex-1" placeholder="名前" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+      </div>
+      <input className="input" placeholder="所属（法律事務所名・会社名など）" value={form.organization} onChange={(e) => setForm({ ...form, organization: e.target.value })} />
+      <input className="input" placeholder="メールアドレス（複数はカンマ区切り）" value={form.emails} onChange={(e) => setForm({ ...form, emails: e.target.value })} />
+      <input className="input" placeholder="電話番号" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+      <input className="input" placeholder="メモ" value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} />
+      <div className="flex gap-2">
+        <button className="btn btn-primary btn-sm" onClick={onSave} disabled={!form.name.trim() || busy}>
+          保存
+        </button>
+        <button className="btn btn-sm" onClick={onCancel}>
+          取消
+        </button>
+      </div>
     </div>
   );
 }

@@ -4,7 +4,7 @@ import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { ClientPicker } from '../lib/ClientPicker';
 import { channelBadge, channelLabel, fmtDateTime, fmtBytes, fromLocalInput, toLocalInput, todayLocalInput } from '../lib/format';
-import { SCHEDULING_KINDS, EVENT_KIND_LABEL, type EventKind } from '@lcm/shared';
+import { SCHEDULING_KINDS, EVENT_KIND_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, type EventKind } from '@lcm/shared';
 
 interface Attachment {
   id: number;
@@ -32,10 +32,13 @@ interface Conv {
   counterpartName: string | null;
   counterpartAddress: string | null;
   clientId: number | null;
+  caseId?: number | null;
+  contactId?: number | null;
   needsReply: boolean;
   archived: boolean;
   staff?: boolean;
   client: { id: number; name: string; onedriveFolderPath: string | null; preferredChannel: string | null } | null;
+  contact?: { id: number; name: string; role: string; roleLabel: string; organization: string | null; caseId: number; caseTitle: string } | null;
   cases: { id: number; title: string; summary: string | null }[];
   messages: Message[];
   drafts: { id: number; generatedText: string; instruction: string | null; createdAt: string; status: string }[];
@@ -147,6 +150,15 @@ export default function Conversation() {
       qc.invalidateQueries({ queryKey: ['alerts'] });
     },
   });
+  const unlink = useMutation({
+    mutationFn: () => api.post(`/conversations/${id}/unlink`),
+    onSuccess: () => {
+      setMsg({ kind: 'ok', text: '紐付けを外しました' });
+      invalidate();
+    },
+    onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
+  });
+  const [linkMode, setLinkMode] = useState<'client' | 'contact'>('client');
 
   const toggle = useMutation({
     mutationFn: (v: { needsReply?: boolean; archived?: boolean }) => (v.needsReply !== undefined ? api.post(`/conversations/${id}/needs-reply`, v) : api.post(`/conversations/${id}/archive`, v)),
@@ -163,7 +175,7 @@ export default function Conversation() {
   if (!c) return <div className="text-slate-500">読み込み中…</div>;
 
   // Chatwork のグループチャットは相手個人ではなくルーム（件名に保持）を会話名にする
-  const name = c.client?.name ?? (c.channel === 'chatwork' && c.subject ? c.subject : null) ?? c.counterpartName ?? c.counterpartAddress ?? '（不明）';
+  const name = c.contact?.name ?? c.client?.name ?? (c.channel === 'chatwork' && c.subject ? c.subject : null) ?? c.counterpartName ?? c.counterpartAddress ?? '（不明）';
 
   return (
     <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
@@ -174,10 +186,40 @@ export default function Conversation() {
           </Link>
           <span className={channelBadge(c.channel)}>{channelLabel(c.channel)}</span>
           <h1 className="text-lg font-bold">{name}</h1>
-          {c.client && (
+          {c.contact && (
+            <span className="badge badge-orange" title={c.contact.organization ?? undefined}>
+              {c.contact.roleLabel}
+            </span>
+          )}
+          {c.contact && c.client && (
+            <span className="text-sm text-slate-600">
+              依頼者{' '}
+              <Link to={`/clients/${c.client.id}`} className="text-blue-700 hover:underline">
+                {c.client.name}
+              </Link>{' '}
+              の{' '}
+              <Link to={`/cases/${c.contact.caseId}`} className="text-blue-700 hover:underline">
+                {c.contact.caseTitle}
+              </Link>
+            </span>
+          )}
+          {c.client && !c.contact && (
             <Link to={`/clients/${c.client.id}`} className="text-sm text-blue-700 hover:underline">
               依頼者ページ
             </Link>
+          )}
+          {(c.clientId || c.contactId) && (
+            <button
+              type="button"
+              className="text-xs text-slate-400 hover:text-red-600 hover:underline"
+              onClick={() => {
+                if (confirm('この会話の依頼者・事件・関係者への紐付けを外します。依頼者や関係者の連絡先は変更しません。よろしいですか？')) unlink.mutate();
+              }}
+              disabled={unlink.isPending}
+              title="間違って紐付けたときに外します"
+            >
+              紐付けを外す
+            </button>
           )}
           {c.subject && !(c.channel === 'chatwork' && !c.client) && <span className="text-sm text-slate-500">件名: {c.subject}</span>}
           <div className="ml-auto flex gap-2">
@@ -198,16 +240,36 @@ export default function Conversation() {
         )}
         {!c.clientId && !c.staff && (
           <div className="card border-orange-200 bg-orange-50">
-            <div className="mb-2 text-sm font-semibold text-orange-800">この連絡先はまだ依頼者に紐付いていません</div>
-            <div className="flex flex-wrap items-center gap-2">
-              <ClientPicker value={linkClientId} onChange={setLinkClientId} suggestions={c.suggestions} />
-              <button className="btn btn-primary btn-sm" disabled={!linkClientId} onClick={() => link.mutate(Number(linkClientId))}>
-                紐付ける
-              </button>
-              <Link to={`/clients?new=${encodeURIComponent(c.counterpartName ?? '')}&email=${encodeURIComponent(c.channel === 'gmail' ? c.counterpartAddress ?? '' : '')}`} className="btn btn-sm">
-                新規依頼者として登録
-              </Link>
+            <div className="mb-2 flex flex-wrap items-center gap-3 text-sm">
+              <span className="font-semibold text-orange-800">この連絡先はまだ紐付いていません</span>
+              <label className="flex items-center gap-1">
+                <input type="radio" name="linkMode" checked={linkMode === 'client'} onChange={() => setLinkMode('client')} /> 依頼者本人
+              </label>
+              <label className="flex items-center gap-1" title="相手方・相手方代理人・裁判所・保険会社など、依頼者以外の相手">
+                <input type="radio" name="linkMode" checked={linkMode === 'contact'} onChange={() => setLinkMode('contact')} /> 事件の関係者（相手方・相手方代理人など）
+              </label>
             </div>
+            {linkMode === 'client' ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <ClientPicker value={linkClientId} onChange={setLinkClientId} suggestions={c.suggestions} />
+                <button className="btn btn-primary btn-sm" disabled={!linkClientId} onClick={() => link.mutate(Number(linkClientId))}>
+                  紐付ける
+                </button>
+                <Link to={`/clients?new=${encodeURIComponent(c.counterpartName ?? '')}&email=${encodeURIComponent(c.channel === 'gmail' ? c.counterpartAddress ?? '' : '')}`} className="btn btn-sm">
+                  新規依頼者として登録
+                </Link>
+              </div>
+            ) : (
+              <ContactLinkForm
+                conversationId={c.id}
+                defaultName={c.counterpartName ?? ''}
+                onDone={() => {
+                  setMsg({ kind: 'ok', text: '関係者として紐付けました' });
+                  invalidate();
+                  qc.invalidateQueries({ queryKey: ['alerts'] });
+                }}
+              />
+            )}
           </div>
         )}
 
@@ -408,6 +470,100 @@ function FilePicker({ clientId, selectedPaths, onToggle }: { clientId: number; s
           </span>
         </label>
       ))}
+    </div>
+  );
+}
+
+/** 未紐付けの会話を、事件の関係者（相手方・相手方代理人など）として紐付ける */
+function ContactLinkForm({ conversationId, defaultName, onDone }: { conversationId: number; defaultName: string; onDone: () => void }) {
+  const [clientId, setClientId] = useState('');
+  const [caseId, setCaseId] = useState('');
+  const [contactId, setContactId] = useState('');
+  const [role, setRole] = useState<string>('opponent_counsel');
+  const [name, setName] = useState(defaultName);
+  const [organization, setOrganization] = useState('');
+  const [err, setErr] = useState('');
+  const cases = useQuery({ queryKey: ['cases', 'client', clientId], queryFn: () => api.get<{ id: number; title: string; status: string }[]>(`/cases?clientId=${clientId}`), enabled: !!clientId });
+  const contacts = useQuery({ queryKey: ['contacts', caseId], queryFn: () => api.get<{ id: number; name: string; role: string; organization: string | null }[]>(`/cases/${caseId}/contacts`), enabled: !!caseId });
+  useEffect(() => {
+    setCaseId('');
+    setContactId('');
+  }, [clientId]);
+  useEffect(() => {
+    const list = cases.data ?? [];
+    if (list.length === 1 && !caseId) setCaseId(String(list[0].id));
+  }, [cases.data, caseId]);
+  const submit = useMutation({
+    mutationFn: () =>
+      contactId
+        ? api.post(`/conversations/${conversationId}/link-contact`, { contactId: Number(contactId) })
+        : api.post(`/conversations/${conversationId}/link-contact`, { caseId: Number(caseId), contact: { role, name, organization: organization || null } }),
+    onSuccess: onDone,
+    onError: (e) => setErr((e as Error).message),
+  });
+  const ready = contactId || (caseId && name.trim());
+  return (
+    <div className="space-y-2 text-sm">
+      <div className="flex flex-wrap items-end gap-2">
+        <div>
+          <label className="label">依頼者</label>
+          <ClientPicker value={clientId} onChange={setClientId} />
+        </div>
+        <div>
+          <label className="label">事件</label>
+          <select className="input w-56" value={caseId} onChange={(e) => { setCaseId(e.target.value); setContactId(''); }} disabled={!clientId}>
+            <option value="">{clientId ? '事件を選択…' : '先に依頼者を選択'}</option>
+            {cases.data?.map((k) => (
+              <option key={k.id} value={k.id}>
+                {k.title}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      {caseId && (
+        <div className="flex flex-wrap items-end gap-2">
+          <div>
+            <label className="label">関係者</label>
+            <select className="input w-56" value={contactId} onChange={(e) => setContactId(e.target.value)}>
+              <option value="">新しく登録する</option>
+              {contacts.data?.map((x) => (
+                <option key={x.id} value={x.id}>
+                  {CASE_CONTACT_ROLE_LABEL[x.role as keyof typeof CASE_CONTACT_ROLE_LABEL] ?? x.role}: {x.name}
+                  {x.organization ? `（${x.organization}）` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+          {!contactId && (
+            <>
+              <div>
+                <label className="label">役割</label>
+                <select className="input" value={role} onChange={(e) => setRole(e.target.value)}>
+                  {CASE_CONTACT_ROLES.map((r) => (
+                    <option key={r} value={r}>
+                      {CASE_CONTACT_ROLE_LABEL[r]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">名前</label>
+                <input className="input w-44" value={name} onChange={(e) => setName(e.target.value)} placeholder="例: 田中 一郎" />
+              </div>
+              <div>
+                <label className="label">所属（任意）</label>
+                <input className="input w-44" value={organization} onChange={(e) => setOrganization(e.target.value)} placeholder="例: ○○法律事務所" />
+              </div>
+            </>
+          )}
+          <button className="btn btn-primary btn-sm" disabled={!ready || submit.isPending} onClick={() => submit.mutate()}>
+            関係者として紐付ける
+          </button>
+        </div>
+      )}
+      {err && <div className="text-red-600">{err}</div>}
+      <div className="text-xs text-slate-500">この会話の相手のメールアドレス・LINE は関係者側に登録され、依頼者の連絡先は変わりません。以後この相手からの連絡は自動でこの事件に紐付きます。</div>
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { and, eq, desc, gt, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/index.js';
 import { generateStructured, generateText } from '../integrations/anthropic.js';
-import { formatJaDateTime, type CaseInput, type CaseNoteInput, WAITING_FOR, CASE_NOTE_KIND_LABEL, type CaseNoteKind, OPEN_CASE_STATUSES } from '@lcm/shared';
+import { formatJaDateTime, type CaseInput, type CaseNoteInput, WAITING_FOR, CASE_NOTE_KIND_LABEL, type CaseNoteKind, OPEN_CASE_STATUSES, CASE_CONTACT_ROLE_LABEL, type CaseContactRole } from '@lcm/shared';
 import { createTask } from './tasks.js';
 import { syncClientFolderWithStatus } from './clientFolders.js';
 import { logger } from '../logger.js';
@@ -104,7 +104,19 @@ export function getCase(id: number) {
   const events = db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.caseId, id)).orderBy(desc(schema.calendarEvents.startAt)).all();
   const conversations = client ? db().select().from(schema.conversations).where(eq(schema.conversations.clientId, client.id)).orderBy(desc(schema.conversations.lastMessageAt)).all() : [];
   const staff = c.staffId ? (db().select().from(schema.staffMembers).where(eq(schema.staffMembers.id, c.staffId)).get() ?? null) : null;
-  return { ...c, client, caseType, notes, tasks, events, conversations, staff };
+  const contacts = db().select().from(schema.caseContacts).where(eq(schema.caseContacts.caseId, id)).orderBy(schema.caseContacts.role, schema.caseContacts.name).all();
+  const contactById = new Map(contacts.map((x) => [x.id, x]));
+  return {
+    ...c,
+    client,
+    caseType,
+    notes,
+    tasks,
+    events,
+    conversations: conversations.map((v) => ({ ...v, contact: v.contactId ? (contactById.get(v.contactId) ?? null) : null })),
+    staff,
+    contacts,
+  };
 }
 
 /** タイムライン: ノート＋メッセージ＋カレンダー＋タスク完了を時系列に */
@@ -116,7 +128,18 @@ export function caseTimeline(id: number, limit = 200) {
   for (const n of db().select().from(schema.caseNotes).where(eq(schema.caseNotes.caseId, id)).all()) {
     items.push({ at: n.occurredAt, type: `note:${n.kind}`, title: `${CASE_NOTE_KIND_LABEL[n.kind as CaseNoteKind] ?? n.kind}${n.counterpart ? ` / ${n.counterpart}` : ''}`, body: n.gist ?? n.rawText, ref: { noteId: n.id } });
   }
-  const convs = db().select().from(schema.conversations).where(eq(schema.conversations.clientId, c.clientId)).all();
+  // 依頼者本人との会話（他の事件の関係者との会話は除く）と、この事件の関係者との会話
+  const convs = db()
+    .select()
+    .from(schema.conversations)
+    .where(eq(schema.conversations.clientId, c.clientId))
+    .all()
+    .filter((v) => !v.contactId || v.caseId === id);
+  const contacts = db().select().from(schema.caseContacts).where(eq(schema.caseContacts.caseId, id)).all();
+  const convTag = new Map(convs.filter((v) => v.contactId).map((v) => {
+    const ct = contacts.find((x) => x.id === v.contactId);
+    return [v.id, ct ? ` 〔${CASE_CONTACT_ROLE_LABEL[ct.role as CaseContactRole] ?? ct.role}: ${ct.name}〕` : ''];
+  }));
   const convIds = convs.map((x) => x.id);
   const seen = new Set<number>();
   const pushMsg = (m: typeof schema.messages.$inferSelect, tag = '') => {
@@ -126,7 +149,7 @@ export function caseTimeline(id: number, limit = 200) {
   };
   if (convIds.length) {
     const msgs = db().select().from(schema.messages).where(inArray(schema.messages.conversationId, convIds)).orderBy(desc(schema.messages.sentAt)).limit(limit).all();
-    for (const m of msgs) pushMsg(m);
+    for (const m of msgs) pushMsg(m, convTag.get(m.conversationId) ?? '');
   }
   // 事務局の伝言など、メッセージ単位でこの事件に紐付いたもの
   for (const m of db().select().from(schema.messages).where(eq(schema.messages.caseId, id)).orderBy(desc(schema.messages.sentAt)).limit(limit).all()) pushMsg(m, ' 伝言');
