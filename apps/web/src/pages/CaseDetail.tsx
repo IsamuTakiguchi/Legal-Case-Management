@@ -616,9 +616,127 @@ function NoteComposer({ caseId, onSaved }: { caseId: number; onSaved: (note?: { 
   );
 }
 
+/** 記録の編集フォーム（1 行 1 項目の欄は「・」や「-」の先頭記号を除いて保存） */
+function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; onCancel: () => void }) {
+  const joinLines = (xs: string[]) => xs.map((x) => `・${x}`).join('\n');
+  const lines = (t: string) => t.split(/\n/).map((x) => x.replace(/^[・\-\s]+/, '').trim()).filter(Boolean);
+  const [kind, setKind] = useState(n.kind);
+  const [occurredAt, setOccurredAt] = useState(toLocalInput(n.occurredAt));
+  const [counterpart, setCounterpart] = useState(n.counterpart ?? '');
+  const [phone, setPhone] = useState(n.phone ?? '');
+  const [gist, setGist] = useState(n.gist ?? '');
+  const [rawText, setRawText] = useState(n.rawText ?? '');
+  const [theirSaid, setTheirSaid] = useState(joinLines(n.theirSaid));
+  const [ourSaid, setOurSaid] = useState(joinLines(n.ourSaid));
+  const [decisions, setDecisions] = useState(joinLines(n.decisions));
+  // 次のアクションは「内容 | 期限(YYYY-MM-DD)」で 1 行 1 件
+  const dateOf = (v: string | null | undefined) => (v && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null);
+  const [nextActions, setNextActions] = useState(n.nextActions.map((a) => `・${a.title}${dateOf(a.due) ? ` | ${dateOf(a.due)}` : ''}`).join('\n'));
+  const WAITING = ['none', 'client', 'counterpart', 'court', 'creditor', 'other'] as const;
+  // 古い記録に想定外の値が入っていても保存できるよう、選べる値に丸める
+  const [waitingFor, setWaitingFor] = useState<string>(n.waitingFor && (WAITING as readonly string[]).includes(n.waitingFor) ? n.waitingFor : 'none');
+  const [err, setErr] = useState('');
+  const save = useMutation({
+    mutationFn: () =>
+      api.put(`/case-notes/${n.id}`, {
+        kind,
+        occurredAt: fromLocalInput(occurredAt),
+        counterpart: counterpart || null,
+        phone: phone || null,
+        gist: gist || null,
+        rawText,
+        theirSaid: lines(theirSaid),
+        ourSaid: lines(ourSaid),
+        decisions: lines(decisions),
+        nextActions: lines(nextActions).map((l) => {
+          const [title, due] = l.split('|').map((x) => x.trim());
+          const prev = n.nextActions.find((a) => a.title === title);
+          return { title, due: dateOf(due), taskId: prev?.taskId ?? null };
+        }),
+        waitingFor: waitingFor === 'none' ? null : waitingFor,
+      }),
+    onSuccess: onSaved,
+    onError: (e) => setErr((e as Error).message),
+  });
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <select className="input w-auto" value={kind} onChange={(e) => setKind(e.target.value)}>
+          {CASE_NOTE_KINDS.filter((k) => k !== 'policy').map((k) => (
+            <option key={k} value={k}>
+              {CASE_NOTE_KIND_LABEL[k]}
+            </option>
+          ))}
+        </select>
+        <input type="datetime-local" className="input w-auto" value={occurredAt} onChange={(e) => setOccurredAt(e.target.value)} />
+        <input className="input w-40" placeholder="相手" value={counterpart} onChange={(e) => setCounterpart(e.target.value)} />
+        {kind === 'phone' && <input type="tel" className="input w-36" placeholder="電話番号" value={phone} onChange={(e) => setPhone(e.target.value)} />}
+        <select className="input w-auto" value={waitingFor} onChange={(e) => setWaitingFor(e.target.value)} title="誰の対応待ちか">
+          {WAITING.map((w) => (
+            <option key={w} value={w}>
+              {w === 'none' ? '待ちなし' : `${WAITING_FOR_LABEL[w]}待ち`}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div>
+        <label className="label">要旨</label>
+        <textarea className="input min-h-16 text-sm" value={gist} onChange={(e) => setGist(e.target.value)} placeholder="空なら元メモがそのまま表示されます" />
+      </div>
+      <div className="grid gap-2 md:grid-cols-2">
+        <div>
+          <label className="label">相手が言ったこと（1 行 1 項目）</label>
+          <textarea className="input min-h-16 text-sm" value={theirSaid} onChange={(e) => setTheirSaid(e.target.value)} />
+        </div>
+        <div>
+          <label className="label">こちらが言ったこと（1 行 1 項目）</label>
+          <textarea className="input min-h-16 text-sm" value={ourSaid} onChange={(e) => setOurSaid(e.target.value)} />
+        </div>
+        <div>
+          <label className="label">決定事項（1 行 1 項目）</label>
+          <textarea className="input min-h-14 text-sm" value={decisions} onChange={(e) => setDecisions(e.target.value)} />
+        </div>
+        <div>
+          <label className="label">次のアクション（1 行 1 件。期限は「| 2027-01-20」のように末尾に）</label>
+          <textarea className="input min-h-14 text-sm" value={nextActions} onChange={(e) => setNextActions(e.target.value)} />
+        </div>
+      </div>
+      <div>
+        <label className="label">元メモ</label>
+        <textarea className="input min-h-16 text-sm" value={rawText} onChange={(e) => setRawText(e.target.value)} />
+      </div>
+      {err && <div className="text-xs text-red-600">{err}</div>}
+      <div className="flex gap-2">
+        <button className="btn btn-primary btn-sm" onClick={() => save.mutate()} disabled={save.isPending}>
+          保存
+        </button>
+        <button className="btn btn-sm" onClick={onCancel}>
+          取消
+        </button>
+        <span className="text-xs text-slate-400">タスク化済みの次のアクションは、内容を変えなければタスクとの結び付きを保ちます</span>
+      </div>
+    </div>
+  );
+}
+
 function NoteView({ n, onDeleted, onNotice }: { n: Note; onDeleted: () => void; onNotice?: () => void }) {
   const del = useMutation({ mutationFn: () => api.del(`/case-notes/${n.id}`), onSuccess: onDeleted });
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  if (editing) {
+    return (
+      <li className="rounded border border-blue-200 bg-blue-50/30 p-3 text-sm">
+        <NoteEditor
+          n={n}
+          onSaved={() => {
+            setEditing(false);
+            onDeleted();
+          }}
+          onCancel={() => setEditing(false)}
+        />
+      </li>
+    );
+  }
   return (
     <li className="rounded border border-slate-100 p-3 text-sm">
       <div className="flex items-center gap-2">
@@ -632,7 +750,10 @@ function NoteView({ n, onDeleted, onNotice }: { n: Note; onDeleted: () => void; 
             依頼者に期日連絡
           </button>
         )}
-        <button className={`${onNotice ? '' : 'ml-auto '}text-xs text-slate-400 hover:text-red-600`} onClick={() => confirm('削除しますか？') && del.mutate()}>
+        <button className={`${onNotice ? '' : 'ml-auto '}text-xs text-blue-700 hover:underline`} onClick={() => setEditing(true)}>
+          編集
+        </button>
+        <button className="text-xs text-slate-400 hover:text-red-600" onClick={() => confirm('削除しますか？') && del.mutate()}>
           削除
         </button>
       </div>

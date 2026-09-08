@@ -246,6 +246,30 @@ export async function addCaseNote(input: CaseNoteInput, opts: { structure?: bool
   return row;
 }
 
+/** 記録の編集（本文・整理結果・日時などを差し替える。タスク化済みの次のアクションは taskId を引き継ぐ） */
+export function updateCaseNote(id: number, patch: Partial<Omit<CaseNoteInput, 'caseId'>>) {
+  const cur = db().select().from(schema.caseNotes).where(eq(schema.caseNotes.id, id)).get();
+  if (!cur) throw new Error('記録が見つかりません');
+  const set: Partial<typeof schema.caseNotes.$inferInsert> = {};
+  if (patch.kind !== undefined) set.kind = patch.kind;
+  if (patch.occurredAt !== undefined) set.occurredAt = patch.occurredAt || cur.occurredAt;
+  if (patch.counterpart !== undefined) set.counterpart = patch.counterpart?.trim() || null;
+  if (patch.phone !== undefined) set.phone = patch.phone?.trim() || null;
+  if (patch.rawText !== undefined) set.rawText = patch.rawText;
+  if (patch.gist !== undefined) set.gist = patch.gist?.trim() || null;
+  if (patch.theirSaid !== undefined) set.theirSaid = patch.theirSaid.map((x) => x.trim()).filter(Boolean);
+  if (patch.ourSaid !== undefined) set.ourSaid = patch.ourSaid.map((x) => x.trim()).filter(Boolean);
+  if (patch.decisions !== undefined) set.decisions = patch.decisions.map((x) => x.trim()).filter(Boolean);
+  if (patch.nextActions !== undefined) {
+    set.nextActions = patch.nextActions
+      .map((a) => ({ title: a.title.trim(), due: a.due || null, taskId: a.taskId ?? cur.nextActions.find((x) => x.title === a.title.trim())?.taskId ?? null }))
+      .filter((a) => a.title);
+  }
+  if (patch.waitingFor !== undefined) set.waitingFor = patch.waitingFor ?? null;
+  if (Object.keys(set).length) db().update(schema.caseNotes).set(set).where(eq(schema.caseNotes.id, id)).run();
+  return db().select().from(schema.caseNotes).where(eq(schema.caseNotes.id, id)).get()!;
+}
+
 export function deleteCaseNote(id: number) {
   db().delete(schema.caseNotes).where(eq(schema.caseNotes.id, id)).run();
 }

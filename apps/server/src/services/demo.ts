@@ -85,9 +85,9 @@ export function seedDemoData(): DemoIds {
 
     // ---- 事件ノート ----
     const notes = [
-      { caseId: c1.id, clientId: yamada.id, kind: 'phone', occurredAt: iso(-3, 17, 15), counterpart: '山田 花子', rawText: '相手方から養育費 4 万円の提案があったが納得できないとのこと。自宅の査定は不動産業者 2 社に依頼済み、来週には出る見込み。次回期日は出席できる。', gist: '相手方提案（養育費 4 万円）には応じない方針。自宅査定は来週入手予定。', decisions: ['養育費は算定表どおり 6 万円を維持', '査定書 2 通が揃い次第、財産分与の主張書面を作成'], nextActions: [{ title: '査定書の受領確認（山田様）', due: iso(5) }], waitingFor: '依頼者', createdBy: 'ai' },
+      { caseId: c1.id, clientId: yamada.id, kind: 'phone', occurredAt: iso(-3, 17, 15), counterpart: '山田 花子', rawText: '相手方から養育費 4 万円の提案があったが納得できないとのこと。自宅の査定は不動産業者 2 社に依頼済み、来週には出る見込み。次回期日は出席できる。', gist: '相手方提案（養育費 4 万円）には応じない方針。自宅査定は来週入手予定。', decisions: ['養育費は算定表どおり 6 万円を維持', '査定書 2 通が揃い次第、財産分与の主張書面を作成'], nextActions: [{ title: '査定書の受領確認（山田様）', due: iso(5) }], waitingFor: 'client', createdBy: 'ai' },
       { caseId: c1.id, clientId: yamada.id, kind: 'court', occurredAt: iso(-20, 10, 30), counterpart: '奈良家裁 調停委員', rawText: '第1回調停。親権は争いなし。養育費と財産分与が争点。次回までに双方が資料を提出。', gist: '第1回調停。争点は養育費と財産分与に絞られた。', decisions: [], nextActions: [], waitingFor: null, createdBy: 'user' },
-      { caseId: c2.id, clientId: sato.id, kind: 'phone', occurredAt: iso(-1, 11, 0), counterpart: '○○損保 担当者', rawText: '弁護士基準での提示（180 万円）に対し、社内決裁に 2 週間ほしいとのこと。', gist: '保険会社は 2 週間以内に回答予定。', decisions: [], nextActions: [{ title: '保険会社の回答待ち', due: iso(14) }], waitingFor: '相手方', createdBy: 'ai' },
+      { caseId: c2.id, clientId: sato.id, kind: 'phone', occurredAt: iso(-1, 11, 0), counterpart: '○○損保 担当者', rawText: '弁護士基準での提示（180 万円）に対し、社内決裁に 2 週間ほしいとのこと。', gist: '保険会社は 2 週間以内に回答予定。', decisions: [], nextActions: [{ title: '保険会社の回答待ち', due: iso(14) }], waitingFor: 'counterpart', createdBy: 'ai' },
       { caseId: c3.id, clientId: suzuki.id, kind: 'meeting', occurredAt: iso(-7, 14, 0), counterpart: '鈴木 一郎 代表', rawText: '債権者一覧の Excel を受領。取引先 3 社の売掛金は回収見込み。従業員 5 名は月末で解雇予定。', gist: '債権者一覧受領。売掛金回収と従業員対応の方針を確認。', decisions: ['未払賃金立替払制度の案内を従業員に配布', '在庫は買取業者に見積依頼'], nextActions: [{ title: '在庫の見積取得', due: iso(7) }], waitingFor: null, createdBy: 'user' },
     ] as const;
     for (const n of notes) {
