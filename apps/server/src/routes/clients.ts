@@ -7,12 +7,12 @@ import { eq, desc } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { clientInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputSchema, creditorEventInputSchema, CREDITOR_IMPORT_FIELDS } from '@lcm/shared';
 import { searchClients } from '../services/identity.js';
-import { storage } from '../integrations/storage.js';
+import { storage, FolderNotFoundError } from '../integrations/storage.js';
 import { clientFolder } from '../services/attachments.js';
 import { listCaseTypes, upsertCaseType, createCase, updateCase, listCases, getCase, caseTimeline, addCaseNote, deleteCaseNote, generateCaseSummary, structureNote } from '../services/cases.js';
 import * as creditors from '../services/creditors.js';
 import { onedriveCandidates, chatworkCandidates, applyImport, deleteClient } from '../services/clientImport.js';
-import { clientFolderParents } from '../services/clientFolders.js';
+import { clientFolderParents, defaultClientFolderRel } from '../services/clientFolders.js';
 import { joinPath } from '../integrations/onedrive.js';
 
 export const clientRoutes = new Hono();
@@ -66,8 +66,29 @@ clientRoutes.get('/clients/:id/files', async (c) => {
   if (!row) return c.json({ error: 'not found' }, 404);
   const sub = c.req.query('path') ?? '';
   const folder = sub ? `${clientFolder(row)}/${sub.replace(/^\/+/, '')}` : clientFolder(row);
-  const items = await storage().list(folder);
-  return c.json({ folder, items });
+  try {
+    const items = await storage().list(folder);
+    return c.json({ folder, items, exists: true });
+  } catch (err) {
+    // 新規依頼者などでフォルダがまだ無いのはエラーではない（最初の保存時か「作成」で作られる）
+    if (err instanceof FolderNotFoundError) return c.json({ folder, items: [], exists: false });
+    throw err;
+  }
+});
+
+/** 依頼者フォルダを OneDrive に作る。パス未設定なら既定の場所に作り、依頼者に記録する */
+clientRoutes.post('/clients/:id/folder', async (c) => {
+  const id = Number(c.req.param('id'));
+  const row = db().select().from(schema.clients).where(eq(schema.clients.id, id)).get();
+  if (!row) return c.json({ error: 'not found' }, 404);
+  let rel = row.onedriveFolderPath?.trim() ?? '';
+  if (!rel) {
+    rel = defaultClientFolderRel(row);
+    db().update(schema.clients).set({ onedriveFolderPath: rel, updatedAt: new Date().toISOString() }).where(eq(schema.clients.id, id)).run();
+  }
+  const folder = clientFolder({ ...row, onedriveFolderPath: rel });
+  await storage().ensureFolder(folder);
+  return c.json({ folder, path: rel });
 });
 
 /** ルート直下のフォルダ一覧（既存フォルダから依頼者フォルダを選ぶ） */

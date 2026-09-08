@@ -337,6 +337,19 @@ describe('受信ファイルの扱い', () => {
   });
 });
 
+describe('依頼者フォルダ', () => {
+  it('まだ無いフォルダの一覧は「無い」と分かるエラーになり、作成すれば空の一覧になる', async () => {
+    const { LocalFolderStorage, FolderNotFoundError } = await import('../integrations/storage.js');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lcm-folder-'));
+    const st = new LocalFolderStorage(root);
+    await expect(st.list('/0.相談/お岡本翔馬')).rejects.toBeInstanceOf(FolderNotFoundError);
+    await st.ensureFolder('/0.相談/お岡本翔馬');
+    expect(await st.list('/0.相談/お岡本翔馬')).toEqual([]);
+    await st.ensureFolder('/0.相談/お岡本翔馬'); // 2 回目は何もしない
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+});
+
 describe('予定の登録・編集・削除', () => {
   it('Google 未接続ならアプリ内に保存し、同期で消されず、期日は事件の次回期日に反映される', async () => {
     const { createCalendarEvent, editCalendarEvent, removeCalendarEvent, listCalendarEvents, isLocalEventId } = await import('../services/court.js');
