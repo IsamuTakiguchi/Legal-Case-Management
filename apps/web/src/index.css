@@ -8,6 +8,12 @@ body {
   @apply bg-slate-50 text-slate-800;
 }
 
+/* スマホ: ブラウザ標準の引っ張り更新を止め、アプリ側の「引っ張って更新」に任せる */
+html,
+body {
+  overscroll-behavior-y: none;
+}
+
 /* 部品クラスはユーティリティ（w-auto, p-0, text-xs など）で上書きできるよう components 層に置く */
 @layer components {
   .btn {
