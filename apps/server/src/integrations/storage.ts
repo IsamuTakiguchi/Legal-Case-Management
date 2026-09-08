@@ -20,9 +20,19 @@ export interface ListedFile {
   webUrl?: string;
 }
 
+/** 一覧しようとしたフォルダが無い（まだ作られていない）ときのエラー */
+export class FolderNotFoundError extends Error {
+  constructor(public folderPath: string) {
+    super(`フォルダがありません: ${folderPath}`);
+    this.name = 'FolderNotFoundError';
+  }
+}
+
 export interface StorageBackend {
   kind: 'onedrive' | 'local';
   clientRoot(): string;
+  /** フォルダを（親も含めて）作る。既にあれば何もしない */
+  ensureFolder(folderPath: string): Promise<void>;
   put(folderPath: string, filename: string, data: Buffer): Promise<StoredFile>;
   get(file: { itemId?: string | null; path: string }): Promise<Buffer>;
   move(file: { itemId?: string | null; path: string }, newFolderPath: string): Promise<StoredFile>;
@@ -53,8 +63,14 @@ class OneDriveStorage implements StorageBackend {
     const moved = await od.moveItem(await this.resolveId(file), newFolderPath);
     return { path: od.joinPath(newFolderPath, moved.name), itemId: moved.id, webUrl: moved.webUrl, size: moved.size ?? 0 };
   }
+  async ensureFolder(folderPath: string): Promise<void> {
+    await od.ensureFolder(folderPath);
+  }
   async list(folderPath: string): Promise<ListedFile[]> {
-    const items = await od.listChildren(folderPath);
+    const items = await od.listChildren(folderPath).catch((err) => {
+      if (String(err).includes('エラー 404')) throw new FolderNotFoundError(folderPath);
+      throw err;
+    });
     return items.map((i) => ({
       name: i.name,
       path: od.joinPath(folderPath, i.name),
@@ -114,9 +130,15 @@ export class LocalFolderStorage implements StorageBackend {
     await fs.unlink(this.abs(file.path));
     return stored;
   }
+  async ensureFolder(folderPath: string): Promise<void> {
+    await fs.mkdir(this.abs(folderPath), { recursive: true });
+  }
   async list(folderPath: string): Promise<ListedFile[]> {
     const dir = this.abs(folderPath);
-    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch((err: NodeJS.ErrnoException) => {
+      if (err?.code === 'ENOENT') throw new FolderNotFoundError(folderPath);
+      return [];
+    });
     const out: ListedFile[] = [];
     for (const e of entries) {
       const st = await fs.stat(path.join(dir, e.name)).catch(() => null);

@@ -23,7 +23,14 @@ export default function ClientDetail() {
   const [newCase, setNewCase] = useState(false);
   const [sub, setSub] = useState('');
   const d = useQuery({ queryKey: ['client', id], queryFn: () => api.get<Detail>(`/clients/${id}`) });
-  const files = useQuery({ queryKey: ['client-files', id, sub], queryFn: () => api.get<{ folder: string; items: { name: string; path: string; isFolder: boolean; size?: number; modifiedAt?: string; webUrl?: string }[] }>(`/clients/${id}/files?path=${encodeURIComponent(sub)}`), retry: false });
+  const files = useQuery({ queryKey: ['client-files', id, sub], queryFn: () => api.get<{ folder: string; exists?: boolean; items: { name: string; path: string; isFolder: boolean; size?: number; modifiedAt?: string; webUrl?: string }[] }>(`/clients/${id}/files?path=${encodeURIComponent(sub)}`), retry: false });
+  const createFolder = useMutation({
+    mutationFn: () => api.post<{ folder: string; path: string }>(`/clients/${id}/folder`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['client-files', id] });
+      qc.invalidateQueries({ queryKey: ['client', id] });
+    },
+  });
   const types = useQuery({ queryKey: ['case-types'], queryFn: () => api.get<{ key: string; label: string }[]>('/case-types') });
   const update = useMutation({
     mutationFn: (b: Partial<ClientRow>) => api.put(`/clients/${id}`, b),
@@ -171,6 +178,24 @@ export default function ClientDetail() {
             )}
           </div>
           {files.error && <div className="text-sm text-red-600">{(files.error as Error).message}</div>}
+          {files.data?.exists === false && (
+            <div className="rounded border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+              {sub ? (
+                <span>このフォルダはまだありません。</span>
+              ) : (
+                <>
+                  <div>OneDrive にこの依頼者のフォルダはまだありません。最初のファイルを保存するときに上の場所へ自動で作られます。</div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <button className="btn btn-sm" onClick={() => createFolder.mutate()} disabled={createFolder.isPending}>
+                      {createFolder.isPending ? '作成中…' : '今すぐフォルダを作る'}
+                    </button>
+                    <span className="text-xs text-slate-500">既にある別のフォルダを使うなら「編集」で依頼者フォルダのパスを指定してください</span>
+                  </div>
+                  {createFolder.error && <div className="mt-1 text-xs text-red-600">{(createFolder.error as Error).message}</div>}
+                </>
+              )}
+            </div>
+          )}
           <table className="w-full text-sm">
             <tbody>
               {files.data?.items.map((f) => (
