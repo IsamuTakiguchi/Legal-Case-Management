@@ -14,6 +14,7 @@ import * as creditors from '../services/creditors.js';
 import { onedriveCandidates, chatworkCandidates, applyImport, deleteClient } from '../services/clientImport.js';
 import { clientFolderParents, defaultClientFolderRel } from '../services/clientFolders.js';
 import { listContacts, createContact, updateContact, deleteContact, contactBriefs } from '../services/contacts.js';
+import { prepareHearingNotice } from '../services/hearingNotice.js';
 import { joinPath } from '../integrations/onedrive.js';
 
 export const clientRoutes = new Hono();
@@ -230,6 +231,12 @@ clientRoutes.post('/cases/:id/notes', async (c) => {
   const input = caseNoteInputSchema.parse({ ...raw, caseId: id });
   const row = await addCaseNote(input, { structure: raw.structure === true, createTasks: raw.createTasks === true });
   return c.json(row);
+});
+
+/** 期日の記録から、依頼者への期日連絡の下書きを用意する（送信は /conversations/:id/send） */
+clientRoutes.post('/case-notes/:id/hearing-notice', async (c) => {
+  const body = z.object({ channel: z.enum(['gmail', 'line', 'chatwork']).optional() }).parse(await c.req.json().catch(() => ({})));
+  return c.json(await prepareHearingNotice(Number(c.req.param('id')), { channel: body.channel }));
 });
 
 clientRoutes.delete('/case-notes/:id', (c) => {

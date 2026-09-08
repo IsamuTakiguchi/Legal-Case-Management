@@ -55,6 +55,8 @@ export default function CaseDetail() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<'overview' | 'timeline' | 'creditors'>('overview');
   const d = useQuery({ queryKey: ['case', id], queryFn: () => api.get<CaseData>(`/cases/${id}`) });
+  // 期日の記録を保存した直後（または記録の「依頼者に期日連絡」）に開く連絡パネル
+  const [noticeNoteId, setNoticeNoteId] = useState<number | null>(null);
   const types = useQuery({ queryKey: ['case-types'], queryFn: () => api.get<{ key: string; label: string }[]>('/case-types') });
   const c = d.data;
   const [form, setForm] = useState({ title: '', caseType: '', courtName: '', caseNumber: '', stage: '', policy: '', status: 'active', staffId: '', chatworkRoomId: '' });
@@ -99,14 +101,31 @@ export default function CaseDetail() {
       {tab === 'overview' && (
         <div className="grid gap-4 lg:grid-cols-[1fr_380px]">
           <div className="space-y-4">
-            <NoteComposer caseId={c.id} onSaved={() => qc.invalidateQueries({ queryKey: ['case', id] })} />
+            <NoteComposer
+              caseId={c.id}
+              onSaved={(note) => {
+                qc.invalidateQueries({ queryKey: ['case', id] });
+                if (note?.kind === 'court') setNoticeNoteId(note.id);
+              }}
+            />
+            {noticeNoteId && (
+              <HearingNoticePanel
+                noteId={noticeNoteId}
+                onClose={() => setNoticeNoteId(null)}
+                onSent={() => {
+                  setNoticeNoteId(null);
+                  qc.invalidateQueries({ queryKey: ['case', id] });
+                  qc.invalidateQueries({ queryKey: ['timeline', c.id] });
+                }}
+              />
+            )}
             <section className="card">
               <h2 className="mb-2 font-semibold">記録（電話・打合せ・メモ）</h2>
               <ul className="space-y-3">
                 {c.notes
                   .filter((n) => n.kind !== 'policy')
                   .map((n) => (
-                    <NoteView key={n.id} n={n} onDeleted={() => qc.invalidateQueries({ queryKey: ['case', id] })} />
+                    <NoteView key={n.id} n={n} onDeleted={() => qc.invalidateQueries({ queryKey: ['case', id] })} onNotice={n.kind === 'court' ? () => setNoticeNoteId(n.id) : undefined} />
                   ))}
                 {c.notes.length === 0 && <li className="text-sm text-slate-500">記録はまだありません</li>}
               </ul>
@@ -347,7 +366,138 @@ function ContactForm({ form, setForm, onSave, onCancel, busy }: { form: typeof E
   );
 }
 
-function NoteComposer({ caseId, onSaved }: { caseId: number; onSaved: () => void }) {
+interface HearingNotice {
+  noteId: number;
+  clientName: string;
+  channel: string;
+  channelLabel: string;
+  to: string;
+  conversationId: number;
+  draftId: number | null;
+  text: string;
+  hearingAt: string;
+  nextHearingAt: string | null;
+  nextHearingText: string;
+  docs: { name: string; path: string; itemId?: string; modifiedAt?: string; size?: number }[];
+  channels: { channel: string; to: string }[];
+}
+const CHANNEL_JA: Record<string, string> = { gmail: 'Gmail', line: 'LINE公式', chatwork: 'Chatwork' };
+
+/**
+ * 期日の記録から依頼者への期日連絡を送る。
+ * 記録の要旨・決定事項・次回期日・提出書面をもとに本人の文体で下書きし、確認して送信する
+ */
+function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClose: () => void; onSent: () => void }) {
+  const [channel, setChannel] = useState<string | undefined>(undefined);
+  const [text, setText] = useState('');
+  const [docs, setDocs] = useState<Set<string>>(new Set());
+  const [msg, setMsg] = useState('');
+  const prep = useQuery({
+    queryKey: ['hearing-notice', noteId, channel ?? ''],
+    queryFn: () => api.post<HearingNotice>(`/case-notes/${noteId}/hearing-notice`, channel ? { channel } : {}),
+    staleTime: Infinity,
+    retry: false,
+  });
+  useEffect(() => {
+    if (prep.data) {
+      setText(prep.data.text);
+      setDocs(new Set());
+    }
+  }, [prep.data]);
+  const n = prep.data;
+  const send = useMutation({
+    mutationFn: () =>
+      api.post<{ note?: string; links: { name: string }[]; manualFiles: string[] }>(`/conversations/${n!.conversationId}/send`, {
+        text,
+        attachmentIds: [],
+        driveFiles: n!.docs.filter((d) => docs.has(d.path)).map((d) => ({ itemId: d.itemId, name: d.name, path: d.path })),
+        draftId: n!.draftId,
+        createWaitingTask: false,
+      }),
+    onSuccess: (r) => {
+      setMsg(`${n!.channelLabel} で送信しました${r.note ? `（${r.note}）` : ''}${r.links.length ? `。${r.links.length} 件はリンクで送付` : ''}${r.manualFiles.length ? `。${r.manualFiles.join('、')} は手動送付が必要です` : ''}`);
+      setTimeout(onSent, 1500);
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
+  return (
+    <section className="card space-y-2 border-blue-200 bg-blue-50/40">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="font-semibold">依頼者に期日連絡</h2>
+        {n && (
+          <>
+            <span className="text-sm text-slate-600">{n.clientName} 宛</span>
+            <select
+              className="input w-auto"
+              value={n.channel}
+              onChange={(e) => setChannel(e.target.value)}
+              disabled={prep.isFetching}
+              title="送るチャネル（依頼者の希望チャネルが既定）"
+            >
+              {n.channels.map((c) => (
+                <option key={c.channel} value={c.channel}>
+                  {CHANNEL_JA[c.channel] ?? c.channel}
+                  {c.channel === 'gmail' ? `（${c.to}）` : ''}
+                </option>
+              ))}
+            </select>
+            <span className="text-xs text-slate-500">
+              期日 {fmtDateTime(n.hearingAt)} ／ 次回 {n.nextHearingText}
+            </span>
+          </>
+        )}
+        <button className="btn btn-sm ml-auto" onClick={onClose}>
+          閉じる
+        </button>
+      </div>
+      {prep.isLoading && <div className="text-sm text-slate-500">記録と次回期日をもとに下書きを作成中…</div>}
+      {prep.error && <div className="text-sm text-red-600">{(prep.error as Error).message}</div>}
+      {n && (
+        <>
+          <textarea className="input min-h-44 text-sm" value={text} onChange={(e) => setText(e.target.value)} disabled={prep.isFetching} />
+          {n.docs.length > 0 && (
+            <div className="text-sm">
+              <div className="mb-1 text-xs text-slate-500">
+                添付する提出書面（直近 2 週間に更新したファイル）
+                {n.channel === 'line' && '。LINE にはファイルを直接送れないため、共有リンクまたは手動送付になります'}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {n.docs.map((d) => (
+                  <label key={d.path} className="flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={docs.has(d.path)}
+                      onChange={(e) => {
+                        const next = new Set(docs);
+                        if (e.target.checked) next.add(d.path);
+                        else next.delete(d.path);
+                        setDocs(next);
+                      }}
+                    />
+                    {d.name}
+                    {d.modifiedAt && <span className="text-slate-400">{fmtDate(d.modifiedAt)}</span>}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <button className="btn btn-primary" onClick={() => send.mutate()} disabled={send.isPending || prep.isFetching || !text.trim()}>
+              {send.isPending ? '送信中…' : `${n.channelLabel} で送信`}
+            </button>
+            <Link to={`/inbox/${n.conversationId}`} className="btn btn-sm">
+              会話を開いて送る
+            </Link>
+            {!n.nextHearingAt && <span className="text-xs text-orange-600">次回期日がカレンダーにありません。決まっていれば先に「予定」で登録すると本文に入ります</span>}
+            {msg && <span className="text-xs text-slate-700">{msg}</span>}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function NoteComposer({ caseId, onSaved }: { caseId: number; onSaved: (note?: { id: number; kind: string }) => void }) {
   const [kind, setKind] = useState<CaseNoteKind>('phone');
   const [counterpart, setCounterpart] = useState('');
   const [phone, setPhone] = useState('');
@@ -371,7 +521,7 @@ function NoteComposer({ caseId, onSaved }: { caseId: number; onSaved: () => void
   });
   const save = useMutation({
     mutationFn: () =>
-      api.post(`/cases/${caseId}/notes`, {
+      api.post<{ id: number; kind: string }>(`/cases/${caseId}/notes`, {
         kind,
         counterpart: counterpart || preview?.counterpart || null,
         phone: phone || preview?.phone || null,
@@ -385,14 +535,14 @@ function NoteComposer({ caseId, onSaved }: { caseId: number; onSaved: () => void
         waitingFor: preview?.waitingFor ?? null,
         createTasks: createTasks && !!preview,
       }),
-    onSuccess: () => {
+    onSuccess: (r) => {
       setRaw('');
       setTheirSaid('');
       setOurSaid('');
       setPhone('');
       setPreview(null);
       setErr('');
-      onSaved();
+      onSaved(r);
     },
     onError: (e) => setErr((e as Error).message),
   });
@@ -466,7 +616,7 @@ function NoteComposer({ caseId, onSaved }: { caseId: number; onSaved: () => void
   );
 }
 
-function NoteView({ n, onDeleted }: { n: Note; onDeleted: () => void }) {
+function NoteView({ n, onDeleted, onNotice }: { n: Note; onDeleted: () => void; onNotice?: () => void }) {
   const del = useMutation({ mutationFn: () => api.del(`/case-notes/${n.id}`), onSuccess: onDeleted });
   const [open, setOpen] = useState(false);
   return (
@@ -477,7 +627,12 @@ function NoteView({ n, onDeleted }: { n: Note; onDeleted: () => void }) {
         {n.counterpart && <span className="text-slate-600">{n.counterpart}</span>}
         {n.waitingFor && n.waitingFor !== 'none' && <span className="badge badge-orange">{WAITING_FOR_LABEL[n.waitingFor as WaitingFor]}待ち</span>}
         {n.createdBy === 'ai' && <span className="text-xs text-slate-400">AI 整理</span>}
-        <button className="ml-auto text-xs text-slate-400 hover:text-red-600" onClick={() => confirm('削除しますか？') && del.mutate()}>
+        {onNotice && (
+          <button className="ml-auto btn btn-sm btn-primary" onClick={onNotice} title="この期日の結果と次回期日を、本人の文体で依頼者に連絡します">
+            依頼者に期日連絡
+          </button>
+        )}
+        <button className={`${onNotice ? '' : 'ml-auto '}text-xs text-slate-400 hover:text-red-600`} onClick={() => confirm('削除しますか？') && del.mutate()}>
           削除
         </button>
       </div>
