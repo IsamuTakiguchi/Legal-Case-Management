@@ -55,6 +55,15 @@ const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean; 
   { key: 'scheduling_stale_business_days', label: '日程調整の停滞判定（営業日）' },
   { key: 'holidays', label: '休業日（YYYY-MM-DD をカンマ区切り）', multiline: true },
   {
+    key: 'attachment_smart_names',
+    label: '受信ファイルの名前',
+    hint: '「image_123.jpg」「IMG_0001.jpg」「document.pdf」のような中身の分からない名前だけが対象です。保存時に画像や PDF の内容とメッセージ本文を読んで「診断書.pdf」「事故現場の写真.jpg」のように付け替えます（AI 設定が必要）。元の名前は控えとして残ります',
+    options: [
+      { value: '1', label: '中身の分からない名前は、内容から分かる名前に付け替えて保存' },
+      { value: '0', label: '元のファイル名のまま保存' },
+    ],
+  },
+  {
     key: 'attachment_policy',
     label: '受信ファイルの扱い',
     hint: '「未保存」のファイルは受信ファイル画面と会話画面から保存または不要にできます',

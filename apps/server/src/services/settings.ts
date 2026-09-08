@@ -26,6 +26,7 @@ http://www.noboriohji.com/access/`,
   attachment_subfolder: '受領資料',
   /** 受信ファイルの扱い: auto | client_only | manual（services/attachments.ts 参照） */
   attachment_policy: 'client_only',
+  attachment_smart_names: '1',
   court_docs_subfolder: '提出書面',
   draft_subfolder: '下書き',
   unassigned_folder: '_未振分',

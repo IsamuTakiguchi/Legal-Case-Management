@@ -815,6 +815,22 @@ describe('記録の編集', () => {
   });
 });
 
+describe('受信ファイルの名前付け替え', () => {
+  it('中身の分からない名前を判定し、AI 未設定なら元の名前のまま保存する', async () => {
+    const { isGenericFilename, sanitizeSuggestedName, suggestFilename } = await import('../services/fileNaming.js');
+    for (const n of ['image_1234567890.jpg', 'IMG_0001.JPG', 'S__12345678.jpg', 'DSC01234.jpg', 'document.pdf', 'scan001.pdf', '写真.jpg', 'スクリーンショット 2026-09-08 12.34.56.png', '20260908_123456.jpg', '1234567.pdf', 'file_1.pdf', 'a1b2c3d4e5f6a7b8c9d0.jpg', 'video_98765.mp4', 'Photo-3.jpeg', '無題.docx']) {
+      expect(isGenericFilename(n), n).toBe(true);
+    }
+    for (const n of ['診断書.pdf', '査定書_A社.pdf', '賃貸借契約書（写）.pdf', '給与明細_2026年8月.pdf', '事故現場写真_交差点.jpg', 'Invoice_2026-08.pdf', '山田様_陳述書案.docx', 'estimate_toyota.pdf']) {
+      expect(isGenericFilename(n), n).toBe(false);
+    }
+    expect(sanitizeSuggestedName(' 事故現場の写真 / 交差点: 前方 ')).toBe('事故現場の写真_交差点_前方');
+    expect(sanitizeSuggestedName('x'.repeat(60)).length).toBe(40);
+    // AI 未設定なら提案しない（元の名前のまま）
+    expect(await suggestFilename({ data: Buffer.from('x'), filename: 'image_1.jpg', mime: 'image/jpeg', context: { channel: 'line', body: '診断書を送ります' } })).toBeNull();
+  });
+});
+
 describe('事務局メンバー候補', () => {
   it('取込済みメッセージの送信者から候補を出す（Chatwork 未接続でも動く）', async () => {
     const { chatworkAccountsFromMessages, listChatworkAccounts } = await import('../services/staff.js');

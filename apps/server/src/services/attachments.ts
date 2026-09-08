@@ -11,6 +11,7 @@ import { upsertAlert, resolveAlertsByKeyPrefix } from './alerts.js';
 import { yyyymmdd, CHANNEL_LABEL, type Channel } from '@lcm/shared';
 import { logger } from '../logger.js';
 import { defaultClientFolderRel } from './clientFolders.js';
+import { isGenericFilename, suggestFilename } from './fileNaming.js';
 
 export function clientFolder(client: { id?: number; name: string; onedriveFolderPath: string | null }): string {
   const root = storage().clientRoot();
@@ -122,7 +123,27 @@ export async function processAttachment(attachmentId: number, opts: { force?: bo
   }
   try {
     const data = await attachmentBytes(att, msg.channel as Channel);
-    const filename = storedFilename(msg.channel as Channel, msg.sentAt, att.filename);
+    // 「image_123.jpg」のような中身の分からない名前は、内容とメッセージの文脈から意味の分かる名前に付け替える
+    let displayName = att.filename;
+    if (getSetting('attachment_smart_names') !== '0' && isGenericFilename(att.filename)) {
+      const ext = att.filename.includes('.') ? att.filename.split('.').pop()! : '';
+      const suggested = await suggestFilename({
+        data,
+        filename: att.filename,
+        mime: att.mime,
+        context: { channel: msg.channel, subject: conv?.subject ?? null, body: msg.body, senderName: msg.senderName, clientName: client?.name ?? null, sentAt: msg.sentAt },
+      });
+      if (suggested) {
+        displayName = ext ? `${suggested}.${ext.toLowerCase()}` : suggested;
+        const ref = att.channelRef as Record<string, unknown>;
+        d.update(schema.attachments)
+          .set({ filename: displayName, channelRef: { ...ref, originalName: ref.originalName ?? att.filename } })
+          .where(eq(schema.attachments.id, att.id))
+          .run();
+        logger.info({ attachmentId: att.id, from: att.filename, to: displayName }, 'ファイル名を付け替えました');
+      }
+    }
+    const filename = storedFilename(msg.channel as Channel, msg.sentAt, displayName);
     const folder = client ? joinPath(clientFolder(client), getSetting('attachment_subfolder')) : unassignedFolder();
     const stored = await storage().put(folder, filename, data);
     d.update(schema.attachments)
