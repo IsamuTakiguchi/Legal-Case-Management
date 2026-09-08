@@ -22,6 +22,10 @@ export interface CalendarEventSummary {
   status?: string | null;
   htmlLink?: string | null;
   meetUrl?: string | null;
+  /** 終日の予定 */
+  allDay?: boolean;
+  /** 「予定なし」扱い（空き時間の計算で無視する） */
+  transparent?: boolean;
   tag: Partial<EventTag>;
 }
 
@@ -44,6 +48,8 @@ function toSummary(e: calendar_v3.Schema$Event): CalendarEventSummary | null {
     status: e.status,
     htmlLink: e.htmlLink,
     meetUrl: e.hangoutLink ?? e.conferenceData?.entryPoints?.find((p) => p.entryPointType === 'video')?.uri ?? null,
+    allDay: !e.start?.dateTime,
+    transparent: e.transparency === 'transparent',
     tag: {
       clientId: p.clientId ? Number(p.clientId) : undefined,
       caseId: p.caseId ? Number(p.caseId) : undefined,

@@ -1,19 +1,44 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { proposeSlotsSchema, confirmSlotSchema, nextHearingInputSchema, EVENT_KINDS } from '@lcm/shared';
+import { proposeSlotsSchema, confirmSlotSchema, nextHearingInputSchema, EVENT_KINDS, schedulePreferencesSchema } from '@lcm/shared';
 import { proposeSlots, confirmSlot, cancelSession, listSessions, findFreeSlots, extractChosenSlot } from '../services/scheduling.js';
 import { syncCalendar, checkPostEvents, resolveNextHearing, listCourtDocs, upcomingEvents, relinkEvent, listCalendarEvents, createCalendarEvent, editCalendarEvent, removeCalendarEvent, createHoldSet, confirmHold, cancelHoldSet } from '../services/court.js';
 import { createZoomMeeting } from '../integrations/zoom.js';
-import { extractScheduleFromConversation, registerScheduleFromConversation } from '../services/scheduleExtract.js';
+import { extractScheduleFromConversation, registerScheduleFromConversation, extractSchedulePreferences } from '../services/scheduleExtract.js';
 import { db, schema } from '../db/index.js';
 import { eq } from 'drizzle-orm';
 
 export const schedulingRoutes = new Hono();
 
 schedulingRoutes.post('/scheduling/free-slots', async (c) => {
-  const body = z.object({ from: z.string(), to: z.string(), durationMinutes: z.number().int().default(60), maxCandidates: z.number().int().default(5), preferredHours: z.array(z.number().int()).optional() }).parse(await c.req.json());
-  return c.json(await findFreeSlots({ from: new Date(body.from), to: new Date(body.to), durationMinutes: body.durationMinutes, maxCandidates: body.maxCandidates, preferredHours: body.preferredHours }));
+  const body = z
+    .object({
+      from: z.string(),
+      to: z.string(),
+      durationMinutes: z.number().int().default(60),
+      maxCandidates: z.number().int().default(5),
+      preferredHours: z.array(z.number().int()).optional(),
+      preferences: schedulePreferencesSchema.optional(),
+      travelBufferMinutes: z.number().int().min(0).max(240).optional(),
+      gapMinutes: z.number().int().min(0).max(120).optional(),
+    })
+    .parse(await c.req.json());
+  return c.json(
+    await findFreeSlots({
+      from: new Date(body.from),
+      to: new Date(body.to),
+      durationMinutes: body.durationMinutes,
+      maxCandidates: body.maxCandidates,
+      preferredHours: body.preferredHours,
+      preferences: body.preferences ?? null,
+      travelBufferMinutes: body.travelBufferMinutes ?? null,
+      gapMinutes: body.gapMinutes ?? null,
+    }),
+  );
 });
+
+/** 会話から相手の日程の希望（期間・曜日・時間帯・NG・希望日時）を読み取る */
+schedulingRoutes.post('/conversations/:id/schedule/preferences', async (c) => c.json(await extractSchedulePreferences(Number(c.req.param('id')))));
 
 schedulingRoutes.post('/scheduling/propose', async (c) => c.json(await proposeSlots(proposeSlotsSchema.parse(await c.req.json()))));
 
