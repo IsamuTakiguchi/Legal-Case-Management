@@ -718,6 +718,26 @@ describe('事件の関係者（相手方・相手方代理人）', () => {
   });
 });
 
+describe('バックアップからの復元', () => {
+  it('バックアップの中身で DB を置き換え、復元前の状態も控えとして残す', async () => {
+    const { runBackup, restoreBackup, localBackupPath, lastBackupInfo } = await import('../services/backup.js');
+    const before = db().insert(schema.clients).values({ name: '復元 前子', kana: 'ふくげん まえこ' }).returning().get();
+    const b = await runBackup();
+    expect(localBackupPath(b.file)).toBeTruthy();
+    db().insert(schema.clients).values({ name: '復元 後子', kana: 'ふくげん あとこ' }).returning().get();
+    const data = fs.readFileSync(localBackupPath(b.file)!);
+    const r = await restoreBackup(data, b.file);
+    expect(r.clients).toBeGreaterThanOrEqual(1);
+    const names = db().select({ name: schema.clients.name }).from(schema.clients).all().map((x) => x.name);
+    expect(names).toContain('復元 前子');
+    expect(names).not.toContain('復元 後子');
+    expect(localBackupPath(r.safetyBackup)).toBeTruthy(); // 復元前の控え
+    expect(lastBackupInfo().at).toBeTruthy();
+    await expect(restoreBackup(Buffer.from('not a database at all'))).rejects.toThrow('SQLite');
+    db().delete(schema.clients).where(eq(schema.clients.id, before.id)).run();
+  });
+});
+
 describe('事務局メンバー候補', () => {
   it('取込済みメッセージの送信者から候補を出す（Chatwork 未接続でも動く）', async () => {
     const { chatworkAccountsFromMessages, listChatworkAccounts } = await import('../services/staff.js');
@@ -852,7 +872,7 @@ describe('Google ログインの許可アドレス', () => {
 describe('バックアップ', () => {
   it('スナップショットを圧縮して保存し、世代を整理する', async () => {
     const r = await runBackup();
-    expect(r.file).toMatch(/^app-\d{8}-\d{4}\.db\.gz$/);
+    expect(r.file).toMatch(/^app-\d{8}-\d{4}(?:\d{2})?\.db\.gz$/);
     const p = localBackupPath(r.file);
     expect(p).toBeTruthy();
     const raw = gunzipSync(fs.readFileSync(p!));

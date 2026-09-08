@@ -15,7 +15,7 @@ import { listTasks } from '../services/tasks.js';
 import { todaysEvents } from '../services/court.js';
 import { db, schema } from '../db/index.js';
 import { and, eq } from 'drizzle-orm';
-import { runBackup, listLocalBackups, localBackupPath, remoteBackupFolder } from '../services/backup.js';
+import { runBackup, listLocalBackups, localBackupPath, remoteBackupFolder, lastBackupInfo, restoreBackup, restoreLocalBackup } from '../services/backup.js';
 import { seedDemoData, clearDemoData, demoStatus } from '../services/demo.js';
 import fs from 'node:fs';
 import { recategorizeConversations } from '../channels/gmail.js';
@@ -83,8 +83,28 @@ settingsRoutes.get('/status', async (c) => {
 });
 
 // ---- バックアップ ----
-settingsRoutes.get('/backup', (c) => c.json({ local: listLocalBackups(), remoteFolder: remoteBackupFolder() }));
+settingsRoutes.get('/backup', (c) => c.json({ local: listLocalBackups(), remoteFolder: remoteBackupFolder(), last: lastBackupInfo() }));
 settingsRoutes.post('/backup/run', async (c) => c.json(await runBackup()));
+/** アップロードしたバックアップ（.db.gz / .db）から復元 */
+settingsRoutes.post('/backup/restore', async (c) => {
+  const form = await c.req.parseBody();
+  const file = form.file;
+  if (!(file instanceof File)) return c.json({ error: 'ファイルを指定してください' }, 400);
+  const data = Buffer.from(await file.arrayBuffer());
+  return c.json(await restoreBackup(data, file.name));
+});
+/** サーバー内の世代から復元 */
+settingsRoutes.post('/backup/restore/:name', async (c) => c.json(await restoreLocalBackup(c.req.param('name'))));
+
+/** 受信をいま取り込み直す（Gmail・Chatwork のポーリングを即時実行。8 秒で打ち切って応答） */
+settingsRoutes.post('/sync/now', async (c) => {
+  const targets = JOBS.filter((j) => (j.name === 'gmailPoll' || j.name === 'chatworkPoll') && j.enabled());
+  const runs = targets.map((j) => runJob(j).then((r) => ({ name: j.name, ...r })));
+  const timeout = new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 8000));
+  const result = await Promise.race([Promise.all(runs), timeout]);
+  if (result === 'timeout') return c.json({ started: targets.map((j) => j.name), done: false });
+  return c.json({ started: targets.map((j) => j.name), done: true, results: result });
+});
 settingsRoutes.get('/backup/:name', (c) => {
   const p = localBackupPath(c.req.param('name'));
   if (!p) return c.json({ error: 'not found' }, 404);
