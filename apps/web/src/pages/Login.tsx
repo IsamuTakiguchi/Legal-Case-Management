@@ -48,11 +48,14 @@ export default function Login() {
     }
   };
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
-      <div className="card w-full max-w-sm space-y-4">
-        <div>
-          <h1 className="text-lg font-bold">統合コミュニケーション管理</h1>
-          <p className="text-xs text-slate-500">登大路総合法律事務所</p>
+    <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(900px_500px_at_50%_-10%,rgba(43,76,126,0.18),transparent_60%)] p-4">
+      <div className="card w-full max-w-sm space-y-5 p-6">
+        <div className="flex items-center gap-3">
+          <img src="/icon.svg?v=2" alt="" className="h-12 w-12 rounded-2xl shadow-md" />
+          <div>
+            <h1 className="text-lg font-bold tracking-tight text-slate-900">統合コミュニケーション管理</h1>
+            <p className="text-xs text-slate-500">登大路総合法律事務所</p>
+          </div>
         </div>
         {error && <div className="rounded bg-red-50 p-2 text-sm text-red-700">{error}</div>}
         {googleLogin && (

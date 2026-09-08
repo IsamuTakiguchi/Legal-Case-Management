@@ -5,7 +5,9 @@
 }
 
 body {
-  @apply bg-slate-50 text-slate-800;
+  @apply bg-slate-50 text-slate-800 antialiased;
+  background-image: radial-gradient(1200px 600px at 100% -10%, rgba(43, 76, 126, 0.06), transparent 60%), radial-gradient(900px 500px at -10% 100%, rgba(59, 130, 246, 0.05), transparent 60%);
+  background-attachment: fixed;
 }
 
 /* スマホ: ブラウザ標準の引っ張り更新を止め、アプリ側の「引っ張って更新」に任せる */
@@ -14,50 +16,91 @@ body {
   overscroll-behavior-y: none;
 }
 
+/* 見出し */
+main h1 {
+  @apply tracking-tight text-slate-900;
+}
+main h2 {
+  @apply tracking-tight text-slate-800;
+}
+
 /* 部品クラスはユーティリティ（w-auto, p-0, text-xs など）で上書きできるよう components 層に置く */
 @layer components {
   .btn {
-    @apply inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center gap-1 rounded-lg border border-slate-300/90 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.06)] transition-colors duration-150 hover:border-slate-400 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 active:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
-    @apply border-blue-600 bg-blue-600 text-white hover:bg-blue-700;
+    @apply border-blue-700 bg-blue-600 text-white shadow-[0_1px_2px_rgba(37,99,235,0.35)] hover:border-blue-800 hover:bg-blue-700 active:bg-blue-800;
   }
   .btn-danger {
-    @apply border-red-600 bg-red-600 text-white hover:bg-red-700;
+    @apply border-red-700 bg-red-600 text-white hover:border-red-800 hover:bg-red-700;
   }
   .btn-sm {
     @apply px-2 py-1 text-xs;
   }
   .input {
-    @apply w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500;
+    @apply w-full rounded-lg border border-slate-300/90 bg-white px-2.5 py-1.5 text-sm text-slate-800 shadow-[inset_0_1px_1px_rgba(15,23,42,0.04)] transition-[border-color,box-shadow] duration-150 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/25;
   }
   .label {
     @apply mb-1 block text-xs font-medium text-slate-600;
   }
   .card {
-    @apply rounded-lg border border-slate-200 bg-white p-4 shadow-sm;
+    @apply rounded-xl border border-slate-200/80 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_-16px_rgba(15,23,42,0.12)];
   }
   .badge {
-    @apply inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium;
+    @apply inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset;
   }
   .badge-line {
-    @apply bg-green-100 text-green-800;
+    @apply bg-emerald-50 text-emerald-800 ring-emerald-200/70;
   }
   .badge-chatwork {
-    @apply bg-red-100 text-red-800;
+    @apply bg-rose-50 text-rose-800 ring-rose-200/70;
   }
   .badge-gmail {
-    @apply bg-yellow-100 text-yellow-800;
+    @apply bg-amber-50 text-amber-800 ring-amber-200/70;
   }
   .badge-gray {
-    @apply bg-slate-100 text-slate-700;
+    @apply bg-slate-100 text-slate-700 ring-slate-200/70;
   }
   .badge-blue {
-    @apply bg-blue-100 text-blue-800;
+    @apply bg-blue-50 text-blue-800 ring-blue-200/70;
   }
   .badge-orange {
-    @apply bg-orange-100 text-orange-800;
+    @apply bg-orange-50 text-orange-800 ring-orange-200/70;
   }
+  /* 左メニューの項目 */
+  .nav-item {
+    @apply relative flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-900;
+  }
+  .nav-item-active {
+    @apply bg-blue-50 font-semibold text-blue-700 hover:bg-blue-50;
+  }
+  .nav-item-active::before {
+    content: '';
+    @apply absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r bg-blue-600;
+  }
+  .nav-icon {
+    @apply inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-slate-100 text-sm text-slate-600;
+  }
+  .nav-item-active .nav-icon {
+    @apply bg-blue-100 text-blue-700;
+  }
+}
+
+/* 表: 見出し行を薄く、行の区切りを柔らかく */
+table.w-full thead th {
+  @apply text-xs font-semibold uppercase tracking-wide text-slate-500;
+}
+table.w-full tbody tr {
+  @apply transition-colors duration-100;
+}
+table.w-full tbody tr:hover {
+  @apply bg-slate-50/70;
+}
+
+/* 一覧の行（受信箱など） */
+ul.divide-y > li {
+  @apply transition-colors duration-100;
 }
 
 .prose-sm p {

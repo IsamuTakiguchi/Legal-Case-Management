@@ -21,9 +21,15 @@ export default function Dashboard() {
   if (!d) return <div className="text-slate-500">読み込み中…</div>;
   const needsSetup = status.data && (!status.data.anthropic.configured || !status.data.google.connected || !status.data.microsoft.connected);
   const now = Date.now();
+  const today = new Date(now + 9 * 3600_000);
+  const WD = ['日', '月', '火', '水', '木', '金', '土'];
+  const todayLabel = `${today.getUTCMonth() + 1}月${today.getUTCDate()}日（${WD[today.getUTCDay()]}）`;
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-bold">ダッシュボード</h1>
+      <div className="flex flex-wrap items-end gap-3">
+        <h1 className="text-xl font-bold">ダッシュボード</h1>
+        <span className="text-sm text-slate-500">{todayLabel}</span>
+      </div>
       {d.demo && (
         <div className="card border-orange-300 bg-orange-50 text-sm">
           デモデータを表示中です（架空の依頼者名には【デモ】が付いています）。本番運用を始める前に{' '}
@@ -42,11 +48,11 @@ export default function Dashboard() {
           からキーを貼り付けて接続テストを行ってください。
         </div>
       )}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <Stat label="未返信の会話" value={d.needsReply} to="/inbox?needsReply=1" />
-        <Stat label="返信待ち" value={d.waiting.length} to="/tasks" />
-        <Stat label="要確認" value={d.alerts.length} to="/alerts" tone={d.alerts.length ? 'orange' : 'gray'} />
-        <Stat label="LINE 今月送信" value={d.lineQuota ? `${d.lineQuota.used} / ${d.lineQuota.limit}` : '未設定'} />
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
+        <Stat label="未返信の会話" value={d.needsReply} to="/inbox?needsReply=1" icon="✉" tone={d.needsReply ? 'blue' : 'gray'} />
+        <Stat label="返信待ち" value={d.waiting.length} to="/tasks" icon="⏳" tone={d.waiting.length ? 'blue' : 'gray'} />
+        <Stat label="要確認" value={d.alerts.length} to="/alerts" icon="⚠" tone={d.alerts.length ? 'orange' : 'gray'} />
+        <Stat label="LINE 今月送信" value={d.lineQuota ? `${d.lineQuota.used} / ${d.lineQuota.limit}` : '未設定'} icon="💬" tone="green" />
       </div>
       <div className="grid gap-4 md:grid-cols-2">
         <section className="card">
@@ -106,13 +112,36 @@ export default function Dashboard() {
   );
 }
 
-function Stat({ label, value, to, tone = 'blue' }: { label: string; value: number | string; to?: string; tone?: 'blue' | 'orange' | 'gray' }) {
-  const color = tone === 'orange' ? 'text-orange-600' : tone === 'gray' ? 'text-slate-500' : 'text-blue-700';
+const STAT_TONE: Record<string, { value: string; icon: string; bar: string }> = {
+  blue: { value: 'text-blue-700', icon: 'bg-blue-50 text-blue-700', bar: 'from-blue-500 to-blue-400' },
+  orange: { value: 'text-orange-600', icon: 'bg-orange-50 text-orange-600', bar: 'from-orange-500 to-amber-400' },
+  green: { value: 'text-emerald-700', icon: 'bg-emerald-50 text-emerald-700', bar: 'from-emerald-500 to-emerald-400' },
+  gray: { value: 'text-slate-600', icon: 'bg-slate-100 text-slate-500', bar: 'from-slate-300 to-slate-200' },
+};
+
+function Stat({ label, value, to, icon, tone = 'blue' }: { label: string; value: number | string; to?: string; icon?: string; tone?: 'blue' | 'orange' | 'gray' | 'green' }) {
+  const t = STAT_TONE[tone];
   const inner = (
-    <div className="card">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className={`text-2xl font-bold ${color}`}>{value}</div>
+    <div className={`card relative overflow-hidden ${to ? 'transition-all duration-150 hover:-translate-y-0.5 hover:shadow-[0_2px_4px_rgba(15,23,42,0.06),0_12px_28px_-16px_rgba(15,23,42,0.25)]' : ''}`}>
+      <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${t.bar}`} />
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-xs font-medium text-slate-500">{label}</div>
+          <div className={`mt-1 text-2xl font-bold tabular-nums tracking-tight ${t.value}`}>{value}</div>
+        </div>
+        {icon && (
+          <span className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-lg ${t.icon}`} aria-hidden="true">
+            {icon}
+          </span>
+        )}
+      </div>
     </div>
   );
-  return to ? <Link to={to}>{inner}</Link> : inner;
+  return to ? (
+    <Link to={to} className="block">
+      {inner}
+    </Link>
+  ) : (
+    inner
+  );
 }
