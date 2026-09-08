@@ -14,6 +14,10 @@
   --accent-soft: rgba(0, 113, 227, 0.1);
   --shadow-card: 0 1px 1px rgba(0, 0, 0, 0.02), 0 2px 8px rgba(0, 0, 0, 0.04);
   --shadow-float: 0 4px 12px rgba(0, 0, 0, 0.06), 0 16px 40px -16px rgba(0, 0, 0, 0.16);
+  /* 動きの曲線: 減速（標準）、ばね（少し行き過ぎて戻る）、iOS のシート */
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 body {
@@ -45,9 +49,20 @@ main h3 {
 /* 部品クラスはユーティリティ（w-auto, p-0, text-xs など）で上書きできるよう components 層に置く */
 @layer components {
   .btn {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-full border border-transparent px-3.5 py-1.5 text-sm font-medium transition-[background-color,box-shadow,transform] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/40 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-full border border-transparent px-3.5 py-1.5 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/40 disabled:cursor-not-allowed disabled:opacity-40;
     background: rgba(0, 0, 0, 0.05);
     color: var(--text);
+    transition:
+      background-color 150ms var(--ease-out),
+      box-shadow 150ms var(--ease-out),
+      opacity 150ms var(--ease-out),
+      transform 320ms var(--ease-spring);
+  }
+  /* 押している間は速く沈み、離すとばねのように戻る */
+  .btn:active:not(:disabled) {
+    transform: scale(0.96);
+    transition-duration: 150ms, 150ms, 150ms, 60ms;
+    transition-timing-function: var(--ease-out);
   }
   .btn:hover {
     background: rgba(0, 0, 0, 0.08);
@@ -126,10 +141,22 @@ main h3 {
   .nav-item:hover {
     background: rgba(0, 0, 0, 0.05);
   }
+  .nav-item:active {
+    transform: scale(0.98);
+    transition: transform 80ms var(--ease-out);
+  }
   .nav-item-active,
   .nav-item-active:hover {
     background: var(--accent-soft);
     color: var(--accent);
+  }
+  /* 滑るピルが背景を担う左メニューでは、項目自体の塗りは付けない */
+  .nav-item-flat.nav-item-active,
+  .nav-item-flat.nav-item-active:hover {
+    background: transparent;
+  }
+  .nav-item-flat {
+    position: relative;
   }
   .nav-icon {
     @apply inline-flex h-5 w-5 shrink-0 items-center justify-center;
@@ -220,5 +247,182 @@ td > select.input {
 @media (display-mode: standalone) {
   main {
     padding-top: calc(env(safe-area-inset-top) + 0.75rem);
+  }
+}
+
+/* ===== 動き（Apple 風: 短く、減速して止まり、押した部品は沈む） ===== */
+
+/* 画面遷移: 新しいページはわずかに下から浮き上がりながら現れる */
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.page-enter {
+  animation: page-in 320ms var(--ease-out) both;
+}
+
+/* 現れる要素（保存しましたなどのメッセージ、開いたフォーム） */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.fade-in {
+  animation: fade-in 240ms var(--ease-out) both;
+}
+
+/* 順に現れる（ダッシュボードのタイルなど）: 子要素を少しずつ遅らせる */
+.stagger > * {
+  animation: fade-in 360ms var(--ease-out) both;
+}
+.stagger > *:nth-child(1) { animation-delay: 0ms; }
+.stagger > *:nth-child(2) { animation-delay: 40ms; }
+.stagger > *:nth-child(3) { animation-delay: 80ms; }
+.stagger > *:nth-child(4) { animation-delay: 120ms; }
+.stagger > *:nth-child(5) { animation-delay: 160ms; }
+.stagger > *:nth-child(6) { animation-delay: 200ms; }
+.stagger > *:nth-child(7) { animation-delay: 240ms; }
+.stagger > *:nth-child(n + 8) { animation-delay: 280ms; }
+
+/* 押せるカード（ダッシュボードのタイルなど）: 触れると浮き、押すと沈む */
+.card-press {
+  transition:
+    transform 320ms var(--ease-spring),
+    box-shadow 200ms var(--ease-out);
+}
+.card-press:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-float);
+}
+.card-press:active {
+  transform: scale(0.98);
+  box-shadow: var(--shadow-card);
+  transition-duration: 60ms, 60ms;
+  transition-timing-function: var(--ease-out);
+}
+
+/* 下から出るシート（スマホの「その他」）と背景の暗幕 */
+.sheet-backdrop {
+  background: rgba(0, 0, 0, 0.32);
+  opacity: 0;
+  transition: opacity 280ms var(--ease-out);
+}
+.sheet-backdrop.is-open {
+  opacity: 1;
+}
+.sheet {
+  transform: translateY(100%);
+  transition: transform 420ms var(--ease-sheet);
+  will-change: transform;
+}
+.sheet-backdrop.is-open .sheet {
+  transform: translateY(0);
+}
+
+/* 下部タブ: 選ばれたアイコンが一度ぽんと跳ねる */
+@keyframes tab-pop {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.18);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.tab-pop {
+  animation: tab-pop 360ms var(--ease-spring);
+}
+.tab-item {
+  transition: color 180ms var(--ease-out);
+}
+.tab-item:active svg {
+  transform: scale(0.9);
+}
+.tab-item svg {
+  transition: transform 160ms var(--ease-out);
+}
+
+/* 左メニューの選択中の枠: 別項目を選ぶと枠が滑って移動する */
+.nav-pill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-radius: 0.5rem;
+  background: var(--accent-soft);
+  pointer-events: none;
+  transition:
+    top 360ms var(--ease-spring),
+    height 200ms var(--ease-out);
+}
+.nav-pill.no-anim {
+  transition: none;
+}
+
+/* 読み込み中の文字はゆっくり明滅させる */
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.loading-text {
+  animation: breathe 1.6s ease-in-out infinite;
+}
+
+/* 未読の丸印などは現れるときに少し膨らむ */
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.pop-in {
+  animation: pop-in 280ms var(--ease-spring) both;
+}
+
+/* 一覧の行: 押すとわずかに沈む */
+ul.divide-y > li:active,
+table.w-full tbody tr:active {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+/* チェックボックス・ラジオの切替は滑らかに */
+input[type='checkbox'],
+input[type='radio'] {
+  transition: transform 160ms var(--ease-spring);
+}
+input[type='checkbox']:active,
+input[type='radio']:active {
+  transform: scale(0.85);
+}
+
+/* 動きを減らす設定の端末では、動きをすべて止める */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

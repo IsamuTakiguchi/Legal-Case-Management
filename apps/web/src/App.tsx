@@ -40,7 +40,7 @@ export default function App() {
   const alerts = useQuery({ queryKey: ['alerts', 'count'], queryFn: () => api.get<unknown[]>('/alerts'), enabled: me.data?.authenticated === true, refetchInterval: 60_000 });
 
   if (loc.pathname === '/login') return <Login />;
-  if (me.isLoading) return <div className="p-8 text-slate-500">読み込み中…</div>;
+  if (me.isLoading) return <div className="loading-text p-8 text-slate-500">読み込み中…</div>;
   if (!me.data?.authenticated) return <Navigate to="/login" replace />;
 
   return (
@@ -53,20 +53,7 @@ export default function App() {
             <div className="truncate whitespace-nowrap text-[11px] text-slate-500">LINE公式・Chatwork・Gmail</div>
           </div>
         </div>
-        <nav className="flex flex-col gap-px px-3 pt-2">
-          {NAV.map((n, i) => (
-            <div key={n.to}>
-              {i === NAV.length - 2 && <div className="mx-1 my-2 border-t border-[var(--hairline)]" />}
-              <NavLink to={n.to} end={n.to === '/'} className={({ isActive }) => `nav-item ${isActive ? 'nav-item-active' : ''}`}>
-                <span className="nav-icon">
-                  <Icon name={n.icon} className="h-[18px] w-[18px]" />
-                </span>
-                <span className="min-w-0 flex-1 truncate">{n.label}</span>
-                {n.to === '/alerts' && (alerts.data?.length ?? 0) > 0 && <span className="badge badge-orange">{alerts.data!.length}</span>}
-              </NavLink>
-            </div>
-          ))}
-        </nav>
+        <SideNav alertCount={alerts.data?.length ?? 0} />
         <div className="mt-auto space-y-2 border-t border-[var(--hairline)] p-3">
           <RefreshButtons />
           <BackupStatus />
@@ -75,26 +62,65 @@ export default function App() {
       </aside>
       <main className="mx-auto w-full min-w-0 max-w-[1280px] flex-1 p-4 pb-24 md:px-8 md:py-7 md:pb-10">
         <PullToRefresh />
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/inbox" element={<Inbox />} />
-          <Route path="/inbox/:id" element={<Conversation />} />
-          <Route path="/calendar" element={<Calendar />} />
-          <Route path="/clients" element={<Clients />} />
-          <Route path="/clients/:id" element={<ClientDetail />} />
-          <Route path="/cases" element={<Cases />} />
-          <Route path="/cases/:id" element={<CaseDetail />} />
-          <Route path="/forms" element={<Forms />} />
-          <Route path="/tasks" element={<Tasks />} />
-          <Route path="/alerts" element={<Alerts />} />
-          <Route path="/files" element={<Files />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/setup" element={<Setup />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <div key={loc.pathname} className="page-enter">
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/inbox" element={<Inbox />} />
+            <Route path="/inbox/:id" element={<Conversation />} />
+            <Route path="/calendar" element={<Calendar />} />
+            <Route path="/clients" element={<Clients />} />
+            <Route path="/clients/:id" element={<ClientDetail />} />
+            <Route path="/cases" element={<Cases />} />
+            <Route path="/cases/:id" element={<CaseDetail />} />
+            <Route path="/forms" element={<Forms />} />
+            <Route path="/tasks" element={<Tasks />} />
+            <Route path="/alerts" element={<Alerts />} />
+            <Route path="/files" element={<Files />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/setup" element={<Setup />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </div>
       </main>
       <MobileTabs alertCount={alerts.data?.length ?? 0} />
     </div>
+  );
+}
+
+/** 左メニュー。選択中の淡い青の枠は別の項目を選ぶと滑って移動する（macOS のサイドバー風） */
+function SideNav({ alertCount }: { alertCount: number }) {
+  const loc = useLocation();
+  const navRef = useRef<HTMLElement>(null);
+  const [pill, setPill] = useState<{ top: number; height: number; anim: boolean } | null>(null);
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+    const active = nav.querySelector<HTMLElement>('a[aria-current="page"]');
+    if (!active) {
+      setPill(null);
+      return;
+    }
+    const top = active.getBoundingClientRect().top - nav.getBoundingClientRect().top;
+    const height = active.offsetHeight;
+    // 初回は動かさずに置き、2 回目以降は滑らせる
+    setPill((prev) => ({ top, height, anim: prev !== null }));
+  }, [loc.pathname]);
+  return (
+    <nav ref={navRef} className="relative flex flex-col gap-px px-3 pt-2">
+      {pill && <div className={`nav-pill mx-3 ${pill.anim ? '' : 'no-anim'}`} style={{ top: pill.top, height: pill.height }} aria-hidden />}
+      {NAV.map((n, i) => (
+        <div key={n.to}>
+          {i === NAV.length - 2 && <div className="mx-1 my-2 border-t border-[var(--hairline)]" />}
+          <NavLink to={n.to} end={n.to === '/'} className={({ isActive }) => `nav-item nav-item-flat ${isActive ? 'nav-item-active' : ''}`}>
+            <span className="nav-icon">
+              <Icon name={n.icon} className="h-[18px] w-[18px]" />
+            </span>
+            <span className="min-w-0 flex-1 truncate">{n.label}</span>
+            {n.to === '/alerts' && alertCount > 0 && <span className="badge badge-orange pop-in">{alertCount}</span>}
+          </NavLink>
+        </div>
+      ))}
+    </nav>
   );
 }
 
@@ -167,9 +193,10 @@ function PullToRefresh() {
   if (!visible) return null;
   const ready = pull >= PULL_THRESHOLD;
   return (
-    <div className="pointer-events-none fixed inset-x-0 top-0 z-50 flex justify-center md:hidden" style={{ transform: `translateY(${busy ? 12 : Math.min(pull, PULL_THRESHOLD) - 40}px)`, transition: pull === 0 ? 'transform 150ms' : undefined }} aria-live="polite">
-      <div className={`rounded-full border px-3 py-1 text-xs shadow ${ready || busy ? 'border-blue-300 bg-blue-50 text-blue-700' : 'border-slate-200 bg-white text-slate-500'}`}>
-        {busy ? '更新中…' : ready ? '離して更新' : '↓ 引っ張って更新'}
+    <div className="pointer-events-none fixed inset-x-0 top-0 z-50 flex justify-center md:hidden" style={{ transform: `translateY(${busy ? 12 : Math.min(pull, PULL_THRESHOLD) - 40}px)`, transition: pull === 0 ? 'transform 320ms var(--ease-spring)' : undefined }} aria-live="polite">
+      <div className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs shadow-[var(--shadow-float)] backdrop-blur-xl transition-colors duration-200 ${ready || busy ? 'border-[var(--accent)]/30 bg-[var(--accent-soft)] text-[var(--accent)]' : 'border-[var(--hairline)] bg-white/90 text-slate-500'}`}>
+        <Icon name="refresh" className={`h-3.5 w-3.5 transition-transform duration-200 ${busy ? 'animate-spin' : ready ? 'rotate-180' : ''}`} />
+        {busy ? '更新中…' : ready ? '離して更新' : '引っ張って更新'}
       </div>
     </div>
   );
@@ -227,8 +254,26 @@ function LogoutButton({ className = '' }: { className?: string }) {
 /** スマホ幅では左メニューの代わりに下部タブを出す。「その他」で残りのメニューをシートで開く */
 const PRIMARY_TABS = ['/', '/inbox', '/tasks', '/alerts'];
 
+/** 開閉をアニメーションさせるため、閉じた後も一定時間は描画を残す */
+function useSheet(open: boolean, duration = 420) {
+  const [mounted, setMounted] = useState(open);
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      const id = requestAnimationFrame(() => requestAnimationFrame(() => setShown(true)));
+      return () => cancelAnimationFrame(id);
+    }
+    setShown(false);
+    const t = setTimeout(() => setMounted(false), duration);
+    return () => clearTimeout(t);
+  }, [open, duration]);
+  return { mounted, shown };
+}
+
 function MobileTabs({ alertCount }: { alertCount: number }) {
   const [open, setOpen] = useState(false);
+  const { mounted, shown } = useSheet(open);
   const loc = useLocation();
   useEffect(() => setOpen(false), [loc.pathname]);
   const primary = NAV.filter((n) => PRIMARY_TABS.includes(n.to));
@@ -237,13 +282,13 @@ function MobileTabs({ alertCount }: { alertCount: number }) {
   const short = (label: string) => label.replace('・返信待ち', '').replace('ダッシュボード', 'ホーム');
   return (
     <>
-      {open && (
-        <div className="fixed inset-0 z-30 bg-slate-900/40 md:hidden" onClick={() => setOpen(false)}>
-          <div className="absolute inset-x-0 bottom-0 rounded-t-[22px] bg-white/95 p-4 pb-[calc(env(safe-area-inset-bottom)+72px)] shadow-[0_-8px_40px_rgba(0,0,0,0.18)] backdrop-blur-2xl" onClick={(e) => e.stopPropagation()}>
+      {mounted && (
+        <div className={`sheet-backdrop fixed inset-0 z-30 md:hidden ${shown ? 'is-open' : ''}`} onClick={() => setOpen(false)}>
+          <div className="sheet absolute inset-x-0 bottom-0 rounded-t-[22px] bg-white/95 p-4 pb-[calc(env(safe-area-inset-bottom)+72px)] shadow-[0_-8px_40px_rgba(0,0,0,0.18)] backdrop-blur-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-slate-300" />
             <div className="grid grid-cols-3 gap-2">
               {rest.map((n) => (
-                <NavLink key={n.to} to={n.to} className={({ isActive }) => `flex flex-col items-center gap-1.5 rounded-2xl px-2 py-3 text-xs ${isActive ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'bg-black/[0.04] text-slate-700'}`}>
+                <NavLink key={n.to} to={n.to} className={({ isActive }) => `card-press flex flex-col items-center gap-1.5 rounded-2xl px-2 py-3 text-xs ${isActive ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'bg-black/[0.04] text-slate-700'}`}>
                   <Icon name={n.icon} className="h-6 w-6" strokeWidth={1.6} />
                   {n.label}
                 </NavLink>
@@ -261,14 +306,18 @@ function MobileTabs({ alertCount }: { alertCount: number }) {
       )}
       <nav className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-[var(--hairline)] bg-white/80 pb-[env(safe-area-inset-bottom)] backdrop-blur-2xl md:hidden" aria-label="主要メニュー">
         {primary.map((n) => (
-          <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => `relative flex flex-col items-center gap-0.5 pb-1 pt-2 text-[10px] font-medium ${isActive ? 'text-[var(--accent)]' : 'text-slate-500'}`}>
-            <Icon name={n.icon} className="h-6 w-6" strokeWidth={1.6} />
-            {short(n.label)}
-            {n.to === '/alerts' && alertCount > 0 && <span className="absolute right-4 top-1 rounded-full bg-[#ff3b30] px-1.5 text-[10px] font-semibold text-white">{alertCount}</span>}
+          <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => `tab-item relative flex flex-col items-center gap-0.5 pb-1 pt-2 text-[10px] font-medium ${isActive ? 'text-[var(--accent)]' : 'text-slate-500'}`}>
+            {({ isActive }) => (
+              <>
+                <Icon name={n.icon} className={`h-6 w-6 ${isActive ? 'tab-pop' : ''}`} strokeWidth={1.6} />
+                {short(n.label)}
+                {n.to === '/alerts' && alertCount > 0 && <span className="pop-in absolute right-4 top-1 rounded-full bg-[#ff3b30] px-1.5 text-[10px] font-semibold text-white">{alertCount}</span>}
+              </>
+            )}
           </NavLink>
         ))}
-        <button type="button" onClick={() => setOpen((v) => !v)} className={`flex flex-col items-center gap-0.5 pb-1 pt-2 text-[10px] font-medium ${open || restActive ? 'text-[var(--accent)]' : 'text-slate-500'}`} aria-expanded={open}>
-          <Icon name="menu" className="h-6 w-6" strokeWidth={1.6} />
+        <button type="button" onClick={() => setOpen((v) => !v)} className={`tab-item flex flex-col items-center gap-0.5 pb-1 pt-2 text-[10px] font-medium ${open || restActive ? 'text-[var(--accent)]' : 'text-slate-500'}`} aria-expanded={open}>
+          <Icon name={open ? 'close' : 'menu'} className={`h-6 w-6 transition-transform duration-300 ${open ? 'rotate-90' : ''}`} strokeWidth={1.6} />
           その他
         </button>
       </nav>

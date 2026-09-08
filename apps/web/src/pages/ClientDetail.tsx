@@ -48,7 +48,7 @@ export default function ClientDetail() {
     },
   });
   const c = d.data;
-  if (!c) return <div className="text-slate-500">読み込み中…</div>;
+  if (!c) return <div className="loading-text text-slate-500">読み込み中…</div>;
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">

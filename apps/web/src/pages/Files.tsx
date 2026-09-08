@@ -92,7 +92,7 @@ export default function Files() {
           受信したままで OneDrive には保存していないファイルです。必要なものだけ「保存」を押してください（依頼者が分かっている会話なら、その依頼者の受領資料フォルダに入ります）。要らないものは「不要」で一覧から外れます。LINE の画像・ファイルは LINE 側の保持期間が短いため、受信時にアプリ内へ控えを取ってあります。設定 → 基本設定 → 「受信ファイルの扱い」で自動保存の範囲を変えられます。
         </p>
       )}
-      {msg && <div className="text-xs text-slate-700">{msg}</div>}
+      {msg && <div className="fade-in text-xs text-slate-700">{msg}</div>}
       {selectable.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm">
           <label className="flex items-center gap-1">

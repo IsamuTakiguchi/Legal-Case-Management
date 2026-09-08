@@ -301,7 +301,7 @@ export default function Settings() {
             </button>
           </div>
         </div>
-        {msg && <div className="mt-2 text-sm text-slate-700">{msg}</div>}
+        {msg && <div className="fade-in mt-2 text-sm text-slate-700">{msg}</div>}
       </section>
 
       <section className="card">
@@ -397,7 +397,7 @@ export default function Settings() {
           <button className="btn" onClick={() => runBackup.mutate()} disabled={runBackup.isPending}>
             {runBackup.isPending ? '作成中…' : '今すぐバックアップ'}
           </button>
-          {backupMsg && <span className="text-xs text-slate-700">{backupMsg}</span>}
+          {backupMsg && <span className="fade-in text-xs text-slate-700">{backupMsg}</span>}
         </div>
         {backup.data && backup.data.local.length > 0 && (
           <div className="mt-3 text-xs">
@@ -440,7 +440,7 @@ export default function Settings() {
             >
               {restore.isPending ? '復元中…' : '復元'}
             </button>
-            {restoreMsg && <span className="text-xs text-slate-700">{restoreMsg}</span>}
+            {restoreMsg && <span className="fade-in text-xs text-slate-700">{restoreMsg}</span>}
           </div>
         </div>
       </section>
@@ -694,7 +694,7 @@ function StaffSection() {
       {accounts.isError && <div className="mt-1 text-xs text-red-600">候補を取得できませんでした: {(accountsQ.error as Error)?.message ?? ''}。「アカウント ID を直接入力」でも登録できます</div>}
       {accountsQ.data?.error && <div className="mt-1 text-xs text-orange-700">Chatwork API から取れなかったため、取込済みメッセージの送信者だけを候補にしています（{accountsQ.data.error}）</div>}
       {accountsQ.data?.partial && !accountsQ.data.error && <div className="mt-1 text-xs text-slate-500">ルームが多いため、直近に動きのあったルームのメンバーだけを候補にしています。見つからない人は「アカウント ID を直接入力」で登録できます（Chatwork のプロフィール画面で確認できます）</div>}
-      {msg && <div className="mt-2 text-xs text-red-600">{msg}</div>}
+      {msg && <div className="fade-in mt-2 text-xs text-red-600">{msg}</div>}
     </section>
   );
 }

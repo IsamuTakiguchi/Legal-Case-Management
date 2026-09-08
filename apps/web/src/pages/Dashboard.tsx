@@ -19,7 +19,7 @@ export default function Dashboard() {
   const q = useQuery({ queryKey: ['dashboard'], queryFn: () => api.get<DashboardData>('/dashboard'), refetchInterval: 60_000 });
   const status = useQuery({ queryKey: ['status'], queryFn: () => api.get<{ anthropic: { configured: boolean }; google: { connected: boolean }; microsoft: { connected: boolean } }>('/status') });
   const d = q.data;
-  if (!d) return <div className="text-slate-500">読み込み中…</div>;
+  if (!d) return <div className="loading-text text-slate-500">読み込み中…</div>;
   const needsSetup = status.data && (!status.data.anthropic.configured || !status.data.google.connected || !status.data.microsoft.connected);
   const now = Date.now();
   const today = new Date(now + 9 * 3600_000);
@@ -49,13 +49,13 @@ export default function Dashboard() {
           からキーを貼り付けて接続テストを行ってください。
         </div>
       )}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
+      <div className="stagger grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
         <Stat label="未返信の会話" value={d.needsReply} to="/inbox?needsReply=1" icon="mail" tone={d.needsReply ? 'blue' : 'gray'} />
         <Stat label="返信待ち" value={d.waiting.length} to="/tasks" icon="clock" tone={d.waiting.length ? 'blue' : 'gray'} />
         <Stat label="要確認" value={d.alerts.length} to="/alerts" icon="alert" tone={d.alerts.length ? 'orange' : 'gray'} />
         <Stat label="LINE 今月送信" value={d.lineQuota ? `${d.lineQuota.used} / ${d.lineQuota.limit}` : '未設定'} icon="chat" tone="green" />
       </div>
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="stagger grid gap-4 md:grid-cols-2">
         <section className="card">
           <h2 className="mb-2 flex items-center font-semibold">
             今日の予定
@@ -124,7 +124,7 @@ const STAT_TONE: Record<string, { value: string; icon: string }> = {
 function Stat({ label, value, to, icon, tone = 'blue' }: { label: string; value: number | string; to?: string; icon?: IconName; tone?: 'blue' | 'orange' | 'gray' | 'green' }) {
   const t = STAT_TONE[tone];
   const inner = (
-    <div className={`card flex items-center gap-3.5 ${to ? 'transition-[transform,box-shadow] duration-200 hover:-translate-y-0.5 hover:shadow-[var(--shadow-float)]' : ''}`}>
+    <div className={`card flex items-center gap-3.5 ${to ? 'card-press' : ''}`}>
       {icon && (
         <span className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-[12px] shadow-[inset_0_-1px_0_rgba(0,0,0,0.08)] ${t.icon}`}>
           <Icon name={icon} className="h-[22px] w-[22px]" strokeWidth={1.9} />

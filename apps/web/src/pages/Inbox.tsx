@@ -133,11 +133,11 @@ export default function Inbox() {
           ) : (
             <span className="text-xs text-slate-400">チェックを付けると、まとめて対応済み・アーカイブにできます</span>
           )}
-          {msg && <span className="ml-auto text-xs text-slate-600">{msg}</span>}
+          {msg && <span className="fade-in ml-auto text-xs text-slate-600">{msg}</span>}
         </div>
       )}
       <div className="card p-0">
-        {query.isLoading && <div className="p-4 text-slate-500">読み込み中…</div>}
+        {query.isLoading && <div className="loading-text p-4 text-slate-500">読み込み中…</div>}
         {query.data?.length === 0 && <div className="p-4 text-slate-500">会話はありません。設定画面で各チャネルを接続してください。</div>}
         <ul className="divide-y divide-slate-100">
           {query.data?.map((c) => (

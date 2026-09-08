@@ -84,7 +84,7 @@ export default function Setup() {
   });
   const connected = new URLSearchParams(location.search).get('connected');
   const d = q.data;
-  if (!d) return <div className="text-slate-500">読み込み中…</div>;
+  if (!d) return <div className="loading-text text-slate-500">読み込み中…</div>;
   const done = [d.state.anthropic, d.state.line, d.state.chatwork, d.state.google.connected, d.state.microsoft.connected, d.state.zoom].filter(Boolean).length;
   return (
     <div className="space-y-4">
@@ -189,7 +189,7 @@ export default function Setup() {
                   }}
                 />
               )}
-              {saved === s.id && <span className="text-xs text-green-700">保存しました</span>}
+              {saved === s.id && <span className="fade-in text-xs text-green-700">保存しました</span>}
               {r && <span className={`text-xs ${r.ok ? 'text-green-700' : 'text-red-600'}`}>{r.message}</span>}
             </div>
           </section>
@@ -386,7 +386,7 @@ function StatusFolderLayout({ rootKey }: { rootKey: string }) {
         <button type="button" className="btn btn-primary btn-sm" onClick={() => save.mutate()} disabled={save.isPending}>
           {save.isPending ? '保存中…' : '区分を保存して依頼者フォルダを対応付ける'}
         </button>
-        {msg && <span className="text-slate-700">{msg}</span>}
+        {msg && <span className="fade-in text-slate-700">{msg}</span>}
       </div>
     </div>
   );
@@ -423,7 +423,7 @@ function FolderPicker({ current, onPick }: { current: string; onPick: (path: str
               </span>
             ))}
           </div>
-          {q.isLoading && <div className="text-slate-500">読み込み中…</div>}
+          {q.isLoading && <div className="loading-text text-slate-500">読み込み中…</div>}
           {q.error && <div className="text-red-600">{(q.error as Error).message}</div>}
           {q.data && (
             <ul className="max-h-64 divide-y divide-slate-200 overflow-auto rounded border border-slate-200 bg-white">
@@ -509,7 +509,7 @@ function DeviceConnect({ mode, onDone }: { mode?: string; onDone: () => void }) 
         )}
         <span className="text-slate-600">Microsoft 公式のコマンドラインツール用の公開クライアントを使うため、Entra でのアプリ登録が不要です。</span>
       </div>
-      {err && <div className="text-red-600">{err}</div>}
+      {err && <div className="fade-in text-red-600">{err}</div>}
       {flow && flow.status === 'pending' && (
         <div className="space-y-1">
           <div>

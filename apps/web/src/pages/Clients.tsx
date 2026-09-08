@@ -276,7 +276,7 @@ function BulkImport({ onDone }: { onDone: () => void }) {
           区分フォルダ（相談／進行事件／残務処理／終了事件）に合わせて、フォルダ名を事件名にした事件も同時に作る（事件がまだ無い依頼者のみ）
         </label>
       )}
-      {msg && <div className="text-xs text-slate-700">{msg}</div>}
+      {msg && <div className="fade-in text-xs text-slate-700">{msg}</div>}
       {rows.length > 0 && (
         <div className="max-h-80 overflow-y-auto rounded border border-slate-200">
           <table className="w-full text-xs">

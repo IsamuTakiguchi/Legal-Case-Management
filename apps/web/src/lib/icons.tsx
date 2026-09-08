@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 /** SF Symbols 風の線画アイコン（絵文字を使わず、太さと角丸を揃える） */
-export type IconName = 'home' | 'inbox' | 'calendar' | 'person' | 'scale' | 'check' | 'bell' | 'clip' | 'doc' | 'plug' | 'gear' | 'menu' | 'refresh' | 'mail' | 'clock' | 'alert' | 'chat';
+export type IconName = 'home' | 'inbox' | 'calendar' | 'person' | 'scale' | 'check' | 'bell' | 'clip' | 'doc' | 'plug' | 'gear' | 'menu'
+  | 'close' | 'refresh' | 'mail' | 'clock' | 'alert' | 'chat';
 
 const PATHS: Record<IconName, ReactNode> = {
   home: (
@@ -65,6 +66,12 @@ const PATHS: Record<IconName, ReactNode> = {
     </>
   ),
   menu: <path d="M4 7h16M4 12h16M4 17h16" />,
+  close: (
+    <>
+      <path d="M6 6l12 12" />
+      <path d="M18 6L6 18" />
+    </>
+  ),
   refresh: (
     <>
       <path d="M20 12a8 8 0 1 1-2.3-5.7" />

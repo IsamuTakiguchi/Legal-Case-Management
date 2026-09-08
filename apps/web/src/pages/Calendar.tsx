@@ -217,7 +217,7 @@ export default function Calendar() {
           <span className="ml-auto text-xs text-slate-500">Google 未接続のため、ここで登録した予定はアプリ内だけに保存されます（初期設定で接続すると Google カレンダーにも登録されます）</span>
         )}
       </div>
-      {msg && <div className={`rounded-md px-3 py-2 text-sm ${msg.kind === 'ok' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700'}`}>{msg.text}</div>}
+      {msg && <div className={`fade-in rounded-md px-3 py-2 text-sm ${msg.kind === 'ok' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700'}`}>{msg.text}</div>}
 
       {holdOpen && (
         <HoldForm
@@ -246,7 +246,7 @@ export default function Calendar() {
         />
       )}
 
-      {list.isLoading && <div className="text-sm text-slate-500">読み込み中…</div>}
+      {list.isLoading && <div className="loading-text text-sm text-slate-500">読み込み中…</div>}
       {!list.isLoading && days.length === 0 && <div className="card text-sm text-slate-500">この期間に予定はありません</div>}
       <div className="space-y-3">
         {days.map((d) => (
