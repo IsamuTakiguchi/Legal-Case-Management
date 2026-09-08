@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { ClientPicker } from '../lib/ClientPicker';
+import { ContactLinkForm } from '../lib/ContactLinkForm';
 import { fmtDateTime, fromLocalInput, todayLocalInput } from '../lib/format';
 import { ALERT_TYPE_LABEL, type AlertType } from '@lcm/shared';
 
@@ -50,7 +51,7 @@ export default function Alerts() {
                   </button>
                 </div>
                 <div className="mt-2">
-                  {type === 'unlinked_contact' && <LinkAction alert={a} onLink={(clientId) => link.mutate({ conversationId: Number(a.payload.conversationId), clientId })} />}
+                  {type === 'unlinked_contact' && <LinkAction alert={a} onLink={(clientId) => link.mutate({ conversationId: Number(a.payload.conversationId), clientId })} onContactLinked={refresh} />}
                   {type === 'unassigned_file' && <LinkAction alert={a} label="このファイルの依頼者" onLink={(clientId) => assign.mutate({ attachmentId: Number(a.payload.attachmentId), clientId })} />}
                   {type === 'next_hearing_missing' && <NextHearing alert={a} onDone={refresh} />}
                   {(type === 'waiting_overdue' || type === 'reply_received' || type === 'scheduling_stale') && a.payload.conversationId ? (
@@ -78,8 +79,41 @@ export default function Alerts() {
   );
 }
 
-function LinkAction({ alert, onLink, label = '依頼者に紐付け' }: { alert: Alert; onLink: (clientId: number) => void; label?: string }) {
+function LinkAction({ alert, onLink, onContactLinked, label = '依頼者に紐付け' }: { alert: Alert; onLink: (clientId: number) => void; onContactLinked?: () => void; label?: string }) {
   const [id, setId] = useState('');
+  const [mode, setMode] = useState<'client' | 'contact'>('client');
+  const conversationId = alert.payload.conversationId ? Number(alert.payload.conversationId) : null;
+  // 会話の未紐付けは「依頼者本人」か「事件の関係者（相手方・相手方代理人など）」かを選べる
+  if (onContactLinked && conversationId) {
+    return (
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <label className="flex items-center gap-1">
+            <input type="radio" name={`mode-${alert.id}`} checked={mode === 'client'} onChange={() => setMode('client')} /> 依頼者本人
+          </label>
+          <label className="flex items-center gap-1" title="相手方・相手方代理人・裁判所・保険会社など、依頼者以外の相手">
+            <input type="radio" name={`mode-${alert.id}`} checked={mode === 'contact'} onChange={() => setMode('contact')} /> 事件の関係者
+          </label>
+          <Link to={`/inbox/${conversationId}`} className="btn btn-sm">
+            会話を開く
+          </Link>
+        </div>
+        {mode === 'client' ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <ClientPicker value={id} onChange={setId} emptyLabel={`${label}…`} />
+            <button className="btn btn-primary btn-sm" disabled={!id} onClick={() => onLink(Number(id))}>
+              紐付ける
+            </button>
+            <Link to={`/clients?new=${encodeURIComponent(String(alert.payload.displayName ?? ''))}`} className="btn btn-sm">
+              新規依頼者を登録
+            </Link>
+          </div>
+        ) : (
+          <ContactLinkForm conversationId={conversationId} defaultName={String(alert.payload.displayName ?? '')} onDone={onContactLinked} />
+        )}
+      </div>
+    );
+  }
   return (
     <div className="flex flex-wrap items-center gap-2">
       <ClientPicker value={id} onChange={setId} emptyLabel={`${label}…`} />
