@@ -7,6 +7,7 @@ import { logger } from '../logger.js';
 import { onInboundForTasks } from './tasks.js';
 import { staffByChatworkAccount, caseForChatworkRoom, guessClientFromText } from './staff.js';
 import { linkGmailMessageToCreditor } from './creditors.js';
+import { findContactByIdentity, contactBriefs } from './contacts.js';
 import { getSetting } from './settings.js';
 import { NON_PRIMARY_CATEGORIES, type GmailCategory } from '../channels/gmail.js';
 
@@ -29,14 +30,20 @@ export async function ingestMessage(
   // Chatwork: 事務局メンバーからの伝言か／事件専用ルームか
   const staff = m.channel === 'chatwork' && m.direction === 'in' ? staffByChatworkAccount(m.identity.chatworkAccountId) : null;
   const roomCase = m.channel === 'chatwork' ? caseForChatworkRoom(m.identity.chatworkRoomId) : null;
+  // 事件の関係者（相手方代理人など）からの連絡か。依頼者より先に照合する（同じ人が依頼者にも登録されていることはない前提）
+  const contactHit = !staff && !roomCase ? findContactByIdentity(m.identity) : null;
   if (!conv) {
-    const client = findClientByIdentity(m.identity) ?? (roomCase ? (d.select().from(schema.clients).where(eq(schema.clients.id, roomCase.clientId)).get() ?? null) : null);
+    const client = contactHit
+      ? (d.select().from(schema.clients).where(eq(schema.clients.id, contactHit.kase.clientId)).get() ?? null)
+      : (findClientByIdentity(m.identity) ?? (roomCase ? (d.select().from(schema.clients).where(eq(schema.clients.id, roomCase.clientId)).get() ?? null) : null));
     conv = d
       .insert(schema.conversations)
       .values({
         channel: m.channel,
         externalThreadId: m.externalThreadId,
         clientId: client?.id ?? null,
+        caseId: contactHit?.kase.id ?? null,
+        contactId: contactHit?.contact.id ?? null,
         subject: m.subject ?? null,
         counterpartName,
         counterpartAddress,
@@ -46,12 +53,17 @@ export async function ingestMessage(
       .get();
     if (!client && m.direction === 'in' && !staff) raiseUnlinkedContact(conv.id, m.identity, counterpartName);
   } else if (!conv.clientId) {
-    const client = findClientByIdentity(m.identity) ?? (roomCase ? (d.select().from(schema.clients).where(eq(schema.clients.id, roomCase.clientId)).get() ?? null) : null);
-    if (client) {
-      d.update(schema.conversations).set({ clientId: client.id }).where(eq(schema.conversations.id, conv.id)).run();
-      conv = { ...conv, clientId: client.id };
-    } else if (m.direction === 'in' && !staff) {
-      raiseUnlinkedContact(conv.id, m.identity, counterpartName);
+    if (contactHit) {
+      d.update(schema.conversations).set({ clientId: contactHit.kase.clientId, caseId: contactHit.kase.id, contactId: contactHit.contact.id }).where(eq(schema.conversations.id, conv.id)).run();
+      conv = { ...conv, clientId: contactHit.kase.clientId, caseId: contactHit.kase.id, contactId: contactHit.contact.id };
+    } else {
+      const client = findClientByIdentity(m.identity) ?? (roomCase ? (d.select().from(schema.clients).where(eq(schema.clients.id, roomCase.clientId)).get() ?? null) : null);
+      if (client) {
+        d.update(schema.conversations).set({ clientId: client.id }).where(eq(schema.conversations.id, conv.id)).run();
+        conv = { ...conv, clientId: client.id };
+      } else if (m.direction === 'in' && !staff) {
+        raiseUnlinkedContact(conv.id, m.identity, counterpartName);
+      }
     }
   }
   if (staff && !(conv.meta as { staff?: boolean }).staff) {
@@ -62,7 +74,11 @@ export async function ingestMessage(
   // メッセージ単位の紐付け: 事件専用ルームならその事件、事務局の伝言なら本文の依頼者名から推定
   let msgClientId: number | null = null;
   let msgCaseId: number | null = null;
-  if (roomCase) {
+  if (conv.contactId && conv.caseId) {
+    // 関係者との会話は、その事件のやり取りとして記録する
+    msgClientId = conv.clientId;
+    msgCaseId = conv.caseId;
+  } else if (roomCase) {
     msgClientId = roomCase.clientId;
     msgCaseId = roomCase.id;
   } else if (staff) {
@@ -200,9 +216,11 @@ export function listConversations(filter: {
   const clientIds = [...new Set(rows.map((r) => r.clientId).filter((x): x is number => !!x))];
   const clients = clientIds.length ? d.select().from(schema.clients).where(inArray(schema.clients.id, clientIds)).all() : [];
   const byId = new Map(clients.map((c) => [c.id, c]));
+  const contacts = contactBriefs(rows.map((r) => r.contactId ?? 0));
   return rows.map((r) => {
     const last = d.select().from(schema.messages).where(eq(schema.messages.conversationId, r.id)).orderBy(desc(schema.messages.sentAt)).limit(1).get();
     return {
+      contact: r.contactId ? (contacts.get(r.contactId) ?? null) : null,
       ...r,
       staff: !!(r.meta as { staff?: boolean }).staff,
       client: r.clientId ? (byId.get(r.clientId) ?? null) : null,
@@ -230,6 +248,7 @@ export function getConversation(id: number) {
   const atts = msgIds.length ? d.select().from(schema.attachments).where(inArray(schema.attachments.messageId, msgIds)).all() : [];
   const client = conv.clientId ? d.select().from(schema.clients).where(eq(schema.clients.id, conv.clientId)).get() : null;
   const cases = conv.clientId ? d.select().from(schema.cases).where(eq(schema.cases.clientId, conv.clientId)).all() : [];
+  const contact = conv.contactId ? (contactBriefs([conv.contactId]).get(conv.contactId) ?? null) : null;
   const msgClientIds = [...new Set(messages.map((m) => m.clientId).filter((x): x is number => !!x))];
   const msgCaseIds = [...new Set(messages.map((m) => m.caseId).filter((x): x is number => !!x))];
   const msgClients = msgClientIds.length ? d.select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients).where(inArray(schema.clients.id, msgClientIds)).all() : [];
@@ -238,6 +257,7 @@ export function getConversation(id: number) {
     ...conv,
     staff: !!(conv.meta as { staff?: boolean }).staff,
     client: client ?? null,
+    contact,
     cases,
     messages: messages.map((m) => ({
       ...m,

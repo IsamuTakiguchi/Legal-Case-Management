@@ -5,7 +5,7 @@ import { isConfigured } from '../config.js';
 import { z } from 'zod';
 import { eq, desc } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { clientInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputSchema, creditorEventInputSchema, CREDITOR_IMPORT_FIELDS } from '@lcm/shared';
+import { clientInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputSchema, creditorEventInputSchema, CREDITOR_IMPORT_FIELDS, caseContactInputSchema } from '@lcm/shared';
 import { searchClients } from '../services/identity.js';
 import { storage, FolderNotFoundError } from '../integrations/storage.js';
 import { clientFolder } from '../services/attachments.js';
@@ -13,6 +13,7 @@ import { listCaseTypes, upsertCaseType, createCase, updateCase, listCases, getCa
 import * as creditors from '../services/creditors.js';
 import { onedriveCandidates, chatworkCandidates, applyImport, deleteClient } from '../services/clientImport.js';
 import { clientFolderParents, defaultClientFolderRel } from '../services/clientFolders.js';
+import { listContacts, createContact, updateContact, deleteContact, contactBriefs } from '../services/contacts.js';
 import { joinPath } from '../integrations/onedrive.js';
 
 export const clientRoutes = new Hono();
@@ -37,7 +38,9 @@ clientRoutes.get('/clients/:id', (c) => {
   const row = db().select().from(schema.clients).where(eq(schema.clients.id, id)).get();
   if (!row) return c.json({ error: 'not found' }, 404);
   const cases = listCases({ clientId: id });
-  const conversations = db().select().from(schema.conversations).where(eq(schema.conversations.clientId, id)).orderBy(desc(schema.conversations.lastMessageAt)).all();
+  const convRows = db().select().from(schema.conversations).where(eq(schema.conversations.clientId, id)).orderBy(desc(schema.conversations.lastMessageAt)).all();
+  const briefs = contactBriefs(convRows.map((v) => v.contactId ?? 0));
+  const conversations = convRows.map((v) => ({ ...v, contact: v.contactId ? (briefs.get(v.contactId) ?? null) : null }));
   const tasks = db().select().from(schema.tasks).where(eq(schema.tasks.clientId, id)).orderBy(desc(schema.tasks.updatedAt)).all();
   const events = db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.clientId, id)).orderBy(desc(schema.calendarEvents.startAt)).limit(20).all();
   return c.json({ ...row, cases, conversations, tasks, events, folder: clientFolder(row) });
@@ -168,6 +171,15 @@ clientRoutes.get('/cases/:id', (c) => {
 });
 
 clientRoutes.get('/cases/:id/timeline', (c) => c.json(caseTimeline(Number(c.req.param('id')))));
+
+// ---- 事件の関係者（相手方・相手方代理人など） ----
+clientRoutes.get('/cases/:id/contacts', (c) => c.json(listContacts(Number(c.req.param('id')))));
+clientRoutes.post('/cases/:id/contacts', async (c) => c.json(createContact(Number(c.req.param('id')), caseContactInputSchema.parse(await c.req.json()))));
+clientRoutes.put('/contacts/:id', async (c) => c.json(updateContact(Number(c.req.param('id')), caseContactInputSchema.partial().parse(await c.req.json()))));
+clientRoutes.delete('/contacts/:id', (c) => {
+  deleteContact(Number(c.req.param('id')));
+  return c.json({ ok: true });
+});
 
 // ---- 事務局メンバー ----
 clientRoutes.get('/staff', (c) => c.json(listStaff({ includeInactive: c.req.query('all') === '1' })));

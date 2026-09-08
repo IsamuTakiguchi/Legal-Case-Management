@@ -645,6 +645,79 @@ describe('事務局メンバー（Chatwork）', () => {
   });
 });
 
+describe('事件の関係者（相手方・相手方代理人）', () => {
+  it('関係者のメールからの受信は事件に紐付き、依頼者の連絡先は変わらない。手動の紐付け・解除もできる', async () => {
+    const { createContact, findContactByIdentity, linkConversationToContact, unlinkConversation, deleteContact, listContacts, clientOwnConversations } = await import('../services/contacts.js');
+    const { ingestMessage, listConversations, getConversation } = await import('../services/inbox.js');
+    const { openAlerts } = await import('../services/alerts.js');
+    const { caseTimeline } = await import('../services/cases.js');
+    const client = db().insert(schema.clients).values({ name: '関係者 太郎', kana: 'かんけいしゃ たろう', emails: ['taro@example.com'] }).returning().get();
+    const kase = db().insert(schema.cases).values({ clientId: client.id, title: '損害賠償請求事件', caseType: 'civil', status: 'active' }).returning().get();
+    const counsel = createContact(kase.id, { role: 'opponent_counsel', name: '相手方 弁護士', organization: '○○法律事務所', emails: ['Counsel@Example.com'] });
+    expect(counsel.emails).toEqual(['counsel@example.com']);
+    expect(findContactByIdentity({ channel: 'gmail', email: 'counsel@example.com' })?.contact.id).toBe(counsel.id);
+    expect(findContactByIdentity({ channel: 'gmail', email: 'nobody@example.com' })).toBeNull();
+
+    // 相手方代理人からの Gmail → 未紐付け警告を出さず、事件・依頼者・関係者に紐付く
+    const before = openAlerts('unlinked_contact').length;
+    const r = await ingestMessage(
+      { channel: 'gmail', externalThreadId: 'thr-counsel-1', externalId: 'gm-counsel-1', direction: 'in', sentAt: new Date().toISOString(), senderName: '相手方 弁護士', senderAddress: 'counsel@example.com', subject: '和解案について', body: '和解案をお送りします', attachments: [], identity: { channel: 'gmail', email: 'counsel@example.com', displayName: '相手方 弁護士' } },
+      { processAttachments: false },
+    );
+    expect(openAlerts('unlinked_contact').length).toBe(before);
+    expect(r.conversation.contactId).toBe(counsel.id);
+    expect(r.conversation.caseId).toBe(kase.id);
+    expect(r.conversation.clientId).toBe(client.id);
+    expect(r.message.caseId).toBe(kase.id);
+    // 依頼者の連絡先は書き換わらない
+    const c1 = db().select().from(schema.clients).where(eq(schema.clients.id, client.id)).get()!;
+    expect(c1.emails).toEqual(['taro@example.com']);
+    // 一覧・詳細に関係者情報が付く
+    const listed = listConversations({ clientId: client.id }).find((x) => x.id === r.conversation.id)!;
+    expect(listed.contact?.roleLabel).toBe('相手方代理人');
+    expect(listed.contact?.caseTitle).toBe('損害賠償請求事件');
+    expect(getConversation(r.conversation.id)?.contact?.name).toBe('相手方 弁護士');
+    // 事件のタイムラインに役割付きで載る
+    expect(caseTimeline(kase.id).some((i) => i.ref?.messageId === r.message.id && i.title.includes('相手方代理人'))).toBe(true);
+    // 依頼者本人との会話だけを取る関数からは除かれる
+    expect(clientOwnConversations(client.id).some((x) => x.id === r.conversation.id)).toBe(false);
+
+    // 未紐付けの LINE 会話を、新しい関係者（相手方本人）として手動で紐付ける
+    const r2 = await ingestMessage(
+      { channel: 'line', externalThreadId: 'Uopponent1', externalId: 'ln-opp-1', direction: 'in', sentAt: new Date().toISOString(), senderName: '相手方 本人', senderAddress: 'Uopponent1', body: '示談の件で連絡しました', attachments: [], identity: { channel: 'line', lineUserId: 'Uopponent1', displayName: '相手方 本人' } },
+      { processAttachments: false },
+    );
+    expect(openAlerts('unlinked_contact').length).toBe(before + 1);
+    const opp = createContact(kase.id, { role: 'opponent', name: '相手方 本人', emails: [] });
+    const linked = linkConversationToContact(r2.conversation.id, opp.id);
+    expect(linked.conversation.clientId).toBe(client.id);
+    expect(linked.contact.lineUserId).toBe('Uopponent1'); // LINE ID は関係者側に登録される
+    expect(db().select().from(schema.clients).where(eq(schema.clients.id, client.id)).get()!.lineUserId).toBeNull();
+    expect(openAlerts('unlinked_contact').length).toBe(before);
+    // 以後は自動で紐付く
+    expect(findContactByIdentity({ channel: 'line', lineUserId: 'Uopponent1' })?.contact.id).toBe(opp.id);
+
+    // 紐付け解除
+    const un = unlinkConversation(r2.conversation.id);
+    expect(un.clientId).toBeNull();
+    expect(un.contactId).toBeNull();
+    expect(db().select().from(schema.messages).where(eq(schema.messages.id, r2.message.id)).get()!.caseId).toBeNull();
+
+    // 関係者を削除しても会話は残り、関係者の紐付けだけ外れる
+    expect(listContacts(kase.id).map((x) => x.id).sort()).toEqual([counsel.id, opp.id].sort());
+    deleteContact(counsel.id);
+    expect(db().select().from(schema.conversations).where(eq(schema.conversations.id, r.conversation.id)).get()!.contactId).toBeNull();
+    deleteContact(opp.id);
+
+    const convIds = [r.conversation.id, r2.conversation.id];
+    db().delete(schema.alerts).where(eq(schema.alerts.type, 'unlinked_contact')).run();
+    db().delete(schema.messages).where(inArray(schema.messages.conversationId, convIds)).run();
+    db().delete(schema.conversations).where(inArray(schema.conversations.id, convIds)).run();
+    db().delete(schema.cases).where(eq(schema.cases.id, kase.id)).run();
+    db().delete(schema.clients).where(eq(schema.clients.id, client.id)).run();
+  });
+});
+
 describe('事務局メンバー候補', () => {
   it('取込済みメッセージの送信者から候補を出す（Chatwork 未接続でも動く）', async () => {
     const { chatworkAccountsFromMessages, listChatworkAccounts } = await import('../services/staff.js');
