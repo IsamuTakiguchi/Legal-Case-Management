@@ -230,7 +230,7 @@ function NewCaseForm({ onClose }: { onClose: () => void }) {
           </div>
         </div>
       </div>
-      {err && <div className="text-sm text-red-600">{err}</div>}
+      {err && <div className="fade-in text-sm text-red-600">{err}</div>}
       <div className="flex items-center gap-2">
         <button className="btn btn-primary" disabled={create.isPending}>
           {create.isPending ? '登録中…' : '登録'}

@@ -203,7 +203,7 @@ export default function Conversation() {
     if (c && !c.clientId && c.suggestions[0]) setLinkClientId(String(c.suggestions[0].id));
   }, [c]);
 
-  if (!c) return <div className="text-slate-500">読み込み中…</div>;
+  if (!c) return <div className="loading-text text-slate-500">読み込み中…</div>;
 
   // Chatwork のグループチャットは相手個人ではなくルーム（件名に保持）を会話名にする
   const name = c.contact?.name ?? c.client?.name ?? (c.channel === 'chatwork' && c.subject ? c.subject : null) ?? c.counterpartName ?? c.counterpartAddress ?? '（不明）';
@@ -424,7 +424,7 @@ export default function Conversation() {
               {send.isPending ? '送信中…' : `${channelLabel(c.channel)} で送信`}
             </button>
           </div>
-          {msg && <div className={`text-sm ${msg.kind === 'ok' ? 'text-green-700' : 'text-red-600'}`}>{msg.text}</div>}
+          {msg && <div className={`fade-in text-sm ${msg.kind === 'ok' ? 'text-green-700' : 'text-red-600'}`}>{msg.text}</div>}
           {showFiles && c.client && <FilePicker clientId={c.client.id} selectedPaths={driveFiles.map((f) => f.path)} onToggle={(f) => setDriveFiles(driveFiles.some((x) => x.path === f.path) ? driveFiles.filter((x) => x.path !== f.path) : [...driveFiles, f])} />}
           {storedAtts.length > 0 && showFiles && (
             <div className="text-xs">
@@ -689,7 +689,7 @@ function SchedulePanel({ conversationId, onText, onDone }: { conversationId: num
           {propose.isPending ? '確認中…' : '空きを探して仮押さえ'}
         </button>
       </div>
-      {err && <div className="mt-2 text-red-600">{err}</div>}
+      {err && <div className="fade-in mt-2 text-red-600">{err}</div>}
       <div className="mt-2 text-xs text-slate-500">
         Google カレンダーの空きから候補を出し、「{'{姓} {内容} 仮'}」として仮押さえします。外出予定の前後は移動時間を、予定同士の間は設定の間隔を空けます。候補文は返信欄に追加されます。
       </div>
@@ -740,7 +740,7 @@ function SessionCard({ s, onText, onDone }: { s: Session; onText: (t: string) =>
           <button className="btn btn-primary btn-sm" onClick={() => confirm.mutate()} disabled={confirm.isPending}>
             確定（他の仮押さえを削除）
           </button>
-          {err && <div className="text-red-600">{err}</div>}
+          {err && <div className="fade-in text-red-600">{err}</div>}
         </div>
       )}
       {s.state === 'confirmed' && (
@@ -887,7 +887,7 @@ function ExtractSchedulePanel({ conversationId, cases, onDone }: { conversationI
         </button>
       </div>
       {extract.isPending && !res && <div className="text-slate-500">やり取りから日時を読み取っています…</div>}
-      {err && <div className="mb-2 text-red-600">{err}</div>}
+      {err && <div className="fade-in mb-2 text-red-600">{err}</div>}
       {done && (
         <div className="mb-2 text-green-700">
           {done}{' '}
@@ -1077,7 +1077,7 @@ function MessageTools({ m, onChanged }: { m: Message; onChanged: () => void }) {
           <div className="text-slate-400">紐付いている依頼者・事件のタスクになります。Chatwork に登録する場合、事件に担当事務局と専用ルームが設定されていればその担当者に振ります。</div>
         </div>
       )}
-      {err && <div className="text-red-600">{err}</div>}
+      {err && <div className="fade-in text-red-600">{err}</div>}
     </div>
   );
 }

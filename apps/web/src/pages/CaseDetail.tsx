@@ -73,7 +73,7 @@ export default function CaseDetail() {
     },
   });
   const summary = useMutation({ mutationFn: () => api.post(`/cases/${id}/summary`), onSuccess: () => qc.invalidateQueries({ queryKey: ['case', id] }) });
-  if (!c) return <div className="text-slate-500">読み込み中…</div>;
+  if (!c) return <div className="loading-text text-slate-500">読み込み中…</div>;
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -332,7 +332,7 @@ function ContactsSection({ caseId }: { caseId: number }) {
         )}
         {q.data?.length === 0 && editing !== 'new' && <li className="text-slate-500">未登録です。相手方代理人などのメールアドレスを登録しておくと、その相手からの Gmail が自動でこの事件に紐付きます。受信箱の未紐付けの会話からも登録できます。</li>}
       </ul>
-      {err && <div className="mt-1 text-xs text-red-600">{err}</div>}
+      {err && <div className="fade-in mt-1 text-xs text-red-600">{err}</div>}
     </section>
   );
 }
@@ -489,7 +489,7 @@ function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClo
               会話を開いて送る
             </Link>
             {!n.nextHearingAt && <span className="text-xs text-orange-600">次回期日がカレンダーにありません。決まっていれば先に「予定」で登録すると本文に入ります</span>}
-            {msg && <span className="text-xs text-slate-700">{msg}</span>}
+            {msg && <span className="fade-in text-xs text-slate-700">{msg}</span>}
           </div>
         </>
       )}
@@ -583,7 +583,7 @@ function NoteComposer({ caseId, onSaved }: { caseId: number; onSaved: (note?: { 
           保存
         </button>
       </div>
-      {err && <div className="text-sm text-red-600">{err}</div>}
+      {err && <div className="fade-in text-sm text-red-600">{err}</div>}
       {preview && (
         <div className="rounded border border-blue-200 bg-blue-50 p-3 text-sm">
           <div>
@@ -705,7 +705,7 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
         <label className="label">元メモ</label>
         <textarea className="input min-h-16 text-sm" value={rawText} onChange={(e) => setRawText(e.target.value)} />
       </div>
-      {err && <div className="text-xs text-red-600">{err}</div>}
+      {err && <div className="fade-in text-xs text-red-600">{err}</div>}
       <div className="flex gap-2">
         <button className="btn btn-primary btn-sm" onClick={() => save.mutate()} disabled={save.isPending}>
           保存
@@ -886,7 +886,7 @@ function Creditors({ caseId, stages }: { caseId: number; stages: string[] }) {
   const [bulkStage, setBulkStage] = useState('');
   const [bulkSummary, setBulkSummary] = useState('');
   const [bulkChannel, setBulkChannel] = useState('post');
-  if (!q.data) return <div className="text-slate-500">読み込み中…</div>;
+  if (!q.data) return <div className="loading-text text-slate-500">読み込み中…</div>;
   const { creditors, dashboard } = q.data;
   const rows = filterStage ? creditors.filter((c) => (filterStage === '__none' ? !c.stage : c.stage === filterStage)) : creditors;
   return (

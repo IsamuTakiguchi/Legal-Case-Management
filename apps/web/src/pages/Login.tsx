@@ -57,7 +57,7 @@ export default function Login() {
             <p className="mt-0.5 text-xs text-slate-500">登大路総合法律事務所</p>
           </div>
         </div>
-        {error && <div className="rounded bg-red-50 p-2 text-sm text-red-700">{error}</div>}
+        {error && <div className="fade-in rounded bg-red-50 p-2 text-sm text-red-700">{error}</div>}
         {googleLogin && (
           <a href="/api/auth/google/login/start" className="btn btn-primary w-full justify-center py-2">
             <GoogleMark />

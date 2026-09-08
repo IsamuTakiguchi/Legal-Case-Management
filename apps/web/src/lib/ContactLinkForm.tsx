@@ -98,7 +98,7 @@ export function ContactLinkForm({ conversationId, defaultName, onDone }: { conve
           </button>
         </div>
       )}
-      {err && <div className="text-red-600">{err}</div>}
+      {err && <div className="fade-in text-red-600">{err}</div>}
       <div className="text-xs text-slate-500">この会話の相手のメールアドレス・LINE は関係者側に登録され、依頼者の連絡先は変わりません。以後この相手からの連絡は自動でこの事件に紐付きます。</div>
     </div>
   );

@@ -167,7 +167,7 @@ function NextHearing({ alert, onDone }: { alert: Alert; onDone: () => void }) {
           期日報告を送る
         </Link>
       ) : null}
-      {err && <div className="text-red-600">{err}</div>}
+      {err && <div className="fade-in text-red-600">{err}</div>}
     </div>
   );
 }

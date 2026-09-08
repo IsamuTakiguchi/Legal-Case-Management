@@ -202,7 +202,7 @@ function DraftPanel({ templateIds, caseId, onClose }: { templateIds: number[]; c
           {busy ? '生成中…' : '下書きを生成'}
         </button>
       </div>
-      {err && <div className="text-red-600">{err}</div>}
+      {err && <div className="fade-in text-red-600">{err}</div>}
       {(out || done) && (
         <div className="space-y-2">
           <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded border border-slate-200 bg-slate-50 p-3 font-sans text-sm">{done ? (done as unknown as { text?: string }).text ?? out : out}</pre>
