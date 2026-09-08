@@ -1,8 +1,39 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="112" fill="#2b4c7e"/>
-  <!-- 封筒 -->
-  <rect x="96" y="160" width="320" height="216" rx="24" fill="#ffffff"/>
-  <path d="M96 190 L256 300 L416 190" fill="none" stroke="#2b4c7e" stroke-width="26" stroke-linejoin="round" stroke-linecap="round"/>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1b3358"/>
+      <stop offset="0.55" stop-color="#26497c"/>
+      <stop offset="1" stop-color="#3468a8"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.16"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.02"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="gold" gradientUnits="userSpaceOnUse" x1="0" y1="170" x2="0" y2="330">
+      <stop offset="0" stop-color="#f3cf6a"/>
+      <stop offset="1" stop-color="#d59f2b"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="14" stdDeviation="14" flood-color="#0b1a33" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <!-- 背景（角丸・グラデーション・光沢） -->
+  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
+  <path d="M0 116C0 52 52 0 116 0H396C460 0 512 52 512 116V180C380 240 200 260 0 300Z" fill="url(#sheen)"/>
+  <!-- 吹き出し（連絡） -->
+  <path d="M112 132H400C426 132 448 154 448 180V330C448 356 426 378 400 378H208L144 428C136 434 124 429 124 419V378H112C86 378 64 356 64 330V180C64 154 86 132 112 132Z" fill="#ffffff" filter="url(#shadow)"/>
   <!-- 天秤（法律） -->
-  <circle cx="256" cy="120" r="30" fill="#f2c94c"/>
+  <g fill="none" stroke="url(#gold)" stroke-width="15" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="256" y1="182" x2="256" y2="318"/>
+    <line x1="176" y1="214" x2="336" y2="214"/>
+    <line x1="176" y1="214" x2="150" y2="282"/>
+    <line x1="176" y1="214" x2="202" y2="282"/>
+    <line x1="336" y1="214" x2="310" y2="282"/>
+    <line x1="336" y1="214" x2="362" y2="282"/>
+    <path d="M140 282H212A36 36 0 0 1 140 282Z"/>
+    <path d="M300 282H372A36 36 0 0 1 300 282Z"/>
+    <line x1="214" y1="324" x2="298" y2="324"/>
+  </g>
+  <circle cx="256" cy="176" r="13" fill="url(#gold)"/>
 </svg>
