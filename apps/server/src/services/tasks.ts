@@ -139,13 +139,14 @@ export function listTasks(filter: { status?: TaskStatus | 'active'; clientId?: n
   if (filter.caseId) conds.push(eq(schema.tasks.caseId, filter.caseId));
   if (filter.conversationId) conds.push(eq(schema.tasks.conversationId, filter.conversationId));
   const rows = db()
-    .select({ task: schema.tasks, clientName: schema.clients.name })
+    .select({ task: schema.tasks, clientName: schema.clients.name, caseTitle: schema.cases.title })
     .from(schema.tasks)
     .leftJoin(schema.clients, eq(schema.clients.id, schema.tasks.clientId))
+    .leftJoin(schema.cases, eq(schema.cases.id, schema.tasks.caseId))
     .where(conds.length ? and(...conds) : undefined)
     .orderBy(desc(schema.tasks.updatedAt))
     .all();
-  return rows.map((r) => ({ ...r.task, clientName: r.clientName ?? null }));
+  return rows.map((r) => ({ ...r.task, clientName: r.clientName ?? null, caseTitle: r.caseTitle ?? null }));
 }
 
 /** 受信があった会話に紐付く返信待ちタスクを検知 */
