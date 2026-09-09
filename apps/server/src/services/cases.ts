@@ -179,6 +179,7 @@ const phoneMemoSchema = z.object({
 export async function structureNote(rawText: string, ctx: { caseTitle?: string; clientName?: string; kind: string; counterpart?: string | null; phone?: string | null }) {
   const today = formatJaDateTime(new Date()).replace(/\d+時.*$/, '');
   return generateStructured({
+    purpose: '記録の整理（電話メモなど）',
     system: [
       '法律事務所の事務補助者として、弁護士の走り書きメモを整理します。事実の創作はせず、メモにある内容だけを使います。日付は今日を基準に解釈します。',
       '「相手が言ったこと」と「こちら（弁護士）が言ったこと」は必ず分けてください。「〜とのこと」「〜と言われた」「先方は〜」は相手の発言、「〜と伝えた」「〜と回答」「こちらからは〜」は自分の発言です。どちらか判然としない場合は文脈で判断し、決定事項と重複しても構いません。',
@@ -305,6 +306,7 @@ export async function generateCaseSummary(id: number): Promise<string> {
   const openTasks = c.tasks.filter((t) => t.status !== 'done');
   const upcoming = c.events.filter((e) => e.startAt > new Date().toISOString());
   const md = await generateText({
+    purpose: '事件サマリーの生成',
     system: '法律事務所の事務補助者として、事件の現状を弁護士向けに簡潔にまとめます。事実の創作はせず、与えられた記録だけを根拠にします。Markdown で「現状」「直近の動き」「未了事項」「推奨される次の一手」の 4 見出し、全体で 500 字程度。',
     user: `事件: ${c.title}（${c.caseType?.label ?? c.caseType}）\n依頼者: ${c.client?.name}\n裁判所・事件番号: ${c.courtName ?? ''} ${c.caseNumber ?? ''}\n現在の段階: ${c.stage ?? '未設定'}\n方針メモ: ${c.policy ?? '（なし）'}\n次回期日: ${c.nextHearingAt ? formatJaDateTime(new Date(c.nextHearingAt)) : '未定'}\n\n未了タスク:\n${openTasks.map((t) => `- [${t.status}] ${t.title}`).join('\n') || '（なし）'}\n\n今後の予定:\n${upcoming.map((e) => `- ${formatJaDateTime(new Date(e.startAt))} ${e.title}`).join('\n') || '（なし）'}\n\n記録（新しい順）:\n${timeline.map((t) => `- ${t.at.slice(0, 10)} [${t.type}] ${t.title}${t.body ? `: ${String(t.body).slice(0, 200)}` : ''}`).join('\n')}`,
     effort: 'medium',

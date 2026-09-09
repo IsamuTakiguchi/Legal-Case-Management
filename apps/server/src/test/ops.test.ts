@@ -1332,3 +1332,31 @@ describe('メニューの件数', () => {
     expect(after.alerts).toBe(before.alerts + 1);
   });
 });
+
+describe('API 利用料', () => {
+  it('モデルごとの単価で料金を計算し、月ごと・用途ごとにまとめる', async () => {
+    const { costUsd, recordUsage, usageSummary, monthRange, currentMonthJst } = await import('../services/apiCost.js');
+    // Opus 5: 入力 5 ドル・出力 25 ドル・キャッシュ書込 6.25・読出 0.5（100 万トークンあたり）
+    expect(costUsd('claude-opus-5', { input: 1_000_000, output: 0, cacheWrite: 0, cacheRead: 0 })).toEqual({ usd: 5, estimated: false });
+    expect(costUsd('claude-opus-5', { input: 0, output: 100_000, cacheWrite: 0, cacheRead: 0 }).usd).toBeCloseTo(2.5, 6);
+    expect(costUsd('claude-sonnet-5', { input: 1_000_000, output: 1_000_000, cacheWrite: 0, cacheRead: 0 }).usd).toBeCloseTo(12, 6);
+    expect(costUsd('claude-fable-5-1', { input: 0, output: 0, cacheWrite: 0, cacheRead: 1_000_000 }).usd).toBeCloseTo(0.25, 6);
+    // 料金表に無いモデルは Opus 5 の単価で概算し、その旨を返す
+    expect(costUsd('claude-unknown-9', { input: 1_000_000, output: 0, cacheWrite: 0, cacheRead: 0 })).toEqual({ usd: 5, estimated: true });
+    const month = currentMonthJst();
+    const before = usageSummary(month).total.usd;
+    recordUsage({ model: 'claude-opus-5', purpose: '返信の下書き', tokens: { input: 2000, output: 500, cacheWrite: 1000, cacheRead: 3000 } });
+    recordUsage({ model: 'claude-opus-5', purpose: '記録の整理（電話メモなど）', tokens: { input: 1000, output: 200, cacheWrite: 0, cacheRead: 0 } });
+    const s = usageSummary(month);
+    // 2000*5 + 500*25 + 1000*6.25 + 3000*0.5 = 30,250 μドル、1000*5 + 200*25 = 10,000 μドル
+    expect(s.total.usd - before).toBeCloseTo(0.04025, 6);
+    expect(s.total.calls).toBeGreaterThanOrEqual(2);
+    expect(s.byPurpose.find((p) => p.key === '返信の下書き')!.usd).toBeCloseTo(0.03025, 6);
+    expect(s.byModel[0].key).toBe('claude-opus-5');
+    expect(s.history[0].month).toBe(month);
+    expect(s.history.length).toBe(6);
+    expect(s.rate).toBe(150);
+    // 月の範囲は JST（9 月 1 日 0:00 JST = 8 月 31 日 15:00 UTC）
+    expect(monthRange('2026-09')).toEqual({ from: '2026-08-31T15:00:00.000Z', to: '2026-09-30T15:00:00.000Z' });
+  });
+});

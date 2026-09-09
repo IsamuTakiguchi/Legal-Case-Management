@@ -7,6 +7,7 @@ import { isGoogleConnected, googleAccount } from '../integrations/google.js';
 import { isMsConnected, msAccount } from '../integrations/onedrive.js';
 import { lineQuotaStatus } from '../services/lineQuota.js';
 import { JOBS, runJob, jobStatus } from '../jobs/index.js';
+import { usageSummary } from '../services/apiCost.js';
 import { generateStyleProfile, getStyleProfile, saveStyleProfile, importGmailSent, importChatworkMine, importPlainText, styleStats } from '../services/style.js';
 import { storage } from '../integrations/storage.js';
 import { channelSchema } from '@lcm/shared';
@@ -161,6 +162,12 @@ settingsRoutes.get('/dashboard', (c) => {
   const needsReply = db().select({ id: schema.conversations.id }).from(schema.conversations).where(and(eq(schema.conversations.needsReply, true), eq(schema.conversations.archived, false))).all().length;
   const activeTasks = listTasks({ status: 'active' }).length;
   return c.json({ alerts: alerts.slice(0, 20), alertCounts: byType, waiting, needsReply, activeTasks, todaysEvents: todaysEvents(), lineQuota: isConfigured('line') ? lineQuotaStatus() : null, demo: demoStatus().seeded });
+});
+
+/** API 利用料（概算）。month=YYYY-MM で月を指定 */
+settingsRoutes.get('/api-usage', (c) => {
+  const month = c.req.query('month');
+  return c.json(usageSummary(month && /^\d{4}-\d{2}$/.test(month) ? month : undefined));
 });
 
 /** メニューに出す件数（受信箱の要返信・未完了タスク・要確認）。軽いので 1 分ごとに取得する */

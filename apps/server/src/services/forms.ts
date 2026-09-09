@@ -255,7 +255,7 @@ ${req.instruction || '参考書式に沿って書面を作成する'}
 
 【参考書式】
 ${sources}`;
-  const text = await generateText({ system, user, effort: 'high', maxTokens: 32000, onDelta });
+  const text = await generateText({ purpose: '書面の下書き', system, user, effort: 'high', maxTokens: 32000, onDelta });
   const title = req.title?.trim() || `${forms[0].docType ?? '書面'}_下書き`;
   const docx = await buildDocx(title, text);
   const filename = `${new Date().toISOString().slice(0, 10).replace(/-/g, '')}_${title.replace(/[\\/:*?"<>|]/g, '_')}.docx`;

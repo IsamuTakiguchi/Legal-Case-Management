@@ -143,6 +143,7 @@ export async function generateStyleProfile(channel: Channel | 'all' = 'all'): Pr
   if (rows.length < 5) throw new Error('サンプルが少なすぎます（5 件以上必要）。送信済みメールの取込を先に実行してください。');
   const corpus = rows.map((r, i) => `--- サンプル${i + 1} (${CHANNEL_LABEL[r.channel as Channel] ?? r.channel}) ---\n${r.text.slice(0, 1200)}`).join('\n\n');
   const md = await generateText({
+    purpose: '文体プロファイルの生成',
     system:
       'あなたは文体分析の専門家です。与えられた弁護士本人が書いたメッセージ群から、本人の文体の特徴を Markdown で簡潔にまとめます。分析結果は後で「本人らしい返信文を生成する」ための指示書として使います。',
     user: `以下は弁護士本人が依頼者等に送った実際のメッセージです。次の観点で文体プロファイルを作成してください。
@@ -241,7 +242,7 @@ ${threadText || '（なし）'}
 【返信の指示】
 ${req.instruction || '直近の相手のメッセージに対して適切に返信する'}${templateNote}`;
 
-  const text = await generateText({ system, user, effort: 'medium', maxTokens: 4000 });
+  const text = await generateText({ purpose: '返信の下書き', system, user, effort: 'medium', maxTokens: 4000 });
   return text;
 }
 

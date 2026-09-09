@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, index, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, index, uniqueIndex, real } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 
 const now = () => sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
@@ -378,6 +378,26 @@ export const scheduledMessages = sqliteTable(
     updatedAt: text('updated_at').notNull().default(now()),
   },
   (t) => [index('sched_status_at').on(t.status, t.scheduledAt), index('sched_conv').on(t.conversationId)],
+);
+
+/** 外部 API（Claude）の利用記録。呼び出しごとのトークン数と概算料金（米ドル） */
+export const apiUsage = sqliteTable(
+  'api_usage',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    provider: text('provider').notNull().default('anthropic'),
+    model: text('model').notNull(),
+    purpose: text('purpose').notNull().default('その他'),
+    inputTokens: integer('input_tokens').notNull().default(0),
+    outputTokens: integer('output_tokens').notNull().default(0),
+    cacheWriteTokens: integer('cache_write_tokens').notNull().default(0),
+    cacheReadTokens: integer('cache_read_tokens').notNull().default(0),
+    costUsd: real('cost_usd').notNull().default(0),
+    /** 料金表に無いモデルで、近いモデルの単価で概算したもの */
+    estimated: integer('estimated', { mode: 'boolean' }).notNull().default(false),
+    createdAt: text('created_at').notNull().default(now()),
+  },
+  (t) => [index('api_usage_created').on(t.createdAt)],
 );
 
 export const syncState = sqliteTable('sync_state', {
