@@ -6,6 +6,7 @@ import { ClientPicker } from '../lib/ClientPicker';
 import { ContactLinkForm } from '../lib/ContactLinkForm';
 import { channelBadge, channelLabel, fmtDateTime, fmtBytes, fromLocalInput, toLocalInput, todayLocalInput } from '../lib/format';
 import { Icon } from '../lib/icons';
+import { DeadlineEditor, WaitDeadlineSelect } from '../lib/Deadline';
 import { SCHEDULING_KINDS, EVENT_KIND_LABEL, type EventKind } from '@lcm/shared';
 
 interface Attachment {
@@ -91,6 +92,7 @@ export default function Conversation() {
   const [templateKey, setTemplateKey] = useState('');
   const [draftId, setDraftId] = useState<number | null>(null);
   const [createWaiting, setCreateWaiting] = useState(false);
+  const [waitUntil, setWaitUntil] = useState<string | null>(null);
   const [showTimer, setShowTimer] = useState(false);
   const [sendAt, setSendAt] = useState('');
   const [selectedAtt, setSelectedAtt] = useState<number[]>([]);
@@ -134,6 +136,7 @@ export default function Conversation() {
         driveFiles: driveFiles.map((f) => ({ itemId: f.itemId, name: f.name, path: f.path })),
         draftId,
         createWaitingTask: createWaiting,
+        waitingFollowUpAt: createWaiting ? waitUntil : null,
         scheduledAt: scheduledAt ?? null,
       }),
     onSuccess: (r) => {
@@ -142,6 +145,7 @@ export default function Conversation() {
       setSelectedAtt([]);
       setDriveFiles([]);
       setCreateWaiting(false);
+      setWaitUntil(null);
       setShowTimer(false);
       setSendAt('');
       if (r.scheduled) {
@@ -441,6 +445,7 @@ export default function Conversation() {
             <label className="flex items-center gap-1 text-sm">
               <input type="checkbox" checked={createWaiting} onChange={(e) => setCreateWaiting(e.target.checked)} /> 送信後「返信待ち」タスクを作る
             </label>
+            {createWaiting && <WaitDeadlineSelect value={waitUntil} onChange={setWaitUntil} />}
             <div className="ml-auto flex items-center gap-1">
               <button className="btn btn-primary" onClick={() => send.mutate(undefined)} disabled={!text.trim() || send.isPending}>
                 {send.isPending ? '送信中…' : `${channelLabel(c.channel)} で送信`}
@@ -895,17 +900,25 @@ function TaskMini({ conversationId, clientId }: { conversationId: number; client
     },
   });
   const done = useMutation({ mutationFn: (id: number) => api.put(`/tasks/${id}`, { status: 'done' }), onSuccess: () => qc.invalidateQueries({ queryKey: ['tasks'] }) });
+  const setDeadline = useMutation({ mutationFn: (v: { id: number; followUpAt: string }) => api.put(`/tasks/${v.id}`, { followUpAt: v.followUpAt }), onSuccess: () => qc.invalidateQueries({ queryKey: ['tasks'] }) });
   return (
     <div className="card">
       <h3 className="mb-2 text-sm font-semibold">この会話のタスク</h3>
       <ul className="mb-2 space-y-1 text-xs">
         {tasks.data?.map((t) => (
-          <li key={t.id} className="flex items-center gap-2">
-            <button className="text-slate-400 hover:text-green-600" title="完了" onClick={() => done.mutate(t.id)}>
-              ☐
-            </button>
-            <span className="flex-1">{t.title}</span>
-            <span className="badge badge-gray">{t.status === 'open' ? '対応中' : t.status === 'waiting_client' ? '依頼者待ち' : '相手方待ち'}</span>
+          <li key={t.id} className="space-y-0.5">
+            <div className="flex items-center gap-2">
+              <button className="text-slate-400 hover:text-green-600" title="完了" onClick={() => done.mutate(t.id)}>
+                ☐
+              </button>
+              <span className="flex-1">{t.title}</span>
+              <span className="badge badge-gray">{t.status === 'open' ? '対応中' : t.status === 'waiting_client' ? '依頼者待ち' : '相手方待ち'}</span>
+            </div>
+            {t.status !== 'open' && (
+              <div className="pl-5">
+                <DeadlineEditor compact label="いつまで待つ:" value={t.followUpAt} onChange={(iso) => setDeadline.mutate({ id: t.id, followUpAt: iso })} />
+              </div>
+            )}
           </li>
         ))}
         {tasks.data?.length === 0 && <li className="text-slate-500">なし</li>}

@@ -1360,3 +1360,33 @@ describe('API 利用料', () => {
     expect(monthRange('2026-09')).toEqual({ from: '2026-08-31T15:00:00.000Z', to: '2026-09-30T15:00:00.000Z' });
   });
 });
+
+describe('返信待ちの期限', () => {
+  it('送信時に「いつまで待つか」を指定すると、その期限で返信待ちタスクを作る', async () => {
+    const { sendToConversation } = await import('../services/send.js');
+    const { setAdapter } = await import('../channels/registry.js');
+    setAdapter('line', { channel: 'line', isConfigured: () => true, fetchAttachment: async () => Buffer.from(''), send: async () => ({ externalId: `wait-${Date.now()}`, externalThreadId: 'U-wait-test', sentAt: new Date().toISOString() }) });
+    const conv = db().insert(schema.conversations).values({ channel: 'line', externalThreadId: 'U-wait-test', subject: null, counterpartName: '待ち 太郎', lastMessageAt: new Date().toISOString() }).returning().get();
+    const until = new Date(Date.now() + 14 * 86400_000).toISOString();
+    await sendToConversation(conv.id, { text: 'ご確認ください', attachmentIds: [], driveFiles: [], draftId: null, createWaitingTask: true, waitingFollowUpAt: until });
+    const task = db().select().from(schema.tasks).all().find((t) => t.conversationId === conv.id)!;
+    expect(task.status).toBe('waiting_client');
+    expect(task.followUpAt).toBe(until);
+    // 期限は後から個別に変えられる
+    const { updateTask } = await import('../services/tasks.js');
+    const later = new Date(Date.now() + 30 * 86400_000).toISOString();
+    expect(updateTask(task.id, { followUpAt: later }).followUpAt).toBe(later);
+    // API から期限だけ送っても状態（返信待ち）は変わらない（schema の既定値 status: open が混ざらない）
+    const app = createApp();
+    const { setPassword } = await import('../auth/index.js');
+    setPassword('deadline-test-password');
+    const login = await app.request('/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'deadline-test-password' }) });
+    const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+    const later2 = new Date(Date.now() + 45 * 86400_000).toISOString();
+    const res = await app.request(`/api/tasks/${task.id}`, { method: 'PUT', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ followUpAt: later2 }) });
+    expect(res.status).toBe(200);
+    const updated = (await res.json()) as { status: string; followUpAt: string };
+    expect(updated.status).toBe('waiting_client');
+    expect(updated.followUpAt).toBe(later2);
+  });
+});

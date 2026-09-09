@@ -22,7 +22,13 @@ taskRoutes.get('/tasks', (c) => {
 
 taskRoutes.post('/tasks', async (c) => c.json(await createTask(taskInputSchema.parse(await c.req.json()))));
 
-taskRoutes.put('/tasks/:id', async (c) => c.json(updateTask(Number(c.req.param('id')), taskInputSchema.partial().parse(await c.req.json()))));
+/** 部分更新。schema の既定値（status: open など）が送っていない項目に入らないよう、送られた項目だけを適用する */
+taskRoutes.put('/tasks/:id', async (c) => {
+  const raw = (await c.req.json()) as Record<string, unknown>;
+  const parsed = taskInputSchema.partial().parse(raw);
+  const patch = Object.fromEntries(Object.entries(parsed).filter(([k]) => k in raw)) as Partial<typeof parsed>;
+  return c.json(updateTask(Number(c.req.param('id')), patch));
+});
 
 /** チェックしたタスクをまとめて処理 */
 taskRoutes.post('/tasks/bulk', async (c) => {

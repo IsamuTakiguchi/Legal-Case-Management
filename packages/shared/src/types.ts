@@ -114,6 +114,8 @@ export const sendMessageSchema = z.object({
     .default([]),
   draftId: z.number().int().optional().nullable(),
   createWaitingTask: z.boolean().default(false),
+  /** 返信待ちタスクの期限（いつまで待つか）。省略時は設定の営業日数 */
+  waitingFollowUpAt: z.string().datetime({ offset: true }).optional().nullable(),
   /** 指定すると今は送らず、この時刻（ISO 8601）に送る */
   scheduledAt: z.string().datetime({ offset: true }).optional().nullable(),
 });
