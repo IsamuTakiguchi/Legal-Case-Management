@@ -128,7 +128,7 @@ export async function sendToConversation(conversationId: number, input: SendMess
       caseId: conv.caseId ?? null,
       conversationId,
       status: 'waiting_client',
-      followUpAt: null,
+      followUpAt: input.waitingFollowUpAt ?? null,
       note: null,
       syncToChatwork: false,
     });

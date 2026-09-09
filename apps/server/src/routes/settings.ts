@@ -160,8 +160,10 @@ settingsRoutes.get('/dashboard', (c) => {
   for (const a of alerts) byType[a.type] = (byType[a.type] ?? 0) + 1;
   const waiting = listTasks({ status: 'active' }).filter((t) => t.status !== 'open');
   const needsReply = db().select({ id: schema.conversations.id }).from(schema.conversations).where(and(eq(schema.conversations.needsReply, true), eq(schema.conversations.archived, false))).all().length;
-  const activeTasks = listTasks({ status: 'active' }).length;
-  return c.json({ alerts: alerts.slice(0, 20), alertCounts: byType, waiting, needsReply, activeTasks, todaysEvents: todaysEvents(), lineQuota: isConfigured('line') ? lineQuotaStatus() : null, demo: demoStatus().seeded });
+  const active = listTasks({ status: 'active' });
+  const activeTasks = active.length;
+  const openTasks = active.filter((t) => t.status === 'open').length;
+  return c.json({ alerts: alerts.slice(0, 20), alertCounts: byType, waiting, needsReply, activeTasks, openTasks, todaysEvents: todaysEvents(), lineQuota: isConfigured('line') ? lineQuotaStatus() : null, demo: demoStatus().seeded });
 });
 
 /** API 利用料（概算）。month=YYYY-MM で月を指定 */

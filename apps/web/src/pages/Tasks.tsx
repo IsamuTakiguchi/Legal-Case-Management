@@ -3,7 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { ClientPicker } from '../lib/ClientPicker';
-import { fmtDate, fmtRelative, toLocalInput, fromLocalInput } from '../lib/format';
+import { fmtDate, fmtRelative } from '../lib/format';
+import { DeadlineEditor } from '../lib/Deadline';
 import { TASK_STATUSES, TASK_STATUS_LABEL, type TaskStatus } from '@lcm/shared';
 import { useSort, readingKey, type SortOption } from '../lib/sort';
 import { Icon } from '../lib/icons';
@@ -47,7 +48,7 @@ const BULK_LABEL: Record<BulkAction, string> = {
 
 export default function Tasks() {
   const qc = useQueryClient();
-  const [status, setStatus] = useState<string>('active');
+  const [status, setStatus] = useState<string>(() => new URLSearchParams(location.search).get('status') ?? 'active');
   const [title, setTitle] = useState('');
   const [newStatus, setNewStatus] = useState<TaskStatus>('open');
   const [sync, setSync] = useState(false);
@@ -220,12 +221,7 @@ export default function Tasks() {
                   </td>
                   <td className="w-px whitespace-nowrap px-3 py-2 text-xs text-slate-600">
                     {t.waitingSince && <div>{fmtRelative(t.waitingSince)}から待ち</div>}
-                    {t.status !== 'open' && t.status !== 'done' && (
-                      <div className="flex flex-wrap items-center gap-1">
-                        <span className={over ? 'font-semibold text-orange-600' : ''}>期限 {fmtDate(t.followUpAt)}</span>
-                        <input type="datetime-local" className="input w-auto py-0 text-xs" value={toLocalInput(t.followUpAt)} onChange={(e) => update.mutate({ id: t.id, patch: { followUpAt: fromLocalInput(e.target.value) } })} />
-                      </div>
-                    )}
+                    {t.status !== 'open' && t.status !== 'done' && <DeadlineEditor compact value={t.followUpAt} onChange={(iso) => update.mutate({ id: t.id, patch: { followUpAt: iso } })} />}
                     {t.dueAt && t.status === 'open' && <div>期日 {fmtDate(t.dueAt)}</div>}
                   </td>
                   <td className="w-px whitespace-nowrap px-3 py-2 text-right">

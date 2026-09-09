@@ -1,9 +1,10 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { channelBadge, channelLabel, fmtDateTime, fmtRelative } from '../lib/format';
 import { ALERT_TYPE_LABEL, TASK_STATUS_LABEL, EVENT_KIND_LABEL, type AlertType, type TaskStatus, type EventKind } from '@lcm/shared';
 import { Icon, type IconName } from '../lib/icons';
+import { DeadlineEditor } from '../lib/Deadline';
 
 interface DashboardData {
   alerts: { id: number; type: string; title: string; body: string | null; createdAt: string }[];
@@ -12,6 +13,8 @@ interface DashboardData {
   needsReply: number;
   /** 未完了のタスク（対応中＋返信待ち） */
   activeTasks: number;
+  /** 対応中のタスクだけ（返信待ちは別のタイルで数えるので重複させない） */
+  openTasks: number;
   todaysEvents: { id: number; title: string; startAt: string; kind: string; clientName: string | null; location: string | null }[];
   lineQuota: { used: number; limit: number } | null;
   demo?: boolean;
@@ -19,6 +22,14 @@ interface DashboardData {
 
 export default function Dashboard() {
   const q = useQuery({ queryKey: ['dashboard'], queryFn: () => api.get<DashboardData>('/dashboard'), refetchInterval: 60_000 });
+  const qc = useQueryClient();
+  const setDeadline = useMutation({
+    mutationFn: (v: { id: number; followUpAt: string }) => api.put(`/tasks/${v.id}`, { followUpAt: v.followUpAt }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+    },
+  });
   const status = useQuery({ queryKey: ['status'], queryFn: () => api.get<{ anthropic: { configured: boolean }; google: { connected: boolean }; microsoft: { connected: boolean } }>('/status') });
   const d = q.data;
   if (!d) return <div className="loading-text text-slate-500">読み込み中…</div>;
@@ -55,7 +66,7 @@ export default function Dashboard() {
         <Stat label="未返信の会話" value={d.needsReply} to="/inbox?needsReply=1" icon="mail" tone={d.needsReply ? 'blue' : 'gray'} />
         <Stat label="返信待ち" value={d.waiting.length} to="/tasks" icon="clock" tone={d.waiting.length ? 'blue' : 'gray'} />
         <Stat label="要確認" value={d.alerts.length} to="/alerts" icon="alert" tone={d.alerts.length ? 'orange' : 'gray'} />
-        <Stat label="タスク・返信待ち" value={d.activeTasks} to="/tasks" icon="check" tone={d.activeTasks ? 'green' : 'gray'} />
+        <Stat label="タスク" value={d.openTasks} to="/tasks?status=open" icon="check" tone={d.openTasks ? 'green' : 'gray'} />
       </div>
       <div className="stagger grid gap-4 md:grid-cols-2">
         <section className="card">
@@ -131,7 +142,10 @@ export default function Dashboard() {
                       )}
                     </td>
                     <td className="py-1.5 pr-2 text-slate-500">{TASK_STATUS_LABEL[t.status as TaskStatus]}</td>
-                    <td className="py-1.5 text-slate-500">{t.waitingSince ? `${fmtRelative(t.waitingSince)}から` : ''}</td>
+                    <td className="py-1.5 pr-2 text-slate-500">{t.waitingSince ? `${fmtRelative(t.waitingSince)}から` : ''}</td>
+                    <td className="py-1.5">
+                      <DeadlineEditor compact value={t.followUpAt} onChange={(iso) => setDeadline.mutate({ id: t.id, followUpAt: iso })} />
+                    </td>
                   </tr>
                 );
               })}
