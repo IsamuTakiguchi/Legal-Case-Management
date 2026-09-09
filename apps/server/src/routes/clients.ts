@@ -229,7 +229,9 @@ clientRoutes.post('/cases/:id/notes', async (c) => {
   const id = Number(c.req.param('id'));
   const raw = await c.req.json();
   const input = caseNoteInputSchema.parse({ ...raw, caseId: id });
-  const row = await addCaseNote(input, { structure: raw.structure === true, createTasks: raw.createTasks === true });
+  const mode = raw.createTasks === 'single' ? 'single' : raw.createTasks === true || raw.createTasks === 'each' ? 'each' : false;
+  const taskIndexes = Array.isArray(raw.taskIndexes) ? (raw.taskIndexes as unknown[]).map(Number).filter((n) => Number.isInteger(n) && n >= 0) : undefined;
+  const row = await addCaseNote(input, { structure: raw.structure === true, createTasks: mode, taskIndexes });
   return c.json(row);
 });
 

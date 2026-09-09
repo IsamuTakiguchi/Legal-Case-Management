@@ -507,12 +507,15 @@ function NoteComposer({ caseId, onSaved }: { caseId: number; onSaved: (note?: { 
   const [ourSaid, setOurSaid] = useState('');
   const [preview, setPreview] = useState<{ gist: string; theirSaid: string[]; ourSaid: string[]; phone: string | null; decisions: string[]; nextActions: { title: string; due: string | null }[]; waitingFor: WaitingFor; counterpart: string | null } | null>(null);
   const lines = (t: string) => t.split(/\n/).map((x) => x.replace(/^[・\-\s]+/, '').trim()).filter(Boolean);
-  const [createTasks, setCreateTasks] = useState(true);
+  // タスク化の方法: アクションごと／1 つにまとめる／作らない。タスク化するアクションはチェックで選ぶ
+  const [taskMode, setTaskMode] = useState<'each' | 'single' | 'none'>('single');
+  const [taskPick, setTaskPick] = useState<Set<number>>(new Set());
   const [err, setErr] = useState('');
   const structure = useMutation({
     mutationFn: () => api.post<NonNullable<typeof preview>>(`/cases/${caseId}/notes/structure`, { rawText: raw, kind, counterpart: counterpart || null, phone: phone || null }),
     onSuccess: (r) => {
       setPreview(r);
+      setTaskPick(new Set(r.nextActions.map((_, i) => i)));
       setTheirSaid(r.theirSaid.map((x) => `・${x}`).join('\n'));
       setOurSaid(r.ourSaid.map((x) => `・${x}`).join('\n'));
       if (!phone && r.phone) setPhone(r.phone);
@@ -533,7 +536,8 @@ function NoteComposer({ caseId, onSaved }: { caseId: number; onSaved: (note?: { 
         decisions: preview?.decisions ?? [],
         nextActions: preview?.nextActions ?? [],
         waitingFor: preview?.waitingFor ?? null,
-        createTasks: createTasks && !!preview,
+        createTasks: preview && taskMode !== 'none' && taskPick.size > 0 ? taskMode : false,
+        taskIndexes: [...taskPick],
       }),
     onSuccess: (r) => {
       setRaw('');
@@ -576,9 +580,11 @@ function NoteComposer({ caseId, onSaved }: { caseId: number; onSaved: (note?: { 
         <button className="btn" onClick={() => structure.mutate()} disabled={!raw.trim() || structure.isPending}>
           {structure.isPending ? '整理中…' : 'AI で要旨・発言の整理・決定事項・次のアクションに整理'}
         </button>
-        <label className="flex items-center gap-1 text-sm">
-          <input type="checkbox" checked={createTasks} onChange={(e) => setCreateTasks(e.target.checked)} /> 次のアクションをタスク化
-        </label>
+        <select className="input w-auto text-sm" value={taskMode} onChange={(e) => setTaskMode(e.target.value as typeof taskMode)} title="AI が挙げた次のアクションをどうタスクにするか">
+          <option value="single">次のアクションを 1 つのタスクにまとめる</option>
+          <option value="each">次のアクションごとにタスクを作る</option>
+          <option value="none">タスクにしない</option>
+        </select>
         <button className="btn btn-primary ml-auto" onClick={() => save.mutate()} disabled={!raw.trim() || save.isPending}>
           保存
         </button>
@@ -597,11 +603,29 @@ function NoteComposer({ caseId, onSaved }: { caseId: number; onSaved: (note?: { 
           {preview.nextActions.length > 0 && (
             <div>
               <b>次のアクション:</b>
-              <ul className="ml-4 list-disc">
+              {taskMode !== 'none' && <span className="ml-2 text-xs text-slate-500">チェックしたものを{taskMode === 'single' ? '1 つのタスクにまとめます' : 'それぞれタスクにします'}</span>}
+              <ul className="ml-1 mt-1 space-y-0.5">
                 {preview.nextActions.map((a, i) => (
-                  <li key={i}>
-                    {a.title}
-                    {a.due ? `（期限 ${a.due}）` : ''}
+                  <li key={i} className="flex items-start gap-1.5">
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      checked={taskPick.has(i)}
+                      disabled={taskMode === 'none'}
+                      onChange={(e) =>
+                        setTaskPick((prev) => {
+                          const next = new Set(prev);
+                          if (e.target.checked) next.add(i);
+                          else next.delete(i);
+                          return next;
+                        })
+                      }
+                      aria-label="タスク化する"
+                    />
+                    <span>
+                      {a.title}
+                      {a.due ? <span className="text-slate-500">（期限 {a.due}）</span> : ''}
+                    </span>
                   </li>
                 ))}
               </ul>

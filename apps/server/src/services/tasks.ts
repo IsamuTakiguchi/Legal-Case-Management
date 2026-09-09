@@ -75,6 +75,50 @@ export function updateTask(id: number, patch: Partial<TaskInput> & { status?: Ta
   return db().select().from(schema.tasks).where(eq(schema.tasks.id, id)).get()!;
 }
 
+export type TaskBulkAction = 'done' | 'open' | 'waiting_client' | 'waiting_other' | 'nudge' | 'delete';
+
+/** 一覧でチェックしたタスクをまとめて処理する（状態変更・催促した・削除） */
+export function bulkUpdateTasks(ids: number[], action: TaskBulkAction): { updated: number } {
+  let n = 0;
+  for (const id of ids) {
+    const cur = db().select().from(schema.tasks).where(eq(schema.tasks.id, id)).get();
+    if (!cur) continue;
+    if (action === 'delete') {
+      deleteTask(id);
+      n++;
+      continue;
+    }
+    if (action === 'nudge') {
+      if (cur.status === 'waiting_client' || cur.status === 'waiting_other') {
+        nudgeTask(id);
+        n++;
+      }
+      continue;
+    }
+    if (cur.status === action) continue;
+    updateTask(id, { status: action });
+    n++;
+  }
+  return { updated: n };
+}
+
+/** タスクを削除する。記録の「次のアクション」からの結び付きと、このタスクの警告も外す */
+export function deleteTask(id: number): void {
+  const cur = db().select().from(schema.tasks).where(eq(schema.tasks.id, id)).get();
+  if (!cur) return;
+  resolveAlertsByKeyPrefix(`waiting_overdue:${id}:`);
+  resolveAlertsByKeyPrefix(`reply_received:${id}:`);
+  const notes = db().select().from(schema.caseNotes).all().filter((n) => n.nextActions.some((a) => a.taskId === id));
+  for (const n of notes) {
+    db()
+      .update(schema.caseNotes)
+      .set({ nextActions: n.nextActions.map((a) => (a.taskId === id ? { ...a, taskId: null } : a)) })
+      .where(eq(schema.caseNotes.id, n.id))
+      .run();
+  }
+  db().delete(schema.tasks).where(eq(schema.tasks.id, id)).run();
+}
+
 /** 催促した（フォローアップ期限を再設定） */
 export function nudgeTask(id: number): TaskRow {
   const now = new Date();

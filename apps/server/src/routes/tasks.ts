@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { taskInputSchema, TASK_STATUSES } from '@lcm/shared';
-import { createTask, updateTask, nudgeTask, listTasks, importChatworkTasks, syncTaskToChatwork } from '../services/tasks.js';
+import { createTask, updateTask, nudgeTask, listTasks, importChatworkTasks, syncTaskToChatwork, bulkUpdateTasks, deleteTask } from '../services/tasks.js';
 import { openAlerts, resolveAlert } from '../services/alerts.js';
 import { db, schema } from '../db/index.js';
 import { eq, desc } from 'drizzle-orm';
@@ -23,6 +23,17 @@ taskRoutes.get('/tasks', (c) => {
 taskRoutes.post('/tasks', async (c) => c.json(await createTask(taskInputSchema.parse(await c.req.json()))));
 
 taskRoutes.put('/tasks/:id', async (c) => c.json(updateTask(Number(c.req.param('id')), taskInputSchema.partial().parse(await c.req.json()))));
+
+/** チェックしたタスクをまとめて処理 */
+taskRoutes.post('/tasks/bulk', async (c) => {
+  const body = z.object({ ids: z.array(z.number().int()).min(1).max(500), action: z.enum(['done', 'open', 'waiting_client', 'waiting_other', 'nudge', 'delete']) }).parse(await c.req.json());
+  return c.json(bulkUpdateTasks(body.ids, body.action));
+});
+
+taskRoutes.delete('/tasks/:id', (c) => {
+  deleteTask(Number(c.req.param('id')));
+  return c.json({ ok: true });
+});
 
 taskRoutes.post('/tasks/:id/nudge', (c) => c.json(nudgeTask(Number(c.req.param('id')))));
 
