@@ -1,7 +1,7 @@
 import { and, eq, desc, sql, inArray, isNull, isNotNull } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import type { InboundMessage } from '../channels/types.js';
-import { findClientByIdentity, raiseUnlinkedContact } from './identity.js';
+import { findClientByIdentity, raiseUnlinkedContact, cleanDisplayName } from './identity.js';
 import { processAttachment } from './attachments.js';
 import { logger } from '../logger.js';
 import { onInboundForTasks } from './tasks.js';
@@ -25,7 +25,8 @@ export async function ingestMessage(
     .from(schema.conversations)
     .where(and(eq(schema.conversations.channel, m.channel), eq(schema.conversations.externalThreadId, m.externalThreadId)))
     .get();
-  const counterpartName = m.direction === 'in' ? (m.senderName ?? m.identity.displayName ?? null) : (m.identity.displayName ?? null);
+  const counterpartName = cleanDisplayName(m.direction === 'in' ? (m.senderName ?? m.identity.displayName ?? null) : (m.identity.displayName ?? null));
+  const unlinkedInfo = { body: m.body, sentAt: m.sentAt, subject: m.subject ?? null };
   const counterpartAddress = m.identity.email ?? m.identity.lineUserId ?? (m.identity.chatworkAccountId ? String(m.identity.chatworkAccountId) : null);
   // Chatwork: 事務局メンバーからの伝言か／事件専用ルームか
   const staff = m.channel === 'chatwork' && m.direction === 'in' ? staffByChatworkAccount(m.identity.chatworkAccountId) : null;
@@ -51,8 +52,13 @@ export async function ingestMessage(
       })
       .returning()
       .get();
-    if (!client && m.direction === 'in' && !staff) raiseUnlinkedContact(conv.id, m.identity, counterpartName);
+    if (!client && m.direction === 'in' && !staff) raiseUnlinkedContact(conv.id, m.identity, counterpartName, unlinkedInfo);
   } else if (!conv.clientId) {
+    // 相手の名前が後から分かったら会話にも入れる（LINE のプロフィール取得が後で成功した場合など）
+    if (m.direction === 'in' && counterpartName && !cleanDisplayName(conv.counterpartName)) {
+      d.update(schema.conversations).set({ counterpartName }).where(eq(schema.conversations.id, conv.id)).run();
+      conv = { ...conv, counterpartName };
+    }
     if (contactHit) {
       d.update(schema.conversations).set({ clientId: contactHit.kase.clientId, caseId: contactHit.kase.id, contactId: contactHit.contact.id }).where(eq(schema.conversations.id, conv.id)).run();
       conv = { ...conv, clientId: contactHit.kase.clientId, caseId: contactHit.kase.id, contactId: contactHit.contact.id };
@@ -62,7 +68,7 @@ export async function ingestMessage(
         d.update(schema.conversations).set({ clientId: client.id }).where(eq(schema.conversations.id, conv.id)).run();
         conv = { ...conv, clientId: client.id };
       } else if (m.direction === 'in' && !staff) {
-        raiseUnlinkedContact(conv.id, m.identity, counterpartName);
+        raiseUnlinkedContact(conv.id, m.identity, counterpartName ?? conv.counterpartName, unlinkedInfo);
       }
     }
   }

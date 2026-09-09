@@ -1,4 +1,4 @@
-import { eq, or, like } from 'drizzle-orm';
+import { and, desc, eq, or, like } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import type { IdentityHint } from '../channels/types.js';
 import { upsertAlert } from './alerts.js';
@@ -47,16 +47,111 @@ export function suggestClients(displayName: string | null | undefined, limit = 5
   return scored.map((x) => x.c);
 }
 
-export function raiseUnlinkedContact(conversationId: number, id: IdentityHint, displayName: string | null | undefined) {
+/**
+ * 表示名の掃除。LINE の表示名が絵文字の飾り（異体字セレクタ）やゼロ幅文字だけのことがあり、
+ * そのままだと画面に何も見えない名前になるため、見えない文字を除いて空なら null にする
+ */
+export function cleanDisplayName(name: string | null | undefined): string | null {
+  if (!name) return null;
+  const cleaned = name
+    .replace(/[\u200B-\u200F\u2028-\u202F\u2060-\u206F\uFE00-\uFE0F\uFEFF\u034F]/g, '')
+    .replace(/[\s　]+/g, ' ')
+    .trim();
+  return cleaned || null;
+}
+
+const CHANNEL_LABEL: Record<string, string> = { line: 'LINE公式', chatwork: 'Chatwork', gmail: 'Gmail' };
+
+/** 受信本文を 1 行の抜粋にする（Chatwork の装飾タグや改行を除く） */
+export function excerpt(body: string | null | undefined, max = 80): string {
+  if (!body) return '';
+  const t = body
+    .replace(/\[(?:To|rp|qt|\/qt|qtmeta|info|\/info|title|\/title|hr|download|preview)[^\]]*\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return t.length > max ? `${t.slice(0, max)}…` : t;
+}
+
+export interface UnlinkedMessageInfo {
+  body?: string | null;
+  sentAt?: string | null;
+  subject?: string | null;
+}
+
+/**
+ * 未紐付けの連絡先の警告。誰から・どのメッセージかが分かるよう、相手の名前（無ければ ID や
+ * アドレス）と受信本文の抜粋・受信日時を題名と本文に入れる。同じ相手から続けて届いたら最新の内容に更新する
+ */
+export function raiseUnlinkedContact(conversationId: number, id: IdentityHint, displayName: string | null | undefined, msg: UnlinkedMessageInfo = {}) {
   const key = `unlinked:${id.channel}:${id.email ?? id.lineUserId ?? id.chatworkRoomId ?? id.chatworkAccountId ?? conversationId}`;
-  const who = displayName ?? id.email ?? id.lineUserId ?? String(id.chatworkRoomId ?? '');
-  upsertAlert({
-    type: 'unlinked_contact',
-    dedupeKey: key,
-    title: `未紐付けの連絡先: ${who}（${id.channel}）`,
-    body: '依頼者に紐付けると、以後の受信と添付ファイルが自動で振り分けられます。',
-    payload: { conversationId, identity: id, displayName: displayName ?? null },
-  });
+  const existing = db().select().from(schema.alerts).where(eq(schema.alerts.dedupeKey, key)).get();
+  const count = existing?.status === 'open' ? Number((existing.payload as { messageCount?: number }).messageCount ?? 1) + 1 : 1;
+  upsertAlert({ type: 'unlinked_contact', dedupeKey: key, ...buildUnlinkedAlert(conversationId, id, displayName, msg, count), refresh: true });
+}
+
+/** 警告の題名・本文・付随情報を組み立てる */
+function buildUnlinkedAlert(conversationId: number, id: IdentityHint, displayName: string | null | undefined, msg: UnlinkedMessageInfo, count: number) {
+  const name = cleanDisplayName(displayName);
+  const who = (() => {
+    if (name) return id.channel === 'gmail' && id.email && !name.includes('@') ? `${name}（${id.email}）` : name;
+    if (id.channel === 'gmail') return id.email ?? '差出人不明';
+    if (id.channel === 'line') return `名前が取得できない LINE の相手（ID 末尾 …${(id.lineUserId ?? '').slice(-6)}）`;
+    if (id.channel === 'chatwork') return msg.subject ? `ルーム「${msg.subject}」` : `Chatwork アカウント ${id.chatworkAccountId ?? id.chatworkRoomId ?? ''}`;
+    return '相手不明';
+  })();
+  const preview = excerpt(msg.body);
+  const lines = [
+    preview ? `「${preview}」` : '（本文なし）',
+    count > 1 ? `この相手からの受信 ${count} 件（最新: ${msg.sentAt ? fmtJst(msg.sentAt) : '不明'}）` : msg.sentAt ? `受信: ${fmtJst(msg.sentAt)}` : '',
+    '依頼者か事件の関係者に紐付けると、以後の受信と添付ファイルが自動で振り分けられます。',
+  ].filter(Boolean);
+  return {
+    title: `${CHANNEL_LABEL[id.channel] ?? id.channel}: ${who}${msg.subject && id.channel === 'gmail' ? `「${msg.subject}」` : ''}`,
+    body: lines.join('\n'),
+    payload: { conversationId, identity: id, displayName: name, preview, sentAt: msg.sentAt ?? null, subject: msg.subject ?? null, channel: id.channel, messageCount: count },
+  };
+}
+
+/**
+ * 旧形式（相手や本文の抜粋が無い）の未紐付け警告を、会話の最新の受信から作り直す。
+ * 起動時に 1 回だけ呼ぶ（すでに要確認に並んでいるものを新しい表示にするため）
+ */
+export function refreshUnlinkedAlerts(): number {
+  const d = db();
+  const open = d.select().from(schema.alerts).where(and(eq(schema.alerts.status, 'open'), eq(schema.alerts.type, 'unlinked_contact'))).all();
+  let n = 0;
+  for (const a of open) {
+    const p = a.payload as { conversationId?: number; identity?: IdentityHint; displayName?: string | null; preview?: string };
+    if (p.preview !== undefined || !p.conversationId) continue;
+    const conv = d.select().from(schema.conversations).where(eq(schema.conversations.id, p.conversationId)).get();
+    if (!conv) continue;
+    // 識別子が無い古い警告は会話から補う
+    const identity: IdentityHint = p.identity ?? {
+      channel: conv.channel as IdentityHint['channel'],
+      email: conv.channel === 'gmail' ? conv.counterpartAddress : null,
+      lineUserId: conv.channel === 'line' ? conv.externalThreadId : null,
+      chatworkRoomId: conv.channel === 'chatwork' ? Number(conv.externalThreadId) || null : null,
+    };
+    const last = d
+      .select()
+      .from(schema.messages)
+      .where(and(eq(schema.messages.conversationId, conv.id), eq(schema.messages.direction, 'in')))
+      .orderBy(desc(schema.messages.sentAt))
+      .limit(1)
+      .get();
+    // 件数は数え直さず 1 として、その警告自体を書き換える
+    const built = buildUnlinkedAlert(conv.id, identity, conv.counterpartName ?? p.displayName, { body: last?.body ?? null, sentAt: last?.sentAt ?? null, subject: conv.subject }, 1);
+    d.update(schema.alerts).set({ title: built.title, body: built.body, payload: { ...p, ...built.payload } }).where(eq(schema.alerts.id, a.id)).run();
+    n++;
+  }
+  return n;
+}
+
+function fmtJst(iso: string): string {
+  const d = new Date(new Date(iso).getTime() + 9 * 3600_000);
+  if (Number.isNaN(d.getTime())) return iso;
+  const wd = ['日', '月', '火', '水', '木', '金', '土'][d.getUTCDay()];
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}(${wd}) ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
 }
 
 /** 会話を依頼者に紐付け、識別子を依頼者にも学習させる */

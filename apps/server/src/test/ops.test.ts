@@ -1142,3 +1142,70 @@ describe('送信予約', () => {
     expect(((await del.json()) as { status: string }).status).toBe('cancelled');
   });
 });
+
+describe('未紐付けの連絡先の表示', () => {
+  it('見えない文字だけの名前は空扱いにし、警告には相手・本文の抜粋・受信日時が入り、続報で更新される', async () => {
+    const { cleanDisplayName, excerpt, raiseUnlinkedContact } = await import('../services/identity.js');
+    const { ingestMessage } = await import('../services/inbox.js');
+    expect(cleanDisplayName('\uFE0E\uFE0E')).toBeNull();
+    expect(cleanDisplayName(' \u200B ')).toBeNull();
+    expect(cleanDisplayName('山田\uFE0F 太郎')).toBe('山田 太郎');
+    expect(excerpt('[To:123]瀧口先生\n\nお世話になります。', 10)).toBe('瀧口先生 お世話にな…');
+
+    // 名前が取れない LINE の相手からの受信
+    const r1 = await ingestMessage({
+      channel: 'line',
+      externalThreadId: 'Uabcdef123456',
+      externalId: 'line-unlinked-1',
+      direction: 'in',
+      sentAt: '2026-09-08T17:31:00.000Z',
+      senderName: '\uFE0E\uFE0E',
+      body: '先生、先日の件でご相談があります。明日お電話してもよろしいでしょうか。',
+      attachments: [],
+      identity: { channel: 'line', lineUserId: 'Uabcdef123456', displayName: '\uFE0E\uFE0E' },
+    });
+    expect(r1.conversation.counterpartName).toBeNull();
+    const a1 = db().select().from(schema.alerts).all().find((a) => a.dedupeKey === 'unlinked:line:Uabcdef123456')!;
+    expect(a1.title).toBe('LINE公式: 名前が取得できない LINE の相手（ID 末尾 …123456）');
+    expect(a1.body).toContain('「先生、先日の件でご相談があります。');
+    expect(a1.body).toContain('受信: 9/9(水) 02:31');
+    expect((a1.payload as { preview: string; messageCount: number }).messageCount).toBe(1);
+
+    // 2 通目（今度は名前が取れた）: 会話の名前が入り、警告は最新の内容に更新される
+    await ingestMessage({
+      channel: 'line',
+      externalThreadId: 'Uabcdef123456',
+      externalId: 'line-unlinked-2',
+      direction: 'in',
+      sentAt: '2026-09-08T18:00:00.000Z',
+      senderName: '鈴木 花子',
+      body: '写真を送ります',
+      attachments: [],
+      identity: { channel: 'line', lineUserId: 'Uabcdef123456', displayName: '鈴木 花子' },
+    });
+    const conv = db().select().from(schema.conversations).where(eq(schema.conversations.id, r1.conversation.id)).get()!;
+    expect(conv.counterpartName).toBe('鈴木 花子');
+    const a2 = db().select().from(schema.alerts).where(eq(schema.alerts.id, a1.id)).get()!;
+    expect(a2.status).toBe('open');
+    expect(a2.title).toBe('LINE公式: 鈴木 花子');
+    expect(a2.body).toContain('「写真を送ります」');
+    expect(a2.body).toContain('この相手からの受信 2 件');
+    expect((a2.payload as { messageCount: number; displayName: string }).messageCount).toBe(2);
+
+    // Gmail: 名前とアドレス、件名
+    raiseUnlinkedContact(r1.conversation.id, { channel: 'gmail', email: 'taro@example.com' }, '田中 太郎', { body: 'はじめまして', sentAt: '2026-09-09T00:00:00.000Z', subject: '相談のお願い' });
+    const g = db().select().from(schema.alerts).all().find((a) => a.dedupeKey === 'unlinked:gmail:taro@example.com')!;
+    expect(g.title).toBe('Gmail: 田中 太郎（taro@example.com）「相談のお願い」');
+
+    // 旧形式の警告（抜粋なし）は起動時の作り直しで新しい表示になる
+    const { refreshUnlinkedAlerts } = await import('../services/identity.js');
+    const { upsertAlert } = await import('../services/alerts.js');
+    db().update(schema.alerts).set({ status: 'resolved' }).where(eq(schema.alerts.id, a1.id)).run();
+    const old = upsertAlert({ type: 'unlinked_contact', dedupeKey: 'unlinked:line:old-style', title: '未紐付けの連絡先: ︎︎（line）', body: '依頼者に紐付けると…', payload: { conversationId: r1.conversation.id, identity: { channel: 'line', lineUserId: 'Uabcdef123456' }, displayName: '︎︎' } });
+    expect(refreshUnlinkedAlerts()).toBe(1);
+    const fixed = db().select().from(schema.alerts).where(eq(schema.alerts.id, old.id)).get()!;
+    expect(fixed.title).toBe('LINE公式: 鈴木 花子');
+    expect(fixed.body).toContain('「写真を送ります」');
+    expect(refreshUnlinkedAlerts()).toBe(0);
+  });
+});

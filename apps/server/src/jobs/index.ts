@@ -22,6 +22,7 @@ import { runBackup } from '../services/backup.js';
 import { resolveAllClientFolders } from '../services/clientFolders.js';
 import { refreshStyleProfiles } from '../services/style.js';
 import { runDueScheduled, recoverStuckScheduled } from '../services/scheduledSend.js';
+import { refreshUnlinkedAlerts } from '../services/identity.js';
 
 export interface JobDef {
   name: string;
@@ -107,6 +108,16 @@ export function startJobs() {
   setTimeout(() => {
     requeueStuckAttachments(2).catch((err) => logger.warn({ err }, '取得中の添付の再処理に失敗'));
   }, 15_000).unref();
+  // 一度だけの後始末: 旧形式の「未紐付けの連絡先」警告に相手・本文の抜粋を入れる
+  if (!getSyncState('cleanup:unlinked_alert_preview')) {
+    try {
+      const n = refreshUnlinkedAlerts();
+      setSyncState('cleanup:unlinked_alert_preview', new Date().toISOString());
+      if (n) logger.info({ n }, '未紐付けの警告を新しい表示に作り直しました');
+    } catch (err) {
+      logger.warn({ err }, '未紐付けの警告の作り直しに失敗');
+    }
+  }
   // 再起動で「送信中」のまま止まった送信予約を戻す
   try {
     const n = recoverStuckScheduled();
