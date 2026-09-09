@@ -1360,3 +1360,73 @@ describe('API 利用料', () => {
     expect(monthRange('2026-09')).toEqual({ from: '2026-08-31T15:00:00.000Z', to: '2026-09-30T15:00:00.000Z' });
   });
 });
+
+describe('受信ファイルの許可制', () => {
+  it('上限サイズを超えるものや、キーワードに一致するものは依頼者が分かっていても自動保存せず、保存を押すと取得する', async () => {
+    const { processAttachment, autoSaveHoldReason, saveAttachment, assignConversationAttachments } = await import('../services/attachments.js');
+    const { ingestMessage } = await import('../services/inbox.js');
+    const { setAdapter } = await import('../channels/registry.js');
+    const { setSetting } = await import('../services/settings.js');
+    let fetched = 0;
+    setAdapter('gmail', {
+      channel: 'gmail',
+      isConfigured: () => true,
+      fetchAttachment: async () => {
+        fetched++;
+        return Buffer.from('%PDF-1.4 dummy');
+      },
+      send: async () => ({ externalId: 'x', externalThreadId: 'y', sentAt: new Date().toISOString() }),
+    });
+    setSetting('attachment_policy', 'client_only');
+    setSetting('attachment_auto_max_mb', '5');
+    setSetting('attachment_hold_keywords', '電子書籍, ebook');
+    expect(autoSaveHoldReason({ filename: 'a.pdf', size: 6 * 1024 * 1024 }, {})).toMatch(/上限 5 MB/);
+    expect(autoSaveHoldReason({ filename: 'a.pdf', size: 4 * 1024 * 1024 }, {})).toBeNull();
+    expect(autoSaveHoldReason({ filename: 'Python入門_eBook.pdf', size: 1000 }, {})).toMatch(/「ebook」/);
+    expect(autoSaveHoldReason({ filename: 'a.pdf', size: null }, { subject: '【電子書籍】ご購入ありがとうございます' })).toMatch(/「電子書籍」/);
+    expect(autoSaveHoldReason({ filename: 'a.pdf', size: null }, { subject: '査定書' })).toBeNull();
+    // 依頼者に紐付いた Gmail からの受信
+    const client = db().insert(schema.clients).values({ name: '許可 太郎', emails: ['kyoka@example.com'], aliases: [] }).returning().get();
+    const r = await ingestMessage(
+      {
+        channel: 'gmail',
+        externalThreadId: 'hold-thread-1',
+        externalId: 'hold-msg-1',
+        direction: 'in',
+        sentAt: new Date().toISOString(),
+        senderName: '許可 太郎',
+        senderAddress: 'kyoka@example.com',
+        subject: '資料送付',
+        body: 'お送りします',
+        attachments: [
+          { filename: '査定書.pdf', size: 100_000, ref: { messageId: 'hold-msg-1', attachmentId: 'a1' } },
+          { filename: '民法入門（電子書籍）.pdf', size: 200_000, ref: { messageId: 'hold-msg-1', attachmentId: 'a2' } },
+          { filename: '大きな図面.pdf', size: 30 * 1024 * 1024, ref: { messageId: 'hold-msg-1', attachmentId: 'a3' } },
+        ],
+        identity: { channel: 'gmail', email: 'kyoka@example.com' },
+      },
+      { processAttachments: false },
+    );
+    expect(r.conversation.clientId).toBe(client.id);
+    const atts = db().select().from(schema.attachments).where(eq(schema.attachments.messageId, r.message.id)).all();
+    for (const a of atts) await processAttachment(a.id);
+    const saved = db().select().from(schema.attachments).all().filter((a) => a.messageId === r.message.id);
+    const byOrig = (frag: string) => saved.find((a) => a.filename.includes(frag) || String((a.channelRef as { originalName?: string }).originalName ?? '').includes(frag))!;
+    expect(byOrig('査定書').status).toBe('stored');
+    expect(byOrig('電子書籍').status).toBe('held');
+    expect(byOrig('電子書籍').error).toMatch(/許可待ち: 「電子書籍」/);
+    expect(byOrig('図面').status).toBe('held');
+    expect(byOrig('図面').error).toMatch(/上限 5 MB/);
+    expect(fetched).toBe(1);
+    // 会話を紐付け直しても許可待ちのものは勝手に保存しない
+    await assignConversationAttachments(r.conversation.id, client.id);
+    expect(byOrig('電子書籍').status).toBe('held');
+    expect(fetched).toBe(1);
+    // 「保存」を押すと取得して保存する
+    await saveAttachment(byOrig('電子書籍').id, client.id);
+    expect(db().select().from(schema.attachments).where(eq(schema.attachments.id, byOrig('電子書籍').id)).get()!.status).toBe('stored');
+    expect(fetched).toBe(2);
+    setSetting('attachment_auto_max_mb', '20');
+    setSetting('attachment_hold_keywords', '電子書籍,ebook,e-book,epub');
+  });
+});

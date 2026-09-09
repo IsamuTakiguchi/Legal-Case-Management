@@ -45,6 +45,32 @@ export function attachmentPolicy(): AttachmentPolicy {
   return v === 'auto' || v === 'manual' ? v : 'client_only';
 }
 
+/**
+ * 自動保存の対象でも「許可待ち」に留める条件（電子書籍の PDF などを勝手にダウンロードしないため）
+ *   - サイズが attachment_auto_max_mb を超える（サイズ不明なら判定しない）
+ *   - ファイル名・件名・送信者名に attachment_hold_keywords の語が含まれる
+ * 該当すれば理由を返す。受信ファイル画面で「保存」を押したときは force で通す
+ */
+export function autoSaveHoldReason(
+  att: { filename: string; size: number | null },
+  ctx: { subject?: string | null; senderName?: string | null; senderAddress?: string | null },
+): string | null {
+  const maxMb = Number(getSetting('attachment_auto_max_mb'));
+  if (maxMb > 0 && att.size && att.size > maxMb * 1024 * 1024) {
+    return `許可待ち: サイズが ${(att.size / 1024 / 1024).toFixed(1)} MB で上限 ${maxMb} MB を超えるため自動保存していません`;
+  }
+  const keywords = (getSetting('attachment_hold_keywords') || '')
+    .split(/[,、\n]/)
+    .map((k) => k.trim().toLowerCase())
+    .filter(Boolean);
+  if (keywords.length) {
+    const hay = [att.filename, ctx.subject ?? '', ctx.senderName ?? '', ctx.senderAddress ?? ''].join('\n').toLowerCase();
+    const hit = keywords.find((k) => hay.includes(k));
+    if (hit) return `許可待ち: 「${hit}」に一致するため自動保存していません`;
+  }
+  return null;
+}
+
 // ---- 受信時の一時取り込み（LINE はコンテンツの保持期間が短いので、未保存でもアプリ内に控えを置く） ----
 
 /** 受信時にアプリ内へ控えを取っておくチャネル */
@@ -107,8 +133,9 @@ export async function processAttachment(attachmentId: number, opts: { force?: bo
   const client = clientId ? d.select().from(schema.clients).where(eq(schema.clients.id, clientId)).get() : null;
   if (!opts.force) {
     const policy = attachmentPolicy();
-    if (policy === 'manual' || (policy === 'client_only' && !client)) {
-      let error: string | null = null;
+    const holdReason = policy === 'manual' ? null : autoSaveHoldReason(att, { subject: conv?.subject ?? null, senderName: msg.senderName, senderAddress: msg.senderAddress });
+    if (policy === 'manual' || (policy === 'client_only' && !client) || holdReason) {
+      let error: string | null = holdReason;
       if (STAGE_CHANNELS.includes(msg.channel as Channel)) {
         try {
           await stageAttachment(att, msg.channel as Channel);
@@ -117,7 +144,14 @@ export async function processAttachment(attachmentId: number, opts: { force?: bo
           error = `受信時の取り込みに失敗: ${String((err as Error).message ?? err)}`;
         }
       }
-      d.update(schema.attachments).set({ status: 'held', clientId: client?.id ?? null, error }).where(eq(schema.attachments.id, att.id)).run();
+      // 控えの取得で channelRef（stagedFile）が更新されているので、読み直してから理由を足す
+      const cur = d.select({ channelRef: schema.attachments.channelRef }).from(schema.attachments).where(eq(schema.attachments.id, att.id)).get();
+      const ref = (cur?.channelRef ?? att.channelRef) as Record<string, unknown>;
+      d.update(schema.attachments)
+        .set({ status: 'held', clientId: client?.id ?? null, error, ...(holdReason ? { channelRef: { ...ref, holdReason } } : {}) })
+        .where(eq(schema.attachments.id, att.id))
+        .run();
+      if (holdReason) logger.info({ attachmentId: att.id, filename: att.filename, holdReason }, '受信ファイルを許可待ちにしました');
       return;
     }
   }
@@ -282,7 +316,8 @@ export async function assignConversationAttachments(conversationId: number, clie
   for (const m of msgs) {
     const atts = d.select().from(schema.attachments).where(eq(schema.attachments.messageId, m.id)).all();
     for (const a of atts) {
-      if (a.status === 'unassigned' || a.status === 'failed' || a.status === 'pending' || (a.status === 'held' && attachmentPolicy() !== 'manual')) {
+      const holdReason = (a.channelRef as { holdReason?: string }).holdReason;
+      if (a.status === 'unassigned' || a.status === 'failed' || a.status === 'pending' || (a.status === 'held' && attachmentPolicy() !== 'manual' && !holdReason)) {
         await assignAttachment(a.id, clientId).catch((err) => logger.warn({ err, id: a.id }, '添付の移動に失敗'));
         n++;
       }

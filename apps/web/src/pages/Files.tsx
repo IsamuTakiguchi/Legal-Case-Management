@@ -165,7 +165,7 @@ export default function Files() {
                 <td className="px-3 py-2">
                   <span className={`badge ${STATUS_BADGE[a.status] ?? 'badge-gray'}`}>{STATUS_LABEL[a.status] ?? a.status}</span>
                   {a.clientId && a.status !== 'stored' && <div className="text-xs text-slate-500">依頼者: {clientName(a.clientId) ?? a.clientId}</div>}
-                  {a.error && <div className="line-clamp-2 text-xs text-red-600">{a.error}</div>}
+                  {a.error && <div className={`line-clamp-2 text-xs ${a.status === 'held' && a.error.startsWith('許可待ち') ? 'text-[var(--accent)]' : 'text-red-600'}`}>{a.error}</div>}
                 </td>
                 <td className="px-3 py-2 text-xs text-slate-600">{a.storedPath}</td>
                 <td className="px-3 py-2">

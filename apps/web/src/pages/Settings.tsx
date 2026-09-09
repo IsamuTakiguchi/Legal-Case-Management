@@ -73,6 +73,16 @@ const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean; 
       { value: 'auto', label: 'すべて自動保存（不明なものは _未振分 へ）' },
     ],
   },
+  {
+    key: 'attachment_auto_max_mb',
+    label: '自動保存するファイルの上限サイズ（MB）',
+    hint: 'これより大きいファイルは自動でダウンロードせず「未保存（許可待ち）」に留めます。受信ファイル画面で「保存」を押したものだけ取得します。0 なら制限なし',
+  },
+  {
+    key: 'attachment_hold_keywords',
+    label: '自動保存しないキーワード（カンマ区切り）',
+    hint: 'ファイル名・件名・送信者名にこの語が含まれるファイルは、依頼者が分かっていても自動保存せず許可待ちにします（例: 電子書籍, ebook, 請求書）',
+  },
   { key: 'attachment_subfolder', label: '受領ファイルの保存サブフォルダ' },
   { key: 'court_docs_subfolder', label: '提出書面のサブフォルダ' },
   { key: 'draft_subfolder', label: 'AI 下書きの保存サブフォルダ' },

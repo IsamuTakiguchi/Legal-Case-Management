@@ -27,6 +27,10 @@ http://www.noboriohji.com/access/`,
   /** 受信ファイルの扱い: auto | client_only | manual（services/attachments.ts 参照） */
   attachment_policy: 'client_only',
   attachment_smart_names: '1',
+  /** 自動保存するファイルの上限サイズ（MB）。超えるものは「未保存（許可待ち）」に留める。0 なら制限なし */
+  attachment_auto_max_mb: '20',
+  /** ファイル名・件名・送信者にこの語が含まれるものは自動保存せず許可待ちにする（カンマ区切り） */
+  attachment_hold_keywords: '電子書籍,ebook,e-book,epub',
   court_docs_subfolder: '提出書面',
   draft_subfolder: '下書き',
   unassigned_folder: '_未振分',
