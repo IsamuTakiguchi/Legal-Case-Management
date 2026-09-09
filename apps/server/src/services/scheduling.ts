@@ -306,6 +306,7 @@ export async function extractChosenSlot(sessionId: number, replyText: string) {
   if (!session) throw new Error('セッションが見つかりません');
   const list = session.candidates.map((c, i) => `${i}: ${formatJaDateTime(new Date(c.startAt))}`).join('\n');
   return generateStructured({
+    purpose: '日程調整（返信の読み取り）',
     system: '日程調整の返信を読み、提示した候補のどれが選ばれたかを判定します。',
     user: `提示した候補:\n${list}\n\n相手の返信:\n${replyText}`,
     schema: chosenSlotSchema,

@@ -33,6 +33,8 @@ http://www.noboriohji.com/access/`,
   forms_library_paths: '/書式',
   forms_index_client_subfolders: '提出書面',
   share_link_expiry_days: '30',
+  /** API 利用料の円換算に使う為替レート（1 ドル＝何円） */
+  usd_jpy_rate: '150',
   share_link_scope: 'anonymous',
   morning_digest_hour: '8',
   web_meeting_provider: 'auto',

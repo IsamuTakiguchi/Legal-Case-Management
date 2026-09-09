@@ -445,6 +445,8 @@ export default function Settings() {
         </div>
       </section>
 
+      <ApiUsageSection form={form} setForm={setForm} onSave={() => save.mutate()} saving={save.isPending} />
+
       <section className="card">
         <h2 className="mb-1 font-semibold">デモデータ</h2>
         <p className="mb-3 text-xs text-slate-500">
@@ -542,6 +544,149 @@ export default function Settings() {
         </div>
       </section>
     </div>
+  );
+}
+
+interface UsageBucket {
+  calls: number;
+  usd: number;
+  input: number;
+  output: number;
+  cacheWrite: number;
+  cacheRead: number;
+  estimated: boolean;
+}
+interface UsageSummary {
+  month: string;
+  rate: number;
+  total: UsageBucket;
+  byPurpose: (UsageBucket & { key: string })[];
+  byModel: (UsageBucket & { key: string })[];
+  byDay: (UsageBucket & { day: string })[];
+  history: { month: string; calls: number; usd: number; estimated: boolean }[];
+  recent: { id: number; at: string; model: string; purpose: string; input: number; output: number; cacheWrite: number; cacheRead: number; usd: number }[];
+}
+const fmtUsd = (v: number) => `$${v.toFixed(v < 1 ? 3 : 2)}`;
+const fmtJpy = (usd: number, rate: number) => `約 ${Math.round(usd * rate).toLocaleString('ja-JP')} 円`;
+const fmtTok = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(2)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+const monthLabel = (m: string) => `${Number(m.slice(0, 4))}年${Number(m.slice(5, 7))}月`;
+
+/** API 利用料（概算）。Claude の呼び出しごとにトークン数を記録し、公開価格で計算する */
+function ApiUsageSection({ form, setForm, onSave, saving }: { form: Record<string, string>; setForm: (f: Record<string, string>) => void; onSave: () => void; saving: boolean }) {
+  const [month, setMonth] = useState<string | undefined>(undefined);
+  const q = useQuery({ queryKey: ['api-usage', month ?? 'current'], queryFn: () => api.get<UsageSummary>(`/api-usage${month ? `?month=${month}` : ''}`), refetchInterval: 5 * 60_000 });
+  const [showRecent, setShowRecent] = useState(false);
+  const u = q.data;
+  return (
+    <section className="card">
+      <h2 className="mb-1 font-semibold">API 利用料（概算）</h2>
+      <p className="mb-3 text-xs text-slate-500">
+        Claude（Anthropic）の呼び出しごとにトークン数を記録し、公開価格から計算した概算です。正式な請求額は Anthropic のコンソールで確認してください。LINE公式はプランの月額制（通数制）で、Google・Zoom・Microsoft の API はこのアプリの使い方では無料枠に収まります。
+      </p>
+      {!u ? (
+        <div className="loading-text text-sm text-slate-500">読み込み中…</div>
+      ) : (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-end gap-4">
+            <div>
+              <div className="text-xs text-slate-500">{monthLabel(u.month)}の概算</div>
+              <div className="text-[28px] font-semibold leading-tight tabular-nums tracking-[-0.02em]">{fmtJpy(u.total.usd, u.rate)}</div>
+              <div className="text-xs text-slate-500">
+                {fmtUsd(u.total.usd)} / 呼び出し {u.total.calls} 回 / 入力 {fmtTok(u.total.input)}・出力 {fmtTok(u.total.output)}・キャッシュ読出 {fmtTok(u.total.cacheRead)} トークン
+                {u.total.estimated && <span className="ml-1 text-orange-600">（料金表に無いモデルを含むため近いモデルの単価で概算）</span>}
+              </div>
+            </div>
+            <div className="ml-auto flex flex-wrap items-center gap-2 text-xs">
+              <select className="input w-auto" value={month ?? u.history[0]?.month ?? ''} onChange={(e) => setMonth(e.target.value)} aria-label="月">
+                {u.history.map((h) => (
+                  <option key={h.month} value={h.month}>
+                    {monthLabel(h.month)}
+                  </option>
+                ))}
+              </select>
+              <label className="flex items-center gap-1">
+                1 ドル＝
+                <input className="input w-20" type="number" min={1} step={0.5} value={form.usd_jpy_rate ?? ''} onChange={(e) => setForm({ ...form, usd_jpy_rate: e.target.value })} />
+                円
+              </label>
+              <button className="btn btn-sm" onClick={onSave} disabled={saving}>
+                レートを保存
+              </button>
+            </div>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <div className="label">用途別</div>
+              {u.byPurpose.length === 0 ? (
+                <div className="text-sm text-slate-500">この月の利用はありません</div>
+              ) : (
+                <table className="w-full text-sm">
+                  <tbody>
+                    {u.byPurpose.map((p) => (
+                      <tr key={p.key} className="border-t border-slate-100">
+                        <td className="py-1 pr-2">{p.key}</td>
+                        <td className="py-1 pr-2 text-right tabular-nums text-slate-500">{p.calls} 回</td>
+                        <td className="py-1 text-right tabular-nums">{fmtJpy(p.usd, u.rate)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            <div>
+              <div className="label">月別の推移</div>
+              <table className="w-full text-sm">
+                <tbody>
+                  {u.history.map((h) => (
+                    <tr key={h.month} className={`border-t border-slate-100 ${h.month === u.month ? 'font-semibold' : ''}`}>
+                      <td className="py-1 pr-2">{monthLabel(h.month)}</td>
+                      <td className="py-1 pr-2 text-right tabular-nums text-slate-500">{h.calls} 回</td>
+                      <td className="py-1 text-right tabular-nums">{fmtJpy(h.usd, u.rate)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {u.byModel.length > 0 && <div className="mt-2 text-xs text-slate-500">モデル: {u.byModel.map((m) => `${m.key}（${fmtUsd(m.usd)}）`).join(' / ')}</div>}
+            </div>
+          </div>
+          {u.recent.length > 0 && (
+            <div>
+              <button type="button" className="text-xs text-blue-700 hover:underline" onClick={() => setShowRecent(!showRecent)}>
+                {showRecent ? '最近の呼び出しを閉じる' : `最近の呼び出しを表示（${u.recent.length} 件）`}
+              </button>
+              {showRecent && (
+                <div className="fade-in mt-2 overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead className="text-left text-slate-500">
+                      <tr>
+                        <th className="py-1 pr-2">日時</th>
+                        <th className="py-1 pr-2">用途</th>
+                        <th className="py-1 pr-2 text-right">入力</th>
+                        <th className="py-1 pr-2 text-right">出力</th>
+                        <th className="py-1 pr-2 text-right">キャッシュ読出</th>
+                        <th className="py-1 text-right">料金</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {u.recent.map((r) => (
+                        <tr key={r.id} className="border-t border-slate-100">
+                          <td className="whitespace-nowrap py-1 pr-2">{fmtDateTime(r.at)}</td>
+                          <td className="py-1 pr-2">{r.purpose}</td>
+                          <td className="py-1 pr-2 text-right tabular-nums">{fmtTok(r.input)}</td>
+                          <td className="py-1 pr-2 text-right tabular-nums">{fmtTok(r.output)}</td>
+                          <td className="py-1 pr-2 text-right tabular-nums">{fmtTok(r.cacheRead)}</td>
+                          <td className="py-1 text-right tabular-nums">{fmtUsd(r.usd)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 

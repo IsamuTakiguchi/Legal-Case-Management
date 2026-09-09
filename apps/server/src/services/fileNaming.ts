@@ -100,6 +100,7 @@ export async function suggestFilename(input: { data: Buffer; filename: string; m
   content.push({ type: 'text', text: `【添付の提示方法】${howShown}\n\n${ctxLines.join('\n')}` });
   try {
     const r = await generateStructuredFromContent({
+      purpose: '受信ファイルの命名',
       system: [
         '法律事務所の事務補助者として、依頼者などから届いた添付ファイルに、後で探しやすい日本語のファイル名を付けます。',
         '中身（画像・文書）とメッセージの文脈から、書類の種類や写っているものを具体的に表す名前にします。例: 診断書、交通事故証明書、事故現場の写真（交差点）、給与明細_2026年8月、賃貸借契約書、相手方からの通知書、車両損傷写真_前部。',
