@@ -38,6 +38,7 @@ export const ALERT_TYPES = [
   'scheduling_stale',
   'line_quota',
   'creditor_overdue',
+  'scheduled_send_failed',
 ] as const;
 export type AlertType = (typeof ALERT_TYPES)[number];
 export const ALERT_TYPE_LABEL: Record<AlertType, string> = {
@@ -49,6 +50,7 @@ export const ALERT_TYPE_LABEL: Record<AlertType, string> = {
   scheduling_stale: '日程調整が停滞',
   line_quota: 'LINE 通数が上限に接近',
   creditor_overdue: '債権者対応の期限超過',
+  scheduled_send_failed: '送信予約が失敗',
 };
 
 export const ATTACHMENT_STATUSES = ['pending', 'stored', 'unassigned', 'failed'] as const;
@@ -112,8 +114,20 @@ export const sendMessageSchema = z.object({
     .default([]),
   draftId: z.number().int().optional().nullable(),
   createWaitingTask: z.boolean().default(false),
+  /** 指定すると今は送らず、この時刻（ISO 8601）に送る */
+  scheduledAt: z.string().datetime({ offset: true }).optional().nullable(),
 });
 export type SendMessageInput = z.infer<typeof sendMessageSchema>;
+
+export const SCHEDULED_MESSAGE_STATUSES = ['pending', 'sending', 'sent', 'failed', 'cancelled'] as const;
+export type ScheduledMessageStatus = (typeof SCHEDULED_MESSAGE_STATUSES)[number];
+export const SCHEDULED_MESSAGE_STATUS_LABEL: Record<ScheduledMessageStatus, string> = {
+  pending: '予約中',
+  sending: '送信中',
+  sent: '送信済み',
+  failed: '失敗',
+  cancelled: '取消',
+};
 
 export const draftRequestSchema = z.object({
   conversationId: z.number().int(),

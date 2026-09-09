@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
-import { fmtDateTime, fmtRelative } from '../lib/format';
+import { channelBadge, channelLabel, fmtDateTime, fmtRelative } from '../lib/format';
 import { ALERT_TYPE_LABEL, TASK_STATUS_LABEL, EVENT_KIND_LABEL, type AlertType, type TaskStatus, type EventKind } from '@lcm/shared';
 import { Icon, type IconName } from '../lib/icons';
 
@@ -88,6 +88,7 @@ export default function Dashboard() {
             ))}
           </ul>
         </section>
+        <ScheduledSection />
         <section className="card md:col-span-2">
           <h2 className="mb-2 font-semibold">返信待ち・連絡待ち</h2>
           {d.waiting.length === 0 && <div className="text-sm text-slate-500">返信待ちはありません</div>}
@@ -110,6 +111,45 @@ export default function Dashboard() {
         </section>
       </div>
     </div>
+  );
+}
+
+interface ScheduledItem {
+  id: number;
+  text: string;
+  scheduledAt: string;
+  status: string;
+  error: string | null;
+  conversation: { id: number; channel: string; subject: string | null; counterpartName: string | null; clientName: string | null };
+}
+
+/** 送信予約（未送信のもの）。予約が無ければ何も出さない */
+function ScheduledSection() {
+  const q = useQuery({ queryKey: ['scheduled-messages'], queryFn: () => api.get<ScheduledItem[]>('/scheduled-messages'), refetchInterval: 60_000 });
+  const items = q.data ?? [];
+  if (items.length === 0) return null;
+  return (
+    <section className="card md:col-span-2">
+      <h2 className="mb-2 flex items-center gap-1.5 font-semibold">
+        <Icon name="clock" className="h-4 w-4 text-[var(--accent)]" />
+        送信予約
+        <span className="badge badge-blue">{items.length}</span>
+      </h2>
+      <ul className="divide-y divide-slate-100 text-sm">
+        {items.slice(0, 8).map((s) => (
+          <li key={s.id} className="flex flex-wrap items-center gap-2 py-1.5">
+            <span className={`badge ${s.status === 'failed' ? 'badge-orange' : 'badge-blue'}`}>{s.status === 'failed' ? '失敗' : '予約中'}</span>
+            <span className="tabular-nums">{fmtDateTime(s.scheduledAt)}</span>
+            <span className={channelBadge(s.conversation.channel)}>{channelLabel(s.conversation.channel)}</span>
+            <Link to={`/inbox/${s.conversation.id}`} className="min-w-0 flex-1 truncate hover:underline">
+              <span className="font-medium">{s.conversation.clientName ?? s.conversation.counterpartName ?? s.conversation.subject ?? '相手'}</span>
+              <span className="ml-2 text-slate-500">{s.text.replace(/\s+/g, ' ').slice(0, 60)}</span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+      {items.length > 8 && <div className="mt-1 text-xs text-slate-400">ほか {items.length - 8} 件</div>}
+    </section>
   );
 }
 

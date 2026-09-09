@@ -359,6 +359,27 @@ export const drafts = sqliteTable('drafts', {
   createdAt: text('created_at').notNull().default(now()),
 });
 
+/** 送信予約: 指定時刻になったらジョブが sendToConversation で送る */
+export const scheduledMessages = sqliteTable(
+  'scheduled_messages',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    conversationId: integer('conversation_id').notNull().references(() => conversations.id),
+    /** 送信内容（sendMessageSchema の入力をそのまま保存） */
+    payload: text('payload', { mode: 'json' }).$type<Record<string, unknown>>().notNull(),
+    text: text('text').notNull(),
+    scheduledAt: text('scheduled_at').notNull(),
+    status: text('status').notNull().default('pending'), // pending | sending | sent | failed | cancelled
+    attempts: integer('attempts').notNull().default(0),
+    error: text('error'),
+    sentMessageId: integer('sent_message_id'),
+    sentAt: text('sent_at'),
+    createdAt: text('created_at').notNull().default(now()),
+    updatedAt: text('updated_at').notNull().default(now()),
+  },
+  (t) => [index('sched_status_at').on(t.status, t.scheduledAt), index('sched_conv').on(t.conversationId)],
+);
+
 export const syncState = sqliteTable('sync_state', {
   key: text('key').primaryKey(),
   value: text('value').notNull(),
