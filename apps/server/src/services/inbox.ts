@@ -122,20 +122,26 @@ export async function ingestMessage(
     .returning()
     .get();
 
-  const patch: Partial<typeof schema.conversations.$inferInsert> = { lastMessageAt: m.sentAt };
+  // 過去分の取り込み（Chatwork のポーリングが後からさかのぼって拾った古い発言など）は、
+  // 会話の「最終受信日時」を巻き戻さず、未読・要返信・アーカイブ解除もしない
+  const backfill = !!conv.lastMessageAt && m.sentAt < conv.lastMessageAt;
+  const patch: Partial<typeof schema.conversations.$inferInsert> = {};
+  if (!backfill) patch.lastMessageAt = m.sentAt;
   if (m.direction === 'in') {
-    patch.lastInboundAt = m.sentAt;
-    patch.unread = (conv.unread ?? 0) + 1;
-    patch.needsReply = true;
-    patch.archived = false;
+    if (!conv.lastInboundAt || m.sentAt > conv.lastInboundAt) patch.lastInboundAt = m.sentAt;
+    if (!backfill) {
+      patch.unread = (conv.unread ?? 0) + 1;
+      patch.needsReply = true;
+      patch.archived = false;
+    }
     if (!conv.counterpartName && counterpartName) patch.counterpartName = counterpartName;
     if (!conv.counterpartAddress && counterpartAddress) patch.counterpartAddress = counterpartAddress;
   } else {
-    patch.lastOutboundAt = m.sentAt;
-    patch.needsReply = false;
+    if (!conv.lastOutboundAt || m.sentAt > conv.lastOutboundAt) patch.lastOutboundAt = m.sentAt;
+    if (!backfill) patch.needsReply = false;
   }
   if (m.subject && !conv.subject) patch.subject = m.subject;
-  d.update(schema.conversations).set(patch).where(eq(schema.conversations.id, conv.id)).run();
+  if (Object.keys(patch).length) d.update(schema.conversations).set(patch).where(eq(schema.conversations.id, conv.id)).run();
 
   // 受信ファイルは相手から届いたものだけ。自分が送った添付は登録しない
   for (const a of m.direction === 'in' ? m.attachments : []) {
@@ -329,3 +335,30 @@ export function bulkUpdateConversations(ids: number[], action: BulkConversationA
   return r.changes;
 }
 
+
+/**
+ * 会話の最終日時をメッセージから計算し直す（過去分の取り込みで巻き戻っていたものを直す）。
+ * 起動時に一度だけ呼ぶ。未読・要返信は手で変えていることがあるので触らない
+ */
+export function repairConversationTimes(): number {
+  const d = db();
+  const convs = d.select().from(schema.conversations).all();
+  let fixed = 0;
+  for (const c of convs) {
+    const msgs = d.select({ sentAt: schema.messages.sentAt, direction: schema.messages.direction }).from(schema.messages).where(eq(schema.messages.conversationId, c.id)).all();
+    if (!msgs.length) continue;
+    const max = (rows: { sentAt: string }[]) => rows.reduce<string | null>((a, r) => (a && a > r.sentAt ? a : r.sentAt), null);
+    const last = max(msgs);
+    const lastIn = max(msgs.filter((m) => m.direction === 'in'));
+    const lastOut = max(msgs.filter((m) => m.direction === 'out'));
+    const patch: Partial<typeof schema.conversations.$inferInsert> = {};
+    if (last && last !== c.lastMessageAt) patch.lastMessageAt = last;
+    if (lastIn && lastIn !== c.lastInboundAt) patch.lastInboundAt = lastIn;
+    if (lastOut && lastOut !== c.lastOutboundAt) patch.lastOutboundAt = lastOut;
+    if (Object.keys(patch).length) {
+      d.update(schema.conversations).set(patch).where(eq(schema.conversations.id, c.id)).run();
+      fixed++;
+    }
+  }
+  return fixed;
+}

@@ -1209,3 +1209,36 @@ describe('未紐付けの連絡先の表示', () => {
     expect(refreshUnlinkedAlerts()).toBe(0);
   });
 });
+
+describe('会話の最終日時', () => {
+  it('後から拾った古い発言では最終日時を巻き戻さず、未読・要返信も変えない。巻き戻っていたものは起動時に直る', async () => {
+    const { ingestMessage, repairConversationTimes, markRead } = await import('../services/inbox.js');
+    const base = { channel: 'chatwork' as const, externalThreadId: '424242', attachments: [], identity: { channel: 'chatwork' as const, chatworkRoomId: 424242, chatworkAccountId: 77, displayName: '事務 花子' }, senderName: '事務 花子', subject: 'テストルーム' };
+    // 最新の発言（Webhook で先に届く）
+    const r1 = await ingestMessage({ ...base, externalId: 'cw-new', direction: 'in', sentAt: '2026-09-09T01:00:00.000Z', body: '最新の連絡です' });
+    markRead(r1.conversation.id);
+    // ポーリングが後からさかのぼって拾った 1 週間前の発言
+    await ingestMessage({ ...base, externalId: 'cw-old', direction: 'in', sentAt: '2026-09-02T01:00:00.000Z', body: '先週の連絡' });
+    let c = db().select().from(schema.conversations).where(eq(schema.conversations.id, r1.conversation.id)).get()!;
+    expect(c.lastMessageAt).toBe('2026-09-09T01:00:00.000Z');
+    expect(c.lastInboundAt).toBe('2026-09-09T01:00:00.000Z');
+    expect(c.unread).toBe(0);
+    // 自分の古い発言も要返信を消さない
+    await ingestMessage({ ...base, externalId: 'cw-old-out', direction: 'out', sentAt: '2026-09-01T01:00:00.000Z', body: '先々週の返信', senderName: '自分' });
+    c = db().select().from(schema.conversations).where(eq(schema.conversations.id, r1.conversation.id)).get()!;
+    expect(c.needsReply).toBe(true);
+    expect(c.lastOutboundAt).toBe('2026-09-01T01:00:00.000Z');
+    // 新しい発言は従来どおり
+    await ingestMessage({ ...base, externalId: 'cw-newer', direction: 'in', sentAt: '2026-09-09T02:00:00.000Z', body: 'さらに新しい連絡' });
+    c = db().select().from(schema.conversations).where(eq(schema.conversations.id, r1.conversation.id)).get()!;
+    expect(c.lastMessageAt).toBe('2026-09-09T02:00:00.000Z');
+    expect(c.unread).toBe(1);
+    // 旧版で巻き戻っていた会話は起動時の修復で直る
+    db().update(schema.conversations).set({ lastMessageAt: '2026-09-02T01:00:00.000Z', lastInboundAt: '2026-09-02T01:00:00.000Z' }).where(eq(schema.conversations.id, c.id)).run();
+    expect(repairConversationTimes()).toBeGreaterThanOrEqual(1);
+    c = db().select().from(schema.conversations).where(eq(schema.conversations.id, r1.conversation.id)).get()!;
+    expect(c.lastMessageAt).toBe('2026-09-09T02:00:00.000Z');
+    expect(c.lastInboundAt).toBe('2026-09-09T02:00:00.000Z');
+    expect(repairConversationTimes()).toBe(0);
+  });
+});
