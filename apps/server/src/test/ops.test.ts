@@ -1008,3 +1008,137 @@ describe('セキュリティ', () => {
     expect(bad.status).toBe(401);
   });
 });
+
+describe('送信予約', () => {
+  it('予約・変更・取消ができ、時刻が来たものだけジョブが送る（未設定チャネルは失敗→再試行→要確認）', async () => {
+    const { scheduleMessage, listScheduled, updateScheduled, cancelScheduled, runDueScheduled, dispatchScheduled, recoverStuckScheduled } = await import('../services/scheduledSend.js');
+    const { setAdapter } = await import('../channels/registry.js');
+    // 送信を差し替え: ok=false の間は失敗させる
+    let sendOk = false;
+    const sentTexts: string[] = [];
+    setAdapter('line', {
+      channel: 'line',
+      isConfigured: () => true,
+      fetchAttachment: async () => Buffer.from(''),
+      send: async (m) => {
+        if (!sendOk) throw new Error('line が未設定です（テスト）');
+        sentTexts.push(m.text);
+        return { externalId: `sched-${sentTexts.length}`, externalThreadId: 'U-sched-test', sentAt: new Date().toISOString() };
+      },
+    });
+    const conv = db()
+      .insert(schema.conversations)
+      .values({ channel: 'line', externalThreadId: 'U-sched-test', subject: null, counterpartName: '予約 太郎', lastMessageAt: new Date().toISOString() })
+      .returning()
+      .get();
+    const base = { text: 'こんにちは', attachmentIds: [], driveFiles: [], draftId: null, createWaitingTask: false };
+    // 過去の時刻は拒否
+    expect(() => scheduleMessage(conv.id, base, new Date(Date.now() - 3600_000).toISOString())).toThrow(/過去/);
+    const future = new Date(Date.now() + 3600_000).toISOString();
+    const s1 = scheduleMessage(conv.id, base, future);
+    expect(s1.status).toBe('pending');
+    expect(listScheduled({ conversationId: conv.id }).map((x) => x.id)).toEqual([s1.id]);
+    expect(listScheduled({ conversationId: conv.id })[0].conversation.counterpartName).toBe('予約 太郎');
+    // まだ時刻が来ていないので送らない
+    expect(await runDueScheduled()).toEqual({ sent: 0, failed: 0 });
+    // 変更（本文と時刻）
+    const later = new Date(Date.now() + 7200_000).toISOString();
+    const s1b = updateScheduled(s1.id, { scheduledAt: later, text: '改めてご連絡します' });
+    expect(s1b.scheduledAt).toBe(later);
+    expect(s1b.text).toBe('改めてご連絡します');
+    expect((db().select().from(schema.scheduledMessages).where(eq(schema.scheduledMessages.id, s1.id)).get()!.payload as { text: string }).text).toBe('改めてご連絡します');
+    // 取消
+    expect(cancelScheduled(s1.id).status).toBe('cancelled');
+    expect(listScheduled({ conversationId: conv.id })).toEqual([]);
+    expect(() => updateScheduled(s1.id, { text: 'x' })).toThrow();
+
+    // 時刻が来たものはジョブが拾う。LINE 未設定なので失敗し、3 回目まで再試行してから要確認に上げる
+    const due = scheduleMessage(conv.id, base, new Date(Date.now() - 30_000).toISOString());
+    const alertsBefore = db().select().from(schema.alerts).all().filter((a) => a.type === 'scheduled_send_failed').length;
+    for (let i = 1; i <= 2; i++) {
+      expect(await runDueScheduled()).toEqual({ sent: 0, failed: 1 });
+      const row = db().select().from(schema.scheduledMessages).where(eq(schema.scheduledMessages.id, due.id)).get()!;
+      expect(row.status).toBe('pending');
+      expect(row.attempts).toBe(i);
+      expect(row.error).toMatch(/未設定/);
+    }
+    expect(await runDueScheduled()).toEqual({ sent: 0, failed: 1 });
+    const failed = db().select().from(schema.scheduledMessages).where(eq(schema.scheduledMessages.id, due.id)).get()!;
+    expect(failed.status).toBe('failed');
+    expect(failed.attempts).toBe(3);
+    expect(db().select().from(schema.alerts).all().filter((a) => a.type === 'scheduled_send_failed').length).toBe(alertsBefore + 1);
+    // 失敗したものはもうジョブが拾わない
+    expect(await runDueScheduled()).toEqual({ sent: 0, failed: 0 });
+    // 「今すぐ送る」は失敗したものも対象にでき、送れれば送信済みになって会話にも残る
+    sendOk = true;
+    const r = await dispatchScheduled(due.id, { force: true });
+    expect(r.ok).toBe(true);
+    expect(sentTexts).toEqual(['こんにちは']);
+    const sentRow = db().select().from(schema.scheduledMessages).where(eq(schema.scheduledMessages.id, due.id)).get()!;
+    expect(sentRow.status).toBe('sent');
+    expect(sentRow.sentMessageId).toBeTruthy();
+    expect(db().select().from(schema.messages).where(eq(schema.messages.id, sentRow.sentMessageId!)).get()?.direction).toBe('out');
+    expect(() => cancelScheduled(due.id)).toThrow(/送信済み/);
+    // 時刻が来たものは通常どおりジョブが送る
+    const ok = scheduleMessage(conv.id, { ...base, text: '時刻どおり' }, new Date(Date.now() - 1000).toISOString());
+    expect(await runDueScheduled()).toEqual({ sent: 1, failed: 0 });
+    expect(sentTexts.at(-1)).toBe('時刻どおり');
+    expect(db().select().from(schema.scheduledMessages).where(eq(schema.scheduledMessages.id, ok.id)).get()!.status).toBe('sent');
+    sendOk = false;
+    // 予定時刻から 6 時間以上経ったものは送らずに失敗にする
+    const stale = scheduleMessage(conv.id, base, new Date(Date.now() + 60_000).toISOString());
+    db().update(schema.scheduledMessages).set({ scheduledAt: new Date(Date.now() - 7 * 3600_000).toISOString() }).where(eq(schema.scheduledMessages.id, stale.id)).run();
+    await runDueScheduled();
+    const staleRow = db().select().from(schema.scheduledMessages).where(eq(schema.scheduledMessages.id, stale.id)).get()!;
+    expect(staleRow.status).toBe('failed');
+    expect(staleRow.error).toMatch(/6 時間/);
+    // 再起動で sending のまま残ったものは pending に戻る
+    db().update(schema.scheduledMessages).set({ status: 'sending' }).where(eq(schema.scheduledMessages.id, stale.id)).run();
+    expect(recoverStuckScheduled()).toBe(1);
+    expect(db().select().from(schema.scheduledMessages).where(eq(schema.scheduledMessages.id, stale.id)).get()!.status).toBe('pending');
+    // 同時に走っても二重に送らない（片方だけが sending を取れる）
+    db().update(schema.scheduledMessages).set({ status: 'sending' }).where(eq(schema.scheduledMessages.id, stale.id)).run();
+    const dup = await dispatchScheduled(stale.id);
+    expect(dup.ok).toBe(false);
+    expect(dup.ok === false && dup.error).toMatch(/送信中/);
+  });
+
+  it('毎分のジョブは何もしなかった回を履歴に残さず、古い履歴は整理される', async () => {
+    const { JOBS, runJob, pruneJobRuns } = await import('../jobs/index.js');
+    const job = JOBS.find((j) => j.name === 'scheduledSend')!;
+    const before = db().select().from(schema.jobRuns).all().filter((r) => r.name === 'scheduledSend').length;
+    const r = await runJob(job);
+    expect(r.ok).toBe(true);
+    expect(db().select().from(schema.jobRuns).all().filter((x) => x.name === 'scheduledSend').length).toBe(before);
+    db().insert(schema.jobRuns).values({ name: 'old', startedAt: new Date(Date.now() - 100 * 86400_000).toISOString() }).run();
+    expect(pruneJobRuns(60)).toBeGreaterThanOrEqual(1);
+    expect(db().select().from(schema.jobRuns).all().some((x) => x.name === 'old')).toBe(false);
+  });
+
+  it('API: scheduledAt 付きの送信は予約として保存され、一覧・取消ができる', async () => {
+    const app = createApp();
+    const { setPassword } = await import('../auth/index.js');
+    setPassword('sched-test-password');
+    const login = await app.request('/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'sched-test-password' }) });
+    expect(login.status).toBe(200);
+    const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+    const conv = db()
+      .insert(schema.conversations)
+      .values({ channel: 'chatwork', externalThreadId: '9999', subject: null, counterpartName: 'API 予約', lastMessageAt: new Date().toISOString() })
+      .returning()
+      .get();
+    const at = new Date(Date.now() + 3600_000).toISOString();
+    const res = await app.request(`/api/conversations/${conv.id}/send`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ text: '予約テスト', scheduledAt: at }) });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { scheduled: { id: number; status: string; scheduledAt: string } };
+    expect(body.scheduled.status).toBe('pending');
+    expect(body.scheduled.scheduledAt).toBe(at);
+    const list = (await (await app.request('/api/scheduled-messages', { headers: { cookie } })).json()) as { id: number }[];
+    expect(list.some((x) => x.id === body.scheduled.id)).toBe(true);
+    const detail = (await (await app.request(`/api/conversations/${conv.id}`, { headers: { cookie } })).json()) as { scheduled: { id: number }[] };
+    expect(detail.scheduled.map((x) => x.id)).toEqual([body.scheduled.id]);
+    const del = await app.request(`/api/scheduled-messages/${body.scheduled.id}`, { method: 'DELETE', headers: { cookie } });
+    expect(del.status).toBe(200);
+    expect(((await del.json()) as { status: string }).status).toBe('cancelled');
+  });
+});

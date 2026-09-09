@@ -21,6 +21,7 @@ import { refreshLineTokenIfNeeded } from '../services/lineSetup.js';
 import { runBackup } from '../services/backup.js';
 import { resolveAllClientFolders } from '../services/clientFolders.js';
 import { refreshStyleProfiles } from '../services/style.js';
+import { runDueScheduled, recoverStuckScheduled } from '../services/scheduledSend.js';
 
 export interface JobDef {
   name: string;
@@ -28,6 +29,15 @@ export interface JobDef {
   cron: string;
   run: () => Promise<unknown>;
   enabled: () => boolean;
+  /** 毎分など頻繁に動くジョブ: 何もしなかった回は履歴（job_runs）に残さない */
+  quiet?: boolean;
+}
+
+/** 「何もしなかった」とみなす結果（数値がすべて 0 のオブジェクト） */
+function isNoop(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return false;
+  const vals = Object.values(result as Record<string, unknown>);
+  return vals.length > 0 && vals.every((v) => v === 0);
 }
 
 const running = new Set<string>();
@@ -36,16 +46,24 @@ export async function runJob(job: JobDef): Promise<{ ok: boolean; summary?: stri
   if (running.has(job.name)) return { ok: false, error: '実行中' };
   running.add(job.name);
   const started = new Date().toISOString();
-  const row = db().insert(schema.jobRuns).values({ name: job.name, startedAt: started }).returning().get();
+  // quiet なジョブは終わってから（何かしたときだけ）履歴を残す
+  const row = job.quiet ? null : db().insert(schema.jobRuns).values({ name: job.name, startedAt: started }).returning().get();
+  const finish = (patch: { ok: boolean; summary?: string; error?: string }) => {
+    const finishedAt = new Date().toISOString();
+    if (row) db().update(schema.jobRuns).set({ finishedAt, ...patch }).where(eq(schema.jobRuns.id, row.id)).run();
+    else db().insert(schema.jobRuns).values({ name: job.name, startedAt: started, finishedAt, ...patch }).run();
+  };
   try {
     const result = await job.run();
     const summary = typeof result === 'string' ? result : JSON.stringify(result ?? {});
-    db().update(schema.jobRuns).set({ finishedAt: new Date().toISOString(), ok: true, summary: summary.slice(0, 500) }).where(eq(schema.jobRuns.id, row.id)).run();
-    logger.info({ job: job.name, summary: summary.slice(0, 200) }, 'ジョブ完了');
+    if (!(job.quiet && isNoop(result))) {
+      finish({ ok: true, summary: summary.slice(0, 500) });
+      logger.info({ job: job.name, summary: summary.slice(0, 200) }, 'ジョブ完了');
+    }
     return { ok: true, summary };
   } catch (err) {
     const msg = String((err as Error)?.stack ?? err).slice(0, 1000);
-    db().update(schema.jobRuns).set({ finishedAt: new Date().toISOString(), ok: false, error: msg }).where(eq(schema.jobRuns.id, row.id)).run();
+    finish({ ok: false, error: msg });
     logger.error({ job: job.name, err }, 'ジョブ失敗');
     return { ok: false, error: msg };
   } finally {
@@ -53,7 +71,7 @@ export async function runJob(job: JobDef): Promise<{ ok: boolean; summary?: stri
   }
 }
 
-import { eq } from 'drizzle-orm';
+import { eq, lt } from 'drizzle-orm';
 
 export const JOBS: JobDef[] = [
   { name: 'gmailPoll', label: 'Gmail 受信', cron: '*/2 * * * *', run: pollGmail, enabled: () => isGoogleConnected() },
@@ -69,6 +87,8 @@ export const JOBS: JobDef[] = [
   { name: 'styleProfiles', label: '文体プロファイルの自動更新（チャネル別）', cron: '30 19 * * *', run: refreshStyleProfiles, enabled: () => isConfigured('anthropic') },
   { name: 'lineToken', label: 'LINE トークンの自動更新', cron: '15 18 * * *', run: refreshLineTokenIfNeeded, enabled: () => isConfigured('line') },
   { name: 'backup', label: 'バックアップ（OneDrive に世代保存）', cron: '0 18 * * *', run: runBackup, enabled: () => true },
+  { name: 'scheduledSend', label: '送信予約の実行（毎分）', cron: '* * * * *', run: () => runDueScheduled(), enabled: () => true, quiet: true },
+  { name: 'housekeeping', label: 'ジョブ履歴の整理（60 日より古いものを削除）', cron: '50 16 * * *', run: async () => ({ deleted: pruneJobRuns(60) }), enabled: () => true },
   { name: 'retryAttachments', label: '添付の再取得（失敗・取得中のまま止まったもの）', cron: '40 * * * *', run: async () => ({ requeued: await requeueStuckAttachments(), retried: await retryFailedAttachments() }), enabled: () => true },
 ];
 
@@ -87,6 +107,13 @@ export function startJobs() {
   setTimeout(() => {
     requeueStuckAttachments(2).catch((err) => logger.warn({ err }, '取得中の添付の再処理に失敗'));
   }, 15_000).unref();
+  // 再起動で「送信中」のまま止まった送信予約を戻す
+  try {
+    const n = recoverStuckScheduled();
+    if (n) logger.warn({ n }, '送信中のまま止まっていた送信予約を予約中に戻しました');
+  } catch (err) {
+    logger.warn({ err }, '送信予約の復旧に失敗');
+  }
   if (!env().JOBS_ENABLED) {
     logger.warn('JOBS_ENABLED=false のためジョブは起動しません');
     return;
@@ -100,6 +127,12 @@ export function startJobs() {
     scheduled.push(c);
   }
   logger.info({ jobs: JOBS.map((j) => j.name) }, 'ジョブを起動しました');
+}
+
+/** 古いジョブ履歴を削除する（毎分のジョブが増えても肥大化しないように） */
+export function pruneJobRuns(days: number): number {
+  const cutoff = new Date(Date.now() - days * 86400_000).toISOString();
+  return db().delete(schema.jobRuns).where(lt(schema.jobRuns.startedAt, cutoff)).run().changes;
 }
 
 export function stopJobs() {

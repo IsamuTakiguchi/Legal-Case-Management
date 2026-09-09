@@ -8,6 +8,7 @@ import { linkConversationToClient, suggestClients } from '../services/identity.j
 import { linkConversationToContact, unlinkConversation, createContact, getContact } from '../services/contacts.js';
 import { assignConversationAttachments } from '../services/attachments.js';
 import { sendToConversation } from '../services/send.js';
+import { scheduleMessage, listScheduled, updateScheduled, cancelScheduled, dispatchScheduled } from '../services/scheduledSend.js';
 import { draftReply } from '../services/style.js';
 import { judgeWaiting } from '../services/tasks.js';
 import { listTemplates } from '../services/templates.js';
@@ -71,7 +72,8 @@ inboxRoutes.get('/conversations/:id', (c) => {
   markRead(conv.id);
   const drafts = db().select().from(schema.drafts).where(eq(schema.drafts.conversationId, conv.id)).orderBy(desc(schema.drafts.createdAt)).limit(5).all();
   const suggestions = conv.clientId ? [] : suggestClients(conv.counterpartName);
-  return c.json({ ...conv, drafts, suggestions });
+  const scheduled = listScheduled({ conversationId: conv.id });
+  return c.json({ ...conv, drafts, suggestions, scheduled });
 });
 
 inboxRoutes.post('/conversations/:id/link', async (c) => {
@@ -143,12 +145,41 @@ inboxRoutes.post('/conversations/:id/draft', async (c) => {
   return c.json(draft);
 });
 
-/** 送信 */
+/** 送信（scheduledAt があれば今は送らず予約する） */
 inboxRoutes.post('/conversations/:id/send', async (c) => {
   const id = Number(c.req.param('id'));
   const input = sendMessageSchema.parse(await c.req.json());
+  if (input.scheduledAt) {
+    const scheduled = scheduleMessage(id, input, input.scheduledAt);
+    return c.json({ scheduled });
+  }
   const result = await sendToConversation(id, input);
   return c.json(result);
+});
+
+/** 送信予約の一覧（未送信のもの） */
+inboxRoutes.get('/scheduled-messages', (c) => {
+  const includeDone = c.req.query('all') === '1';
+  return c.json(listScheduled({ includeDone }));
+});
+
+/** 送信予約の変更（時刻・本文） */
+inboxRoutes.put('/scheduled-messages/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  const body = z.object({ scheduledAt: z.string().datetime({ offset: true }).optional(), text: z.string().optional() }).parse(await c.req.json());
+  return c.json(updateScheduled(id, body));
+});
+
+/** 送信予約の取消 */
+inboxRoutes.delete('/scheduled-messages/:id', (c) => {
+  return c.json(cancelScheduled(Number(c.req.param('id'))));
+});
+
+/** 予約を待たずに今すぐ送る */
+inboxRoutes.post('/scheduled-messages/:id/send-now', async (c) => {
+  const r = await dispatchScheduled(Number(c.req.param('id')), { force: true });
+  if (!r.ok) return c.json({ error: r.error }, 400);
+  return c.json(r.outcome);
 });
 
 /** 送信文が返信待ちになるかの判定 */

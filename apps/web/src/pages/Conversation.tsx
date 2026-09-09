@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import { ClientPicker } from '../lib/ClientPicker';
 import { ContactLinkForm } from '../lib/ContactLinkForm';
 import { channelBadge, channelLabel, fmtDateTime, fmtBytes, fromLocalInput, toLocalInput, todayLocalInput } from '../lib/format';
+import { Icon } from '../lib/icons';
 import { SCHEDULING_KINDS, EVENT_KIND_LABEL, type EventKind } from '@lcm/shared';
 
 interface Attachment {
@@ -45,6 +46,15 @@ interface Conv {
   messages: Message[];
   drafts: { id: number; generatedText: string; instruction: string | null; createdAt: string; status: string }[];
   suggestions: { id: number; name: string }[];
+  scheduled: Scheduled[];
+}
+interface Scheduled {
+  id: number;
+  text: string;
+  scheduledAt: string;
+  status: string;
+  attempts: number;
+  error: string | null;
 }
 interface Template {
   key: string;
@@ -81,6 +91,8 @@ export default function Conversation() {
   const [templateKey, setTemplateKey] = useState('');
   const [draftId, setDraftId] = useState<number | null>(null);
   const [createWaiting, setCreateWaiting] = useState(false);
+  const [showTimer, setShowTimer] = useState(false);
+  const [sendAt, setSendAt] = useState('');
   const [selectedAtt, setSelectedAtt] = useState<number[]>([]);
   const [driveFiles, setDriveFiles] = useState<DriveFile[]>([]);
   const [showFiles, setShowFiles] = useState(false);
@@ -115,13 +127,14 @@ export default function Conversation() {
   });
 
   const send = useMutation({
-    mutationFn: () =>
-      api.post<{ note?: string; links: { name: string }[]; manualFiles: string[] }>(`/conversations/${id}/send`, {
+    mutationFn: (scheduledAt?: string) =>
+      api.post<{ note?: string; links: { name: string }[]; manualFiles: string[]; scheduled?: Scheduled }>(`/conversations/${id}/send`, {
         text,
         attachmentIds: selectedAtt,
         driveFiles: driveFiles.map((f) => ({ itemId: f.itemId, name: f.name, path: f.path })),
         draftId,
         createWaitingTask: createWaiting,
+        scheduledAt: scheduledAt ?? null,
       }),
     onSuccess: (r) => {
       setText('');
@@ -129,8 +142,14 @@ export default function Conversation() {
       setSelectedAtt([]);
       setDriveFiles([]);
       setCreateWaiting(false);
-      const notes = [r.note, r.links.length ? `${r.links.length} 件を共有リンクで送付` : '', r.manualFiles.length ? `手動送付が必要: ${r.manualFiles.join('、')}` : ''].filter(Boolean);
-      setMsg({ kind: 'ok', text: `送信しました${notes.length ? `（${notes.join(' / ')}）` : ''}` });
+      setShowTimer(false);
+      setSendAt('');
+      if (r.scheduled) {
+        setMsg({ kind: 'ok', text: `${fmtDateTime(r.scheduled.scheduledAt)} に送信するよう予約しました` });
+      } else {
+        const notes = [r.note, r.links.length ? `${r.links.length} 件を共有リンクで送付` : '', r.manualFiles.length ? `手動送付が必要: ${r.manualFiles.join('、')}` : ''].filter(Boolean);
+        setMsg({ kind: 'ok', text: `送信しました${notes.length ? `（${notes.join(' / ')}）` : ''}` });
+      }
       invalidate();
     },
     onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
@@ -364,6 +383,8 @@ export default function Conversation() {
           {c.messages.length === 0 && <div className="text-sm text-slate-500">メッセージはありません</div>}
         </div>
 
+        {c.scheduled.length > 0 && <ScheduledList items={c.scheduled} onChanged={invalidate} />}
+
         <div className="card space-y-3">
           <div className="flex flex-wrap items-center gap-2">
             <input className="input flex-1" placeholder="AI への指示（例: 来週火曜14時で確定と返す／資料の受領を伝えて次回期日を案内）" value={instruction} onChange={(e) => setInstruction(e.target.value)} />
@@ -420,10 +441,31 @@ export default function Conversation() {
             <label className="flex items-center gap-1 text-sm">
               <input type="checkbox" checked={createWaiting} onChange={(e) => setCreateWaiting(e.target.checked)} /> 送信後「返信待ち」タスクを作る
             </label>
-            <button className="btn btn-primary ml-auto" onClick={() => send.mutate()} disabled={!text.trim() || send.isPending}>
-              {send.isPending ? '送信中…' : `${channelLabel(c.channel)} で送信`}
-            </button>
+            <div className="ml-auto flex items-center gap-1">
+              <button className="btn btn-primary" onClick={() => send.mutate(undefined)} disabled={!text.trim() || send.isPending}>
+                {send.isPending ? '送信中…' : `${channelLabel(c.channel)} で送信`}
+              </button>
+              <button className={`btn ${showTimer ? 'text-[var(--accent)]' : ''}`} onClick={() => setShowTimer(!showTimer)} disabled={send.isPending} title="時刻を指定して、その時刻に自動で送ります" aria-expanded={showTimer}>
+                <Icon name="clock" className="h-4 w-4" />
+                時刻を指定
+              </button>
+            </div>
           </div>
+          {showTimer && (
+            <div className="fade-in flex flex-wrap items-center gap-2 rounded-[10px] bg-black/[0.03] px-3 py-2 text-sm">
+              <span className="text-xs text-slate-500">送信する時刻:</span>
+              {quickSendTimes().map((q) => (
+                <button key={q.value} className={`btn btn-sm ${sendAt === q.value ? 'btn-primary' : ''}`} onClick={() => setSendAt(q.value)}>
+                  {q.label}
+                </button>
+              ))}
+              <input type="datetime-local" className="input w-auto" value={sendAt} min={todayLocalInput(0)} onChange={(e) => setSendAt(e.target.value)} />
+              <button className="btn btn-primary" onClick={() => send.mutate(fromLocalInput(sendAt))} disabled={!text.trim() || !sendAt || send.isPending}>
+                {sendAt ? `${fmtDateTime(fromLocalInput(sendAt))} に送信予約` : '時刻を選んでください'}
+              </button>
+              <span className="text-xs text-slate-400">予約後も、この画面の「送信予約」から取消・時刻変更・今すぐ送信ができます</span>
+            </div>
+          )}
           {msg && <div className={`fade-in text-sm ${msg.kind === 'ok' ? 'text-green-700' : 'text-red-600'}`}>{msg.text}</div>}
           {showFiles && c.client && <FilePicker clientId={c.client.id} selectedPaths={driveFiles.map((f) => f.path)} onToggle={(f) => setDriveFiles(driveFiles.some((x) => x.path === f.path) ? driveFiles.filter((x) => x.path !== f.path) : [...driveFiles, f])} />}
           {storedAtts.length > 0 && showFiles && (
@@ -496,6 +538,87 @@ export default function Conversation() {
         )}
         <TaskMini conversationId={c.id} clientId={c.clientId} />
       </aside>
+    </div>
+  );
+}
+
+/** 送信時刻の候補（今日 17 時、明日 9 時・10 時。過ぎた時刻は出さない） */
+function quickSendTimes(): { label: string; value: string }[] {
+  const jstNow = new Date(Date.now() + 9 * 3600_000);
+  const day = (offset: number) => new Date(jstNow.getTime() + offset * 86400_000).toISOString().slice(0, 10);
+  const at = (d: string, h: number) => `${d}T${String(h).padStart(2, '0')}:00`;
+  const out: { label: string; value: string }[] = [];
+  const nowLocal = jstNow.toISOString().slice(0, 16);
+  if (at(day(0), 12) > nowLocal) out.push({ label: '今日 12:00', value: at(day(0), 12) });
+  if (at(day(0), 17) > nowLocal) out.push({ label: '今日 17:00', value: at(day(0), 17) });
+  out.push({ label: '明日 9:00', value: at(day(1), 9) });
+  out.push({ label: '明日 10:00', value: at(day(1), 10) });
+  return out;
+}
+
+/** この会話の送信予約（取消・時刻変更・今すぐ送る） */
+function ScheduledList({ items, onChanged }: { items: Scheduled[]; onChanged: () => void }) {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState<number | null>(null);
+  const [editAt, setEditAt] = useState('');
+  const [err, setErr] = useState('');
+  const done = () => {
+    setErr('');
+    setEditing(null);
+    onChanged();
+    qc.invalidateQueries({ queryKey: ['scheduled-messages'] });
+  };
+  const fail = (e: unknown) => setErr((e as Error).message);
+  const cancel = useMutation({ mutationFn: (id: number) => api.del(`/scheduled-messages/${id}`), onSuccess: done, onError: fail });
+  const sendNow = useMutation({ mutationFn: (id: number) => api.post(`/scheduled-messages/${id}/send-now`, {}), onSuccess: done, onError: fail });
+  const retime = useMutation({ mutationFn: (id: number) => api.put(`/scheduled-messages/${id}`, { scheduledAt: fromLocalInput(editAt) }), onSuccess: done, onError: fail });
+  const busy = cancel.isPending || sendNow.isPending || retime.isPending;
+  return (
+    <div className="card space-y-2">
+      <h3 className="flex items-center gap-1.5 text-sm font-semibold">
+        <Icon name="clock" className="h-4 w-4 text-[var(--accent)]" />
+        送信予約
+      </h3>
+      <ul className="divide-y divide-slate-100">
+        {items.map((s) => (
+          <li key={s.id} className="space-y-1 py-2 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`badge ${s.status === 'failed' ? 'badge-orange' : 'badge-blue'}`}>{s.status === 'failed' ? '失敗' : s.status === 'sending' ? '送信中' : '予約中'}</span>
+              <span className="font-medium tabular-nums">{fmtDateTime(s.scheduledAt)}</span>
+              <span className="text-xs text-slate-500">に送信</span>
+              <div className="ml-auto flex flex-wrap gap-1">
+                <button className="btn btn-sm" onClick={() => sendNow.mutate(s.id)} disabled={busy} title="予約を待たずに今すぐ送ります">
+                  今すぐ送る
+                </button>
+                <button
+                  className="btn btn-sm"
+                  onClick={() => {
+                    setEditing(editing === s.id ? null : s.id);
+                    setEditAt(toLocalInput(s.scheduledAt));
+                  }}
+                  disabled={busy}
+                >
+                  時刻変更
+                </button>
+                <button className="btn btn-sm text-red-600" onClick={() => confirm('この送信予約を取り消しますか？') && cancel.mutate(s.id)} disabled={busy}>
+                  取消
+                </button>
+              </div>
+            </div>
+            <div className="whitespace-pre-wrap rounded-[8px] bg-black/[0.03] px-2.5 py-1.5 text-xs text-slate-600">{s.text.length > 200 ? `${s.text.slice(0, 200)}…` : s.text}</div>
+            {s.error && <div className="text-xs text-red-600">{s.error}</div>}
+            {editing === s.id && (
+              <div className="fade-in flex flex-wrap items-center gap-2">
+                <input type="datetime-local" className="input w-auto" value={editAt} onChange={(e) => setEditAt(e.target.value)} />
+                <button className="btn btn-primary btn-sm" onClick={() => retime.mutate(s.id)} disabled={!editAt || busy}>
+                  この時刻に変更
+                </button>
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+      {err && <div className="fade-in text-xs text-red-600">{err}</div>}
     </div>
   );
 }
