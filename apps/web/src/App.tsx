@@ -20,6 +20,20 @@ import Files from './pages/Files';
 import Settings from './pages/Settings';
 import Setup from './pages/Setup';
 
+interface NavCounts {
+  inbox: number;
+  tasks: number;
+  alerts: number;
+}
+const EMPTY_COUNTS: NavCounts = { inbox: 0, tasks: 0, alerts: 0 };
+/** メニュー項目に出す件数と色（Chatwork のように、対応が要るものの数を出す） */
+function navBadge(to: string, c: NavCounts): { n: number; tone: 'blue' | 'gray' | 'orange' } | null {
+  if (to === '/inbox') return c.inbox > 0 ? { n: c.inbox, tone: 'blue' } : null;
+  if (to === '/tasks') return c.tasks > 0 ? { n: c.tasks, tone: 'gray' } : null;
+  if (to === '/alerts') return c.alerts > 0 ? { n: c.alerts, tone: 'orange' } : null;
+  return null;
+}
+
 const NAV: { to: string; label: string; icon: IconName }[] = [
   { to: '/', label: 'ダッシュボード', icon: 'home' },
   { to: '/inbox', label: '受信箱', icon: 'inbox' },
@@ -37,7 +51,9 @@ const NAV: { to: string; label: string; icon: IconName }[] = [
 export default function App() {
   const loc = useLocation();
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.get<{ authenticated: boolean }>('/auth/me'), retry: false });
-  const alerts = useQuery({ queryKey: ['alerts', 'count'], queryFn: () => api.get<unknown[]>('/alerts'), enabled: me.data?.authenticated === true, refetchInterval: 60_000 });
+  // メニューの件数（受信箱の要返信・未完了タスク・要確認）
+  const counts = useQuery({ queryKey: ['nav-counts'], queryFn: () => api.get<NavCounts>('/nav-counts'), enabled: me.data?.authenticated === true, refetchInterval: 60_000 });
+  const nav = counts.data ?? EMPTY_COUNTS;
 
   if (loc.pathname === '/login') return <Login />;
   if (me.isLoading) return <div className="loading-text p-8 text-slate-500">読み込み中…</div>;
@@ -53,7 +69,7 @@ export default function App() {
             <div className="truncate whitespace-nowrap text-[11px] text-slate-500">LINE公式・Chatwork・Gmail</div>
           </div>
         </div>
-        <SideNav alertCount={alerts.data?.length ?? 0} />
+        <SideNav counts={nav} />
         <div className="mt-auto space-y-2 border-t border-[var(--hairline)] p-3">
           <RefreshButtons />
           <BackupStatus />
@@ -82,13 +98,13 @@ export default function App() {
           </Routes>
         </div>
       </main>
-      <MobileTabs alertCount={alerts.data?.length ?? 0} />
+      <MobileTabs counts={nav} />
     </div>
   );
 }
 
 /** 左メニュー。選択中の淡い青の枠は別の項目を選ぶと滑って移動する（macOS のサイドバー風） */
-function SideNav({ alertCount }: { alertCount: number }) {
+function SideNav({ counts }: { counts: NavCounts }) {
   const loc = useLocation();
   const navRef = useRef<HTMLElement>(null);
   const [pill, setPill] = useState<{ top: number; height: number; anim: boolean } | null>(null);
@@ -116,7 +132,10 @@ function SideNav({ alertCount }: { alertCount: number }) {
               <Icon name={n.icon} className="h-[18px] w-[18px]" />
             </span>
             <span className="min-w-0 flex-1 truncate">{n.label}</span>
-            {n.to === '/alerts' && alertCount > 0 && <span className="badge badge-orange pop-in">{alertCount}</span>}
+            {(() => {
+              const b = navBadge(n.to, counts);
+              return b ? <span className={`badge badge-${b.tone} pop-in tabular-nums`}>{b.n}</span> : null;
+            })()}
           </NavLink>
         </div>
       ))}
@@ -271,7 +290,7 @@ function useSheet(open: boolean, duration = 420) {
   return { mounted, shown };
 }
 
-function MobileTabs({ alertCount }: { alertCount: number }) {
+function MobileTabs({ counts }: { counts: NavCounts }) {
   const [open, setOpen] = useState(false);
   const { mounted, shown } = useSheet(open);
   const loc = useLocation();
@@ -311,7 +330,12 @@ function MobileTabs({ alertCount }: { alertCount: number }) {
               <>
                 <Icon name={n.icon} className={`h-6 w-6 ${isActive ? 'tab-pop' : ''}`} strokeWidth={1.6} />
                 {short(n.label)}
-                {n.to === '/alerts' && alertCount > 0 && <span className="pop-in absolute right-4 top-1 rounded-full bg-[#ff3b30] px-1.5 text-[10px] font-semibold text-white">{alertCount}</span>}
+                {(() => {
+                  const b = navBadge(n.to, counts);
+                  if (!b) return null;
+                  const bg = b.tone === 'orange' ? 'bg-[#ff3b30] text-white' : b.tone === 'blue' ? 'bg-[var(--accent)] text-white' : 'bg-[#8e8e93] text-white';
+                  return <span className={`pop-in absolute left-1/2 top-0.5 ml-1.5 rounded-full px-1.5 text-[10px] font-semibold tabular-nums ${bg}`}>{b.n > 99 ? '99+' : b.n}</span>;
+                })()}
               </>
             )}
           </NavLink>

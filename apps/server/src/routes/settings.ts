@@ -159,5 +159,16 @@ settingsRoutes.get('/dashboard', (c) => {
   for (const a of alerts) byType[a.type] = (byType[a.type] ?? 0) + 1;
   const waiting = listTasks({ status: 'active' }).filter((t) => t.status !== 'open');
   const needsReply = db().select({ id: schema.conversations.id }).from(schema.conversations).where(and(eq(schema.conversations.needsReply, true), eq(schema.conversations.archived, false))).all().length;
-  return c.json({ alerts: alerts.slice(0, 20), alertCounts: byType, waiting, needsReply, todaysEvents: todaysEvents(), lineQuota: isConfigured('line') ? lineQuotaStatus() : null, demo: demoStatus().seeded });
+  const activeTasks = listTasks({ status: 'active' }).length;
+  return c.json({ alerts: alerts.slice(0, 20), alertCounts: byType, waiting, needsReply, activeTasks, todaysEvents: todaysEvents(), lineQuota: isConfigured('line') ? lineQuotaStatus() : null, demo: demoStatus().seeded });
 });
+
+/** メニューに出す件数（受信箱の要返信・未完了タスク・要確認）。軽いので 1 分ごとに取得する */
+settingsRoutes.get('/nav-counts', (c) => c.json(navCounts()));
+
+export function navCounts(): { inbox: number; tasks: number; alerts: number } {
+  const inbox = db().select({ id: schema.conversations.id }).from(schema.conversations).where(and(eq(schema.conversations.needsReply, true), eq(schema.conversations.archived, false))).all().length;
+  const tasks = listTasks({ status: 'active' }).length;
+  const alerts = openAlerts().length;
+  return { inbox, tasks, alerts };
+}

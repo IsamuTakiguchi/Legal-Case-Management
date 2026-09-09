@@ -10,6 +10,8 @@ interface DashboardData {
   alertCounts: Record<string, number>;
   waiting: { id: number; title: string; status: string; clientName: string | null; followUpAt: string | null; waitingSince: string | null; conversationId: number | null }[];
   needsReply: number;
+  /** 未完了のタスク（対応中＋返信待ち） */
+  activeTasks: number;
   todaysEvents: { id: number; title: string; startAt: string; kind: string; clientName: string | null; location: string | null }[];
   lineQuota: { used: number; limit: number } | null;
   demo?: boolean;
@@ -53,7 +55,7 @@ export default function Dashboard() {
         <Stat label="未返信の会話" value={d.needsReply} to="/inbox?needsReply=1" icon="mail" tone={d.needsReply ? 'blue' : 'gray'} />
         <Stat label="返信待ち" value={d.waiting.length} to="/tasks" icon="clock" tone={d.waiting.length ? 'blue' : 'gray'} />
         <Stat label="要確認" value={d.alerts.length} to="/alerts" icon="alert" tone={d.alerts.length ? 'orange' : 'gray'} />
-        <Stat label="LINE 今月送信" value={d.lineQuota ? `${d.lineQuota.used} / ${d.lineQuota.limit}` : '未設定'} icon="chat" tone="green" />
+        <Stat label="タスク・返信待ち" value={d.activeTasks} to="/tasks" icon="check" tone={d.activeTasks ? 'green' : 'gray'} />
       </div>
       <div className="stagger grid gap-4 md:grid-cols-2">
         <section className="card">
