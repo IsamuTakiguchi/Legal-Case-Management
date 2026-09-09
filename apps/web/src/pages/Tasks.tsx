@@ -33,6 +33,16 @@ const TASK_SORTS: SortOption<Task>[] = [
   { key: 'updated', label: '更新が新しい順', value: (t) => t.updatedAt ?? null, desc: true },
 ];
 
+type BulkAction = 'done' | 'open' | 'waiting_client' | 'waiting_other' | 'nudge' | 'delete';
+const BULK_LABEL: Record<BulkAction, string> = {
+  done: '完了にしました',
+  open: '対応中に戻しました',
+  waiting_client: '依頼者の返信待ちにしました',
+  waiting_other: '相手方・裁判所待ちにしました',
+  nudge: '催促済みにしました',
+  delete: '削除しました',
+};
+
 export default function Tasks() {
   const qc = useQueryClient();
   const [status, setStatus] = useState<string>('active');
@@ -43,7 +53,26 @@ export default function Tasks() {
   const sort = useSort('tasks', TASK_SORTS, 'deadline');
   const rows = sort.apply(list.data ?? []);
   const [clientId, setClientId] = useState('');
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [msg, setMsg] = useState('');
   const refresh = () => qc.invalidateQueries({ queryKey: ['tasks'] });
+  const toggle = (id: number, on: boolean) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  const allSelected = rows.length > 0 && rows.every((t) => selected.has(t.id));
+  const bulk = useMutation({
+    mutationFn: (action: BulkAction) => api.post<{ updated: number }>('/tasks/bulk', { ids: [...selected], action }),
+    onSuccess: (r, action) => {
+      setMsg(`${r.updated} 件を${BULK_LABEL[action]}`);
+      setSelected(new Set());
+      refresh();
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
   const create = useMutation({
     mutationFn: () => api.post('/tasks', { title, status: newStatus, clientId: clientId ? Number(clientId) : null, syncToChatwork: sync }),
     onSuccess: () => {
@@ -100,10 +129,45 @@ export default function Tasks() {
         </label>
         <button className="btn btn-primary">追加</button>
       </form>
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <label className="flex items-center gap-1">
+          <input type="checkbox" checked={allSelected} onChange={(e) => setSelected(e.target.checked ? new Set(rows.map((t) => t.id)) : new Set())} /> すべて選択
+        </label>
+        {selected.size > 0 ? (
+          <div className="fade-in flex flex-wrap items-center gap-1">
+            <span className="text-slate-600">{selected.size} 件を選択中</span>
+            <button className="btn btn-sm btn-primary" onClick={() => bulk.mutate('done')} disabled={bulk.isPending}>
+              完了にする
+            </button>
+            <button className="btn btn-sm" onClick={() => bulk.mutate('open')} disabled={bulk.isPending}>
+              対応中に戻す
+            </button>
+            <button className="btn btn-sm" onClick={() => bulk.mutate('waiting_client')} disabled={bulk.isPending}>
+              依頼者待ちに
+            </button>
+            <button className="btn btn-sm" onClick={() => bulk.mutate('waiting_other')} disabled={bulk.isPending}>
+              相手方待ちに
+            </button>
+            <button className="btn btn-sm" onClick={() => bulk.mutate('nudge')} disabled={bulk.isPending} title="返信待ちのタスクのフォロー期限を延ばします">
+              催促した
+            </button>
+            <button className="btn btn-sm text-red-600" onClick={() => confirm(`${selected.size} 件のタスクを削除しますか？`) && bulk.mutate('delete')} disabled={bulk.isPending}>
+              削除
+            </button>
+            <button className="btn btn-sm text-slate-500" onClick={() => setSelected(new Set())}>
+              選択解除
+            </button>
+          </div>
+        ) : (
+          <span className="text-xs text-slate-400">チェックを付けると、まとめて完了・状態変更・催促済み・削除にできます</span>
+        )}
+        {msg && <span className="fade-in ml-auto text-xs text-slate-600">{msg}</span>}
+      </div>
       <div className="card overflow-x-auto p-0">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-left text-xs text-slate-500">
             <tr>
+              <th className="w-px px-3 py-2"></th>
               <th className="px-3 py-2">状態</th>
               <th className="px-3 py-2">タスク</th>
               <th className="px-3 py-2">依頼者</th>
@@ -115,7 +179,10 @@ export default function Tasks() {
             {rows.map((t) => {
               const over = t.followUpAt && new Date(t.followUpAt).getTime() < now && t.status !== 'done' && t.status !== 'open';
               return (
-                <tr key={t.id} className={`border-t border-slate-100 ${over ? 'bg-orange-50' : ''}`}>
+                <tr key={t.id} className={`border-t border-slate-100 ${selected.has(t.id) ? 'bg-blue-50' : over ? 'bg-orange-50' : ''}`}>
+                  <td className="w-px px-3 py-2">
+                    <input type="checkbox" checked={selected.has(t.id)} onChange={(e) => toggle(t.id, e.target.checked)} aria-label="選択" />
+                  </td>
                   <td className="w-px whitespace-nowrap px-3 py-2">
                     <select className="input w-auto py-0.5 text-xs" value={t.status} onChange={(e) => update.mutate({ id: t.id, patch: { status: e.target.value } })}>
                       {TASK_STATUSES.map((s) => (
@@ -166,7 +233,7 @@ export default function Tasks() {
             })}
             {list.data?.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-4 py-4 text-slate-500">
+                <td colSpan={6} className="px-4 py-4 text-slate-500">
                   タスクはありません
                 </td>
               </tr>

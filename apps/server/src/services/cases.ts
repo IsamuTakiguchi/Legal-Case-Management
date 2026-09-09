@@ -168,7 +168,9 @@ const phoneMemoSchema = z.object({
   ourSaid: z.array(z.string()).describe('こちら（弁護士側）が言ったこと・伝えたこと・回答を、1 項目ずつ簡潔に。メモに無ければ空'),
   phone: z.string().nullable().describe('メモに電話番号があればそのまま（ハイフン付き）。無ければ null'),
   decisions: z.array(z.string()).describe('決定事項・合意事項'),
-  nextActions: z.array(z.object({ title: z.string(), due: z.string().nullable().describe('期限 YYYY-MM-DD。不明なら null'), owner: z.enum(['self', 'client', 'counterpart', 'court', 'other']) })),
+  nextActions: z
+    .array(z.object({ title: z.string(), due: z.string().nullable().describe('期限 YYYY-MM-DD。不明なら null'), owner: z.enum(['self', 'client', 'counterpart', 'court', 'other']) }))
+    .describe('タスクとして追いかける価値のある「次のアクション」だけを、多くても 3 件。細かい手順は 1 件にまとめる'),
   waitingFor: z.enum(WAITING_FOR).describe('この後、誰の対応待ちになるか'),
   counterpart: z.string().nullable().describe('通話相手（メモから分かれば）'),
 });
@@ -180,6 +182,7 @@ export async function structureNote(rawText: string, ctx: { caseTitle?: string; 
     system: [
       '法律事務所の事務補助者として、弁護士の走り書きメモを整理します。事実の創作はせず、メモにある内容だけを使います。日付は今日を基準に解釈します。',
       '「相手が言ったこと」と「こちら（弁護士）が言ったこと」は必ず分けてください。「〜とのこと」「〜と言われた」「先方は〜」は相手の発言、「〜と伝えた」「〜と回答」「こちらからは〜」は自分の発言です。どちらか判然としない場合は文脈で判断し、決定事項と重複しても構いません。',
+      '次のアクションは、弁護士がタスクとして追いかける単位で挙げます。細かく分けず、ひとまとまりの仕事は 1 件にします（例: 「依頼者に和解案を説明して意向を確認し、来週金曜までに相手方へ回答する」は 1 件）。多くても 3 件。決定事項の言い換えや、すでに終わったこと、「メモを残す」のような当然の作業は含めません。何も無ければ空にします。',
     ].join('\n'),
     user: `今日: ${today}\n事件: ${ctx.caseTitle ?? '不明'}\n依頼者: ${ctx.clientName ?? '不明'}\n種別: ${ctx.kind}\n相手: ${ctx.counterpart ?? '（メモから判断）'}\n電話番号: ${ctx.phone ?? '（メモから判断）'}\n\nメモ:\n${rawText}`,
     schema: phoneMemoSchema,
@@ -188,7 +191,15 @@ export async function structureNote(rawText: string, ctx: { caseTitle?: string; 
   });
 }
 
-export async function addCaseNote(input: CaseNoteInput, opts: { structure?: boolean; createTasks?: boolean } = {}) {
+export interface AddNoteOptions {
+  structure?: boolean;
+  /** true / 'each': 次のアクションごとにタスク化。'single': 1 つのタスクにまとめる。false: 作らない */
+  createTasks?: boolean | 'each' | 'single';
+  /** タスク化する次のアクションの番号（0 始まり）。省略時はすべて */
+  taskIndexes?: number[];
+}
+
+export async function addCaseNote(input: CaseNoteInput, opts: AddNoteOptions = {}) {
   const c = db().select().from(schema.cases).where(eq(schema.cases.id, input.caseId)).get();
   if (!c) throw new Error('事件が見つかりません');
   const client = db().select().from(schema.clients).where(eq(schema.clients.id, c.clientId)).get();
@@ -232,12 +243,24 @@ export async function addCaseNote(input: CaseNoteInput, opts: { structure?: bool
     })
     .returning()
     .get();
-  if (opts.createTasks && nextActions.length) {
-    const updated: typeof nextActions = [];
-    for (const a of nextActions) {
-      const status = waitingFor === 'client' ? 'waiting_client' : waitingFor && waitingFor !== 'none' ? 'waiting_other' : 'open';
-      const t = await createTask({ title: a.title, clientId: c.clientId, caseId: c.id, conversationId: null, status, followUpAt: a.due ? new Date(`${a.due}T09:00:00+09:00`).toISOString() : null, note: gist, syncToChatwork: false });
-      updated.push({ ...a, taskId: t.id });
+  const chosen = nextActions.map((a, i) => ({ a, i })).filter(({ i }) => !opts.taskIndexes || opts.taskIndexes.includes(i));
+  if (opts.createTasks && chosen.length) {
+    const status = waitingFor === 'client' ? 'waiting_client' : waitingFor && waitingFor !== 'none' ? 'waiting_other' : 'open';
+    const dueIso = (due?: string | null) => (due ? new Date(`${due}T09:00:00+09:00`).toISOString() : null);
+    const updated: typeof nextActions = nextActions.map((a) => ({ ...a }));
+    if (opts.createTasks === 'single') {
+      // 1 つのタスクにまとめる: 題名は先頭のアクション（複数なら「ほか n 件」）、メモに全アクションと要旨、期限は最も早いもの
+      const first = chosen[0].a;
+      const title = chosen.length === 1 ? first.title : `${first.title} ほか ${chosen.length - 1} 件`;
+      const dues = chosen.map(({ a }) => a.due).filter((d): d is string => !!d).sort();
+      const note = [chosen.map(({ a }) => `・${a.title}${a.due ? `（期限 ${a.due}）` : ''}`).join('\n'), gist ? `\n${gist}` : ''].join('\n').trim();
+      const t = await createTask({ title, clientId: c.clientId, caseId: c.id, conversationId: null, status, followUpAt: dueIso(dues[0] ?? null), note, syncToChatwork: false });
+      for (const { i } of chosen) updated[i] = { ...updated[i], taskId: t.id };
+    } else {
+      for (const { a, i } of chosen) {
+        const t = await createTask({ title: a.title, clientId: c.clientId, caseId: c.id, conversationId: null, status, followUpAt: dueIso(a.due), note: gist, syncToChatwork: false });
+        updated[i] = { ...updated[i], taskId: t.id };
+      }
     }
     db().update(schema.caseNotes).set({ nextActions: updated }).where(eq(schema.caseNotes.id, row.id)).run();
     return { ...row, nextActions: updated };

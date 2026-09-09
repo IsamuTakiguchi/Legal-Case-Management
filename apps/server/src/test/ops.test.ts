@@ -1242,3 +1242,78 @@ describe('会話の最終日時', () => {
     expect(repairConversationTimes()).toBe(0);
   });
 });
+
+describe('タスクの一括処理と、記録からのタスク化の単位', () => {
+  it('チェックしたタスクをまとめて完了・状態変更・催促・削除でき、削除は記録との結び付きも外す', async () => {
+    const { createTask, bulkUpdateTasks, listTasks } = await import('../services/tasks.js');
+    const { addCaseNote } = await import('../services/cases.js');
+    const client = db().insert(schema.clients).values({ name: '一括 太郎', emails: [], aliases: [] }).returning().get();
+    const kase = db().insert(schema.cases).values({ clientId: client.id, title: '一括テスト事件', caseType: 'general_civil', status: 'active' }).returning().get();
+    const t1 = await createTask({ title: 'A', clientId: client.id, caseId: kase.id, conversationId: null, status: 'open', followUpAt: null, note: null, syncToChatwork: false });
+    const t2 = await createTask({ title: 'B', clientId: client.id, caseId: kase.id, conversationId: null, status: 'waiting_client', followUpAt: null, note: null, syncToChatwork: false });
+    const t3 = await createTask({ title: 'C', clientId: client.id, caseId: kase.id, conversationId: null, status: 'open', followUpAt: null, note: null, syncToChatwork: false });
+    expect(bulkUpdateTasks([t1.id, t2.id], 'done')).toEqual({ updated: 2 });
+    const done = listTasks({ status: 'done', caseId: kase.id });
+    expect(done.map((t) => t.title).sort()).toEqual(['A', 'B']);
+    expect(done.every((t) => t.completedAt)).toBe(true);
+    // すでに同じ状態のものは数えない
+    expect(bulkUpdateTasks([t1.id, t3.id], 'done')).toEqual({ updated: 1 });
+    expect(bulkUpdateTasks([t1.id, t2.id, t3.id], 'waiting_other')).toEqual({ updated: 3 });
+    // 催促は返信待ちのものだけ
+    const before = db().select().from(schema.tasks).where(eq(schema.tasks.id, t1.id)).get()!.followUpAt;
+    expect(bulkUpdateTasks([t1.id], 'open')).toEqual({ updated: 1 });
+    expect(bulkUpdateTasks([t1.id, t2.id], 'nudge')).toEqual({ updated: 1 });
+    expect(db().select().from(schema.tasks).where(eq(schema.tasks.id, t2.id)).get()!.lastNudgedAt).toBeTruthy();
+    expect(before).toBeTruthy();
+    // 記録からタスク化したものを削除すると、記録側の taskId が外れる
+    const note = await addCaseNote(
+      { caseId: kase.id, kind: 'phone', rawText: 'x', theirSaid: [], ourSaid: [], decisions: [], nextActions: [{ title: '書面を送る', due: null }], attachments: [], waitingFor: 'none' },
+      { createTasks: 'each' },
+    );
+    const taskId = note.nextActions[0].taskId!;
+    expect(taskId).toBeTruthy();
+    expect(bulkUpdateTasks([taskId, 999999], 'delete')).toEqual({ updated: 1 });
+    expect(db().select().from(schema.tasks).where(eq(schema.tasks.id, taskId)).get()).toBeUndefined();
+    expect(db().select().from(schema.caseNotes).where(eq(schema.caseNotes.id, note.id)).get()!.nextActions[0].taskId).toBeNull();
+  });
+
+  it('記録の次のアクションを 1 つのタスクにまとめられ、タスク化する項目を選べる', async () => {
+    const { addCaseNote } = await import('../services/cases.js');
+    const client = db().insert(schema.clients).values({ name: 'まとめ 花子', emails: [], aliases: [] }).returning().get();
+    const kase = db().insert(schema.cases).values({ clientId: client.id, title: 'まとめテスト事件', caseType: 'general_civil', status: 'active' }).returning().get();
+    const actions = [
+      { title: '依頼者に和解案を説明する', due: '2026-09-12' },
+      { title: '相手方へ回答する', due: '2026-09-18' },
+      { title: '証拠を整理する', due: null },
+    ];
+    const single = await addCaseNote(
+      { caseId: kase.id, kind: 'phone', rawText: 'x', gist: '和解案 300 万円の提示あり', theirSaid: [], ourSaid: [], decisions: [], nextActions: actions, attachments: [], waitingFor: 'none' },
+      { createTasks: 'single', taskIndexes: [0, 1] },
+    );
+    const ids = single.nextActions.map((a) => a.taskId ?? null);
+    expect(ids[0]).toBeTruthy();
+    expect(ids[1]).toBe(ids[0]);
+    expect(ids[2]).toBeNull();
+    const task = db().select().from(schema.tasks).where(eq(schema.tasks.id, ids[0]!)).get()!;
+    expect(task.title).toBe('依頼者に和解案を説明する ほか 1 件');
+    expect(task.note).toContain('・相手方へ回答する（期限 2026-09-18）');
+    expect(task.note).toContain('和解案 300 万円の提示あり');
+    expect(task.followUpAt).toBe(new Date('2026-09-12T09:00:00+09:00').toISOString());
+    // 1 件だけ選ぶと「ほか」は付かない
+    const one = await addCaseNote(
+      { caseId: kase.id, kind: 'memo', rawText: 'y', theirSaid: [], ourSaid: [], decisions: [], nextActions: actions, attachments: [], waitingFor: 'none' },
+      { createTasks: 'single', taskIndexes: [2] },
+    );
+    const t2 = db().select().from(schema.tasks).where(eq(schema.tasks.id, one.nextActions[2].taskId!)).get()!;
+    expect(t2.title).toBe('証拠を整理する');
+    // アクションごと（選んだものだけ）
+    const each = await addCaseNote(
+      { caseId: kase.id, kind: 'memo', rawText: 'z', theirSaid: [], ourSaid: [], decisions: [], nextActions: actions, attachments: [], waitingFor: 'none' },
+      { createTasks: 'each', taskIndexes: [1, 2] },
+    );
+    expect(each.nextActions[0].taskId ?? null).toBeNull();
+    expect(each.nextActions[1].taskId).toBeTruthy();
+    expect(each.nextActions[2].taskId).toBeTruthy();
+    expect(each.nextActions[1].taskId).not.toBe(each.nextActions[2].taskId);
+  });
+});
