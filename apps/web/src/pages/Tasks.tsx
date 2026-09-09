@@ -6,6 +6,7 @@ import { ClientPicker } from '../lib/ClientPicker';
 import { fmtDate, fmtRelative, toLocalInput, fromLocalInput } from '../lib/format';
 import { TASK_STATUSES, TASK_STATUS_LABEL, type TaskStatus } from '@lcm/shared';
 import { useSort, readingKey, type SortOption } from '../lib/sort';
+import { Icon } from '../lib/icons';
 
 interface Task {
   id: number;
@@ -15,6 +16,7 @@ interface Task {
   clientId: number | null;
   clientName: string | null;
   caseId: number | null;
+  caseTitle: string | null;
   conversationId: number | null;
   waitingSince: string | null;
   followUpAt: string | null;
@@ -170,7 +172,7 @@ export default function Tasks() {
               <th className="w-px px-3 py-2"></th>
               <th className="px-3 py-2">状態</th>
               <th className="px-3 py-2">タスク</th>
-              <th className="px-3 py-2">依頼者</th>
+              <th className="px-3 py-2">依頼者 / 事件</th>
               <th className="px-3 py-2">待ち開始 / フォロー期限</th>
               <th className="px-3 py-2"></th>
             </tr>
@@ -203,7 +205,19 @@ export default function Tasks() {
                     {t.chatworkTaskId && <span className="badge badge-chatwork ml-1">CW</span>}
                     {t.note && <TaskNote text={t.note} />}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2">{t.clientId ? <Link to={`/clients/${t.clientId}`} className="hover:underline">{t.clientName}</Link> : ''}</td>
+                  <td className="max-w-[16rem] px-3 py-2">
+                    {t.clientId && (
+                      <Link to={`/clients/${t.clientId}`} className="block truncate text-[var(--accent)] hover:underline" title="依頼者ページを開く">
+                        {t.clientName}
+                      </Link>
+                    )}
+                    {t.caseId && (
+                      <Link to={`/cases/${t.caseId}`} className="block truncate text-xs text-slate-500 hover:text-[var(--accent)] hover:underline" title="事件ページを開く">
+                        <Icon name="scale" className="mr-0.5 inline h-3 w-3 align-[-1px]" />
+                        {t.caseTitle ?? '事件'}
+                      </Link>
+                    )}
+                  </td>
                   <td className="w-px whitespace-nowrap px-3 py-2 text-xs text-slate-600">
                     {t.waitingSince && <div>{fmtRelative(t.waitingSince)}から待ち</div>}
                     {t.status !== 'open' && t.status !== 'done' && (
@@ -215,18 +229,18 @@ export default function Tasks() {
                     {t.dueAt && t.status === 'open' && <div>期日 {fmtDate(t.dueAt)}</div>}
                   </td>
                   <td className="w-px whitespace-nowrap px-3 py-2 text-right">
-                    {(t.status === 'waiting_client' || t.status === 'waiting_other') && (
-                      <div className="flex justify-end gap-1">
-                        {t.conversationId && (
-                          <Link to={`/inbox/${t.conversationId}`} className="btn btn-sm">
-                            催促文を作成
-                          </Link>
-                        )}
+                    <div className="flex justify-end gap-1">
+                      {t.conversationId && (
+                        <Link to={`/inbox/${t.conversationId}`} className="btn btn-sm" title="このタスクの元になった会話を開きます">
+                          {t.status === 'waiting_client' || t.status === 'waiting_other' ? '催促文を作成' : '会話を開く'}
+                        </Link>
+                      )}
+                      {(t.status === 'waiting_client' || t.status === 'waiting_other') && (
                         <button className="btn btn-sm" onClick={() => nudge.mutate(t.id)}>
                           催促した
                         </button>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </td>
                 </tr>
               );

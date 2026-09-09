@@ -8,7 +8,7 @@ import { Icon, type IconName } from '../lib/icons';
 interface DashboardData {
   alerts: { id: number; type: string; title: string; body: string | null; createdAt: string }[];
   alertCounts: Record<string, number>;
-  waiting: { id: number; title: string; status: string; clientName: string | null; followUpAt: string | null; waitingSince: string | null; conversationId: number | null }[];
+  waiting: { id: number; title: string; status: string; clientId: number | null; clientName: string | null; caseId: number | null; caseTitle: string | null; followUpAt: string | null; waitingSince: string | null; conversationId: number | null }[];
   needsReply: number;
   /** 未完了のタスク（対応中＋返信待ち） */
   activeTasks: number;
@@ -101,8 +101,35 @@ export default function Dashboard() {
                 return (
                   <tr key={t.id} className="border-t border-slate-100">
                     <td className="py-1.5 pr-2">{over && <span className="badge badge-orange">期限超過</span>}</td>
-                    <td className="py-1.5 pr-2 text-slate-500">{t.clientName ?? ''}</td>
-                    <td className="py-1.5 pr-2">{t.conversationId ? <Link to={`/inbox/${t.conversationId}`} className="hover:underline">{t.title}</Link> : t.title}</td>
+                    <td className="py-1.5 pr-2">
+                      {t.clientId ? (
+                        <Link to={`/clients/${t.clientId}`} className="text-[var(--accent)] hover:underline">
+                          {t.clientName}
+                        </Link>
+                      ) : (
+                        <span className="text-slate-500">{t.clientName ?? ''}</span>
+                      )}
+                      {t.caseId && (
+                        <Link to={`/cases/${t.caseId}`} className="ml-1 text-xs text-slate-500 hover:text-[var(--accent)] hover:underline">
+                          {t.caseTitle ?? '事件'}
+                        </Link>
+                      )}
+                    </td>
+                    <td className="py-1.5 pr-2">
+                      {t.conversationId ? (
+                        <Link to={`/inbox/${t.conversationId}`} className="hover:underline">
+                          {t.title}
+                        </Link>
+                      ) : t.caseId ? (
+                        <Link to={`/cases/${t.caseId}`} className="hover:underline">
+                          {t.title}
+                        </Link>
+                      ) : (
+                        <Link to="/tasks" className="hover:underline">
+                          {t.title}
+                        </Link>
+                      )}
+                    </td>
                     <td className="py-1.5 pr-2 text-slate-500">{TASK_STATUS_LABEL[t.status as TaskStatus]}</td>
                     <td className="py-1.5 text-slate-500">{t.waitingSince ? `${fmtRelative(t.waitingSince)}から` : ''}</td>
                   </tr>
