@@ -2,9 +2,18 @@ import { and, eq, desc } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import type { AlertType } from '@lcm/shared';
 
-export function upsertAlert(opts: { type: AlertType; dedupeKey: string; title: string; body?: string; payload?: Record<string, unknown> }) {
+export function upsertAlert(opts: { type: AlertType; dedupeKey: string; title: string; body?: string; payload?: Record<string, unknown>; refresh?: boolean }) {
   const existing = db().select().from(schema.alerts).where(eq(schema.alerts.dedupeKey, opts.dedupeKey)).get();
   if (existing) {
+    // refresh: 同じ件が続いたら表示（題名・本文・付随情報）を最新の内容に更新する
+    if (existing.status === 'open' && opts.refresh) {
+      return db()
+        .update(schema.alerts)
+        .set({ title: opts.title, body: opts.body ?? null, payload: { ...(existing.payload as Record<string, unknown>), ...(opts.payload ?? {}) } })
+        .where(eq(schema.alerts.id, existing.id))
+        .returning()
+        .get();
+    }
     if (existing.status === 'open') return existing;
     // 解決済みの同一キーは再オープンせず新規扱いにする（キーにタイムスタンプを含めて呼ぶこと）
     return existing;

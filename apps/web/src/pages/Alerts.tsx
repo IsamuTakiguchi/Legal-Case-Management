@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { ClientPicker } from '../lib/ClientPicker';
 import { ContactLinkForm } from '../lib/ContactLinkForm';
-import { fmtDateTime, fromLocalInput, todayLocalInput } from '../lib/format';
+import { channelBadge, channelLabel, fmtDateTime, fromLocalInput, todayLocalInput } from '../lib/format';
 import { ALERT_TYPE_LABEL, type AlertType } from '@lcm/shared';
 
 interface Alert {
@@ -41,9 +41,15 @@ export default function Alerts() {
             {items.map((a) => (
               <li key={a.id} className="rounded border border-slate-100 p-3 text-sm">
                 <div className="flex items-start gap-2">
-                  <div className="flex-1">
-                    <div className="font-medium">{a.title}</div>
-                    {a.body && <div className="text-slate-600">{a.body}</div>}
+                  <div className="min-w-0 flex-1">
+                    {type === 'unlinked_contact' && a.payload.preview !== undefined ? (
+                      <UnlinkedHeader alert={a} />
+                    ) : (
+                      <>
+                        <div className="font-medium">{a.title}</div>
+                        {a.body && <div className="whitespace-pre-wrap text-slate-600">{a.body}</div>}
+                      </>
+                    )}
                     <div className="text-xs text-slate-400">{fmtDateTime(a.createdAt)}</div>
                   </div>
                   <button className="btn btn-sm" onClick={() => resolve.mutate({ id: a.id, status: 'dismissed' })}>
@@ -75,6 +81,29 @@ export default function Alerts() {
           </ul>
         </section>
       ))}
+    </div>
+  );
+}
+
+/** 未紐付けの連絡先: 誰から・いつ・どんな内容かを一目で分かるように出す */
+function UnlinkedHeader({ alert }: { alert: Alert }) {
+  const p = alert.payload as { channel?: string; displayName?: string | null; preview?: string; sentAt?: string | null; subject?: string | null; messageCount?: number; identity?: { email?: string | null; lineUserId?: string | null } };
+  const channel = p.channel ?? '';
+  const who = p.displayName ?? (channel === 'gmail' ? p.identity?.email : null) ?? (channel === 'line' ? '名前が取得できない LINE の相手' : null) ?? alert.title.replace(/^[^:]*: /, '');
+  const sub = [channel === 'gmail' && p.identity?.email && p.displayName ? p.identity.email : null, channel === 'gmail' && p.subject ? `件名: ${p.subject}` : null, channel === 'chatwork' && p.subject ? `ルーム: ${p.subject}` : null].filter(Boolean);
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={channelBadge(channel)}>{channelLabel(channel)}</span>
+        <span className="font-semibold">{who}</span>
+        {sub.length > 0 && <span className="text-xs text-slate-500">{sub.join(' / ')}</span>}
+        {(p.messageCount ?? 1) > 1 && <span className="badge badge-orange">{p.messageCount} 件</span>}
+      </div>
+      <div className="rounded-[8px] bg-black/[0.03] px-2.5 py-1.5 text-[13px] text-slate-700">
+        {p.preview ? <span className="whitespace-pre-wrap">「{p.preview}」</span> : <span className="text-slate-400">（本文なし。写真やファイルだけの受信の可能性があります）</span>}
+        {p.sentAt && <span className="ml-2 whitespace-nowrap text-xs text-slate-400">{fmtDateTime(p.sentAt)} 受信</span>}
+      </div>
+      <div className="text-xs text-slate-500">依頼者か事件の関係者に紐付けると、以後の受信と添付ファイルが自動で振り分けられます。</div>
     </div>
   );
 }

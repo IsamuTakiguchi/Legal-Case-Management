@@ -3,6 +3,7 @@ import { verifyLineSignature, normalizeLineEvent, getLineProfile, type LineEvent
 import { verifyChatworkSignature, type ChatworkWebhookBody } from '../channels/chatwork.js';
 import { ingestChatworkWebhook } from '../jobs/chatworkPoll.js';
 import { ingestMessage } from '../services/inbox.js';
+import { cleanDisplayName } from '../services/identity.js';
 import { logger } from '../logger.js';
 import { db, schema } from '../db/index.js';
 import { eq, and } from 'drizzle-orm';
@@ -46,13 +47,14 @@ webhookRoutes.post('/line', async (c) => {
               .from(schema.conversations)
               .where(and(eq(schema.conversations.channel, 'line'), eq(schema.conversations.externalThreadId, norm.externalThreadId)))
               .get();
-            if (!conv?.counterpartName) {
-              const p = await getLineProfile(userId);
-              norm.senderName = p?.displayName ?? null;
-              norm.identity.displayName = p?.displayName ?? null;
+            const known = cleanDisplayName(conv?.counterpartName);
+            if (!known) {
+              const p = await getLineProfile(userId).catch(() => null);
+              norm.senderName = cleanDisplayName(p?.displayName);
+              norm.identity.displayName = norm.senderName;
             } else {
-              norm.senderName = conv.counterpartName;
-              norm.identity.displayName = conv.counterpartName;
+              norm.senderName = known;
+              norm.identity.displayName = known;
             }
           }
           await ingestMessage(norm);
