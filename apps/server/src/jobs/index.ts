@@ -23,6 +23,7 @@ import { resolveAllClientFolders } from '../services/clientFolders.js';
 import { refreshStyleProfiles } from '../services/style.js';
 import { runDueScheduled, recoverStuckScheduled } from '../services/scheduledSend.js';
 import { refreshUnlinkedAlerts } from '../services/identity.js';
+import { repairConversationTimes } from '../services/inbox.js';
 
 export interface JobDef {
   name: string;
@@ -116,6 +117,16 @@ export function startJobs() {
       if (n) logger.info({ n }, '未紐付けの警告を新しい表示に作り直しました');
     } catch (err) {
       logger.warn({ err }, '未紐付けの警告の作り直しに失敗');
+    }
+  }
+  // 一度だけの後始末: 過去分の取り込みで巻き戻っていた会話の最終日時を直す
+  if (!getSyncState('cleanup:conversation_times')) {
+    try {
+      const n = repairConversationTimes();
+      setSyncState('cleanup:conversation_times', new Date().toISOString());
+      if (n) logger.info({ n }, '会話の最終日時を計算し直しました');
+    } catch (err) {
+      logger.warn({ err }, '会話の最終日時の修復に失敗');
     }
   }
   // 再起動で「送信中」のまま止まった送信予約を戻す
