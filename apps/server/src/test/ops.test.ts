@@ -1317,3 +1317,18 @@ describe('タスクの一括処理と、記録からのタスク化の単位', (
     expect(each.nextActions[1].taskId).not.toBe(each.nextActions[2].taskId);
   });
 });
+
+describe('メニューの件数', () => {
+  it('受信箱の要返信・未完了タスク・要確認の数を返す', async () => {
+    const { navCounts } = await import('../routes/settings.js');
+    const { createTask } = await import('../services/tasks.js');
+    const before = navCounts();
+    await createTask({ title: '件数テスト', clientId: null, caseId: null, conversationId: null, status: 'open', followUpAt: null, note: null, syncToChatwork: false });
+    db().insert(schema.conversations).values({ channel: 'gmail', externalThreadId: 'nav-count-1', subject: null, counterpartName: 'x', lastMessageAt: new Date().toISOString(), needsReply: true }).run();
+    db().insert(schema.alerts).values({ type: 'line_quota', dedupeKey: 'nav-count-alert', title: 'x', payload: {} }).run();
+    const after = navCounts();
+    expect(after.tasks).toBe(before.tasks + 1);
+    expect(after.inbox).toBe(before.inbox + 1);
+    expect(after.alerts).toBe(before.alerts + 1);
+  });
+});
