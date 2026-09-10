@@ -146,6 +146,8 @@ export const taskInputSchema = z.object({
   conversationId: z.number().int().optional().nullable(),
   status: z.enum(TASK_STATUSES).default('open'),
   followUpAt: z.string().datetime({ offset: true }).optional().nullable(),
+  /** 対応中のタスクの期日 */
+  dueAt: z.string().datetime({ offset: true }).optional().nullable(),
   note: z.string().optional().nullable(),
   syncToChatwork: z.boolean().default(false),
 });

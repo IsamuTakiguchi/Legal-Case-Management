@@ -29,6 +29,7 @@ export async function createTask(input: TaskInput): Promise<TaskRow> {
       status: input.status,
       waitingSince: waiting ? now : null,
       followUpAt: waiting ? (input.followUpAt ?? defaultFollowUp().toISOString()) : (input.followUpAt ?? null),
+      dueAt: input.dueAt ?? null,
     })
     .returning()
     .get();
@@ -61,6 +62,7 @@ export function updateTask(id: number, patch: Partial<TaskInput> & { status?: Ta
   }
   if (patch.conversationId !== undefined) set.conversationId = patch.conversationId ?? null;
   if (patch.followUpAt !== undefined) set.followUpAt = patch.followUpAt ?? null;
+  if (patch.dueAt !== undefined) set.dueAt = patch.dueAt ?? null;
   if (patch.status && patch.status !== cur.status) {
     set.status = patch.status;
     const waiting = patch.status === 'waiting_client' || patch.status === 'waiting_other';
