@@ -41,6 +41,11 @@ const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean; 
       { value: 'to_me', label: '自分宛だけ（To・返信 re・全員宛・ダイレクト・自分宛タスク）' },
     ],
   },
+  {
+    key: 'my_email_addresses',
+    label: '自分のメールアドレス（別名・他アカウント、カンマ区切り）',
+    hint: 'Gmail の送信者名に登録した別名や、事務所の別アドレスから送ったメールが「受信」として受信箱に入るのを防ぎます。Gmail のプロフィールと送信者名の別名は自動で判定に含めます',
+  },
   { key: 'lawyer_name', label: '弁護士名' },
   { key: 'office_name', label: '事務所名' },
   { key: 'office_location', label: '事務所所在地（カレンダーの場所欄）' },
@@ -118,6 +123,11 @@ export default function Settings() {
   const runJob = useMutation({ mutationFn: (name: string) => api.post<{ ok: boolean; summary?: string; error?: string }>(`/jobs/${name}/run`), onSuccess: () => qc.invalidateQueries({ queryKey: ['status'] }) });
   const disconnect = useMutation({ mutationFn: (p: string) => api.post(`/auth/${p}/disconnect`), onSuccess: () => qc.invalidateQueries({ queryKey: ['status'] }) });
   const [msg, setMsg] = useState('');
+  const refixOwn = useMutation({
+    mutationFn: () => api.post<{ fixed: number; conversations: number }>('/gmail/refix-own'),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['conversations'] }),
+    onError: (e) => setMsg((e as Error).message),
+  });
   const recategorize = useMutation({
     mutationFn: () => api.post<{ checked: number; updated: number; nonPrimary: number }>('/gmail/recategorize?all=1'),
     onSuccess: (r) => {
@@ -330,6 +340,17 @@ export default function Settings() {
                       <span>設定より前に取り込んだメールに区分を付け直します（Gmail に問い合わせるため、件数が多いと時間がかかります）</span>
                     </div>
                   )}
+                </>
+              ) : f.key === 'my_email_addresses' ? (
+                <>
+                  <input className="input" value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} placeholder="例: info@example.com, takiguchi@example.jp" />
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    <button type="button" className="btn btn-sm" onClick={() => refixOwn.mutate()} disabled={refixOwn.isPending}>
+                      {refixOwn.isPending ? '判定中…' : '取込済みの自分の送信を判定し直す'}
+                    </button>
+                    <span>保存後に押すと、これらのアドレスから送ったメールを受信箱の「受信」から「送信」に直します</span>
+                    {refixOwn.data && <span className="text-slate-700">{refixOwn.data.fixed} 件を送信に直しました（{refixOwn.data.conversations} 会話）</span>}
+                  </div>
                 </>
               ) : f.multiline ? (
                 <textarea className="input" rows={3} value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} />

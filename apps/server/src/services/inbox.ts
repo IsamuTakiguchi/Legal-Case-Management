@@ -362,3 +362,48 @@ export function repairConversationTimes(): number {
   }
   return fixed;
 }
+
+/**
+ * 自分のアドレス（別名・他アカウント）から送ったのに「受信」として取り込まれていたメールを「送信」に直し、
+ * 会話の要返信・未読・最終受信日時を計算し直す。設定「自分のメールアドレス」を変えたときと、設定画面のボタンから呼ぶ
+ */
+export function refixOwnMessages(myAddrs: string[]): { fixed: number; conversations: number } {
+  const d = db();
+  const addrs = new Set(myAddrs.map((a) => a.toLowerCase()));
+  if (!addrs.size) return { fixed: 0, conversations: 0 };
+  const wrong = d
+    .select()
+    .from(schema.messages)
+    .where(and(eq(schema.messages.channel, 'gmail'), eq(schema.messages.direction, 'in')))
+    .all()
+    .filter((m) => m.senderAddress && addrs.has(m.senderAddress.toLowerCase()));
+  const convIds = new Set<number>();
+  for (const m of wrong) {
+    d.update(schema.messages).set({ direction: 'out' }).where(eq(schema.messages.id, m.id)).run();
+    convIds.add(m.conversationId);
+  }
+  for (const id of convIds) {
+    const msgs = d.select().from(schema.messages).where(eq(schema.messages.conversationId, id)).orderBy(schema.messages.sentAt).all();
+    const last = msgs.at(-1);
+    const lastIn = [...msgs].reverse().find((m) => m.direction === 'in');
+    const lastOut = [...msgs].reverse().find((m) => m.direction === 'out');
+    d.update(schema.conversations)
+      .set({
+        lastInboundAt: lastIn?.sentAt ?? null,
+        lastOutboundAt: lastOut?.sentAt ?? null,
+        needsReply: !!last && last.direction === 'in',
+        unread: lastIn ? undefined : 0,
+      })
+      .where(eq(schema.conversations.id, id))
+      .run();
+    // 受信が無くなった会話の「未紐付けの連絡先」は消す
+    if (!lastIn) {
+      for (const a of d.select().from(schema.alerts).where(eq(schema.alerts.status, 'open')).all()) {
+        if (a.type === 'unlinked_contact' && (a.payload as { conversationId?: number }).conversationId === id) {
+          d.update(schema.alerts).set({ status: 'resolved', resolvedAt: new Date().toISOString() }).where(eq(schema.alerts.id, a.id)).run();
+        }
+      }
+    }
+  }
+  return { fixed: wrong.length, conversations: convIds.size };
+}

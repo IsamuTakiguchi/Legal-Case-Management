@@ -5,15 +5,51 @@ import { getSyncState, setSyncState, getSetting } from '../services/settings.js'
 import { logger } from '../logger.js';
 
 const KEY_HISTORY = 'gmail:historyId';
-const KEY_ADDR = 'gmail:myAddress';
+const KEY_ADDR = 'gmail:myAddresses';
 
-async function myAddresses(): Promise<string[]> {
+/** 設定「自分のメールアドレス」（別名・他アカウント）を小文字の配列にする */
+export function configuredMyAddresses(): string[] {
+  return (getSetting('my_email_addresses') || '')
+    .split(/[\s,、]+/)
+    .map((x) => x.trim().toLowerCase())
+    .filter((x) => x.includes('@'));
+}
+
+/**
+ * 自分の送信元とみなすアドレス: Gmail のプロフィール＋送信者名として登録した別名（send-as）＋設定で追加したもの。
+ * 別名や他のアカウントから送った控えが「受信」として取り込まれないようにする。1 日ごとに取り直す
+ */
+export async function myAddresses(opts: { refresh?: boolean } = {}): Promise<string[]> {
+  const extra = configuredMyAddresses();
   const cached = getSyncState(KEY_ADDR);
-  if (cached) return cached.split(',');
-  const p = await gmailApi().users.getProfile({ userId: 'me' });
-  const addr = (p.data.emailAddress ?? '').toLowerCase();
-  if (addr) setSyncState(KEY_ADDR, addr);
-  return [addr];
+  if (cached && !opts.refresh) {
+    try {
+      const j = JSON.parse(cached) as { addrs: string[]; at: string };
+      if (Date.now() - Date.parse(j.at) < 86400_000) return [...new Set([...j.addrs, ...extra])];
+    } catch {
+      /* 旧形式（アドレスのカンマ区切り）は作り直す */
+    }
+  }
+  const gmail = gmailApi();
+  const addrs = new Set<string>();
+  try {
+    const p = await gmail.users.getProfile({ userId: 'me' });
+    const addr = (p.data.emailAddress ?? '').toLowerCase();
+    if (addr) addrs.add(addr);
+  } catch (err) {
+    logger.warn({ err }, 'Gmail プロフィールの取得に失敗');
+  }
+  try {
+    const sa = await gmail.users.settings.sendAs.list({ userId: 'me' });
+    for (const x of sa.data.sendAs ?? []) {
+      const a = (x.sendAsEmail ?? '').toLowerCase();
+      if (a) addrs.add(a);
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Gmail の送信者名（別名）の取得に失敗（プロフィールのアドレスだけで判定します）');
+  }
+  if (addrs.size) setSyncState(KEY_ADDR, JSON.stringify({ addrs: [...addrs], at: new Date().toISOString() }));
+  return [...new Set([...addrs, ...extra])];
 }
 
 /**
