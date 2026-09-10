@@ -169,6 +169,22 @@ export async function setTaskStatus(roomId: number, taskId: number, status: 'ope
 }
 
 /** Chatwork 記法を読みやすいテキストに（[To:] [rp] [info] [download] など） */
+/** 本文の [rp aid=.. to=room-msgid] から返信先のメッセージ ID を取り出す */
+export function parseChatworkReplyTo(body: string): { accountId: number; messageId: string } | null {
+  const m = /\[rp aid=(\d+) to=\d+-(\d+)\]/.exec(body);
+  return m ? { accountId: Number(m[1]), messageId: m[2] } : null;
+}
+
+/** Chatwork の「返信」タグ（相手の名前つき） */
+export function chatworkReplyPrefix(roomId: number, target: { accountId: number; messageId: string }): string {
+  return `[rp aid=${target.accountId} to=${roomId}-${target.messageId}][pname:${target.accountId}]さん\n`;
+}
+
+/** Chatwork の「引用」ブロック */
+export function chatworkQuoteBlock(target: { accountId: number; sendTimeUnix: number; body: string }): string {
+  return `[qt][qtmeta aid=${target.accountId} time=${target.sendTimeUnix}]${target.body}[/qt]\n`;
+}
+
 export function stripChatworkMarkup(body: string): string {
   return body
     .replace(/\[To:\d+\]\s*[^\n]*?(さん)?/g, (m) => m.replace(/\[To:\d+\]/, '@'))
@@ -211,7 +227,7 @@ export function normalizeChatworkMessage(roomId: number, m: ChatworkMessage, myA
     body: stripChatworkMarkup(m.body),
     attachments: files.map((f) => ({ filename: f.filename, ref: { roomId, fileId: f.fileId } })),
     identity: { channel: 'chatwork', chatworkRoomId: roomId, chatworkAccountId: m.account.account_id, displayName: m.account.name },
-    raw: m as unknown as Record<string, unknown>,
+    raw: { ...(m as unknown as Record<string, unknown>), replyToExternalId: parseChatworkReplyTo(m.body)?.messageId ?? null },
   };
 }
 

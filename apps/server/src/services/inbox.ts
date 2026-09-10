@@ -251,6 +251,15 @@ export function ftsQuery(q: string): string {
   return terms.map((t) => `"${t}"`).join(' AND ');
 }
 
+/** 返信先のメッセージ（自分の送信は raw.replyToMessageId、Chatwork の受信は [rp] タグの message_id）を同じ会話から探す */
+function replyTargetOf(m: MessageRow, all: MessageRow[]): { id: number; senderName: string | null; direction: string; excerpt: string } | null {
+  const raw = (m.raw ?? {}) as { replyToMessageId?: number | null; replyToExternalId?: string | null };
+  const target = raw.replyToMessageId ? all.find((x) => x.id === raw.replyToMessageId) : raw.replyToExternalId ? all.find((x) => x.externalId === raw.replyToExternalId) : null;
+  if (!target) return null;
+  const excerpt = target.body.replace(/\s+/g, ' ').trim();
+  return { id: target.id, senderName: target.direction === 'out' ? null : target.senderName, direction: target.direction, excerpt: excerpt.length > 60 ? `${excerpt.slice(0, 60)}…` : excerpt };
+}
+
 export function getConversation(id: number) {
   const d = db();
   const conv = d.select().from(schema.conversations).where(eq(schema.conversations.id, id)).get();
@@ -274,6 +283,7 @@ export function getConversation(id: number) {
     messages: messages.map((m) => ({
       ...m,
       raw: undefined,
+      replyTo: replyTargetOf(m, messages),
       attachments: atts.filter((a) => a.messageId === m.id),
       clientName: m.clientId ? (msgClients.find((c) => c.id === m.clientId)?.name ?? null) : null,
       caseTitle: m.caseId ? (msgCases.find((c) => c.id === m.caseId)?.title ?? null) : null,

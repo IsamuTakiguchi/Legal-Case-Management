@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { adapterFor } from '../channels/registry.js';
-import { CHATWORK_FILE_LIMIT } from '../channels/chatwork.js';
+import { CHATWORK_FILE_LIMIT, chatworkReplyPrefix, chatworkQuoteBlock, stripChatworkMarkup } from '../channels/chatwork.js';
 import { storage } from '../integrations/storage.js';
 import { readClientFile } from './attachments.js';
 import { learnFromSent } from './style.js';
@@ -66,6 +66,29 @@ export async function sendToConversation(conversationId: number, input: SendMess
 
   let text = input.text;
   if (manualFiles.length) text += `\n\n${getSetting('line_manual_send_note')}（${manualFiles.join('、')}）`;
+  // 返信・引用: Chatwork はタグで、ほかのチャネルは引用文として本文に付ける
+  const replyTarget = input.replyToMessageId ? d.select().from(schema.messages).where(eq(schema.messages.id, input.replyToMessageId)).get() : null;
+  const quoteTarget = input.quoteMessageId ? d.select().from(schema.messages).where(eq(schema.messages.id, input.quoteMessageId)).get() : null;
+  if (input.replyToMessageId && (!replyTarget || replyTarget.conversationId !== conversationId)) throw new Error('返信先のメッセージがこの会話にありません');
+  if (input.quoteMessageId && (!quoteTarget || quoteTarget.conversationId !== conversationId)) throw new Error('引用するメッセージがこの会話にありません');
+  if (channel === 'chatwork') {
+    const roomId = Number(conv.externalThreadId);
+    const cwRaw = (m: typeof schema.messages.$inferSelect) => m.raw as { account?: { account_id?: number }; send_time?: number; message_id?: string } | null;
+    let prefix = '';
+    if (replyTarget) {
+      const r = cwRaw(replyTarget);
+      const aid = r?.account?.account_id ?? (replyTarget.senderAddress ? Number(replyTarget.senderAddress) : null);
+      if (aid) prefix += chatworkReplyPrefix(roomId, { accountId: aid, messageId: r?.message_id ?? replyTarget.externalId });
+    }
+    if (quoteTarget) {
+      const r = cwRaw(quoteTarget);
+      const aid = r?.account?.account_id ?? (quoteTarget.senderAddress ? Number(quoteTarget.senderAddress) : 0);
+      prefix += chatworkQuoteBlock({ accountId: aid || 0, sendTimeUnix: r?.send_time ?? Math.floor(new Date(quoteTarget.sentAt).getTime() / 1000), body: quoteTarget.body });
+    }
+    text = prefix + text;
+  } else if (quoteTarget) {
+    text = `${quoteTarget.body.split('\n').map((l) => `> ${l}`).join('\n')}\n\n${text}`;
+  }
 
   if (channel === 'line') assertLineQuota();
 
@@ -99,8 +122,9 @@ export async function sendToConversation(conversationId: number, input: SendMess
       sentAt: result.sentAt,
       senderName: getSetting('lawyer_name') || '自分',
       subject: conv.subject,
-      body: text,
+      body: channel === 'chatwork' ? stripChatworkMarkup(text) : text,
       attachments: [],
+      raw: { replyToMessageId: replyTarget?.id ?? null, quoteMessageId: quoteTarget?.id ?? null },
       identity: { channel, email: conv.counterpartAddress, lineUserId: channel === 'line' ? conv.externalThreadId : null, chatworkRoomId: channel === 'chatwork' ? Number(conv.externalThreadId) : null },
     },
     { processAttachments: false },
