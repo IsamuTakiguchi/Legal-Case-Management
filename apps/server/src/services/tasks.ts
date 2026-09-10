@@ -46,7 +46,19 @@ export function updateTask(id: number, patch: Partial<TaskInput> & { status?: Ta
   if (patch.title !== undefined) set.title = patch.title;
   if (patch.note !== undefined) set.note = patch.note ?? null;
   if (patch.clientId !== undefined) set.clientId = patch.clientId ?? null;
-  if (patch.caseId !== undefined) set.caseId = patch.caseId ?? null;
+  if (patch.caseId !== undefined) {
+    set.caseId = patch.caseId ?? null;
+    // 事件を指定したら、その事件の依頼者に合わせる（依頼者を別途指定していなければ）
+    if (patch.caseId && patch.clientId === undefined) {
+      const kase = db().select({ clientId: schema.cases.clientId }).from(schema.cases).where(eq(schema.cases.id, patch.caseId)).get();
+      if (kase) set.clientId = kase.clientId;
+    }
+  }
+  // 依頼者を変えたのに事件が別の依頼者のものなら外す
+  if (patch.clientId !== undefined && patch.caseId === undefined && cur.caseId) {
+    const kase = db().select({ clientId: schema.cases.clientId }).from(schema.cases).where(eq(schema.cases.id, cur.caseId)).get();
+    if (kase && kase.clientId !== (patch.clientId ?? null)) set.caseId = null;
+  }
   if (patch.conversationId !== undefined) set.conversationId = patch.conversationId ?? null;
   if (patch.followUpAt !== undefined) set.followUpAt = patch.followUpAt ?? null;
   if (patch.status && patch.status !== cur.status) {
