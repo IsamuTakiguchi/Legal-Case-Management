@@ -56,6 +56,7 @@ export default function Tasks() {
   const sort = useSort('tasks', TASK_SORTS, 'deadline');
   const rows = sort.apply(list.data ?? []);
   const [clientId, setClientId] = useState('');
+  const [caseId, setCaseId] = useState('');
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [msg, setMsg] = useState('');
   const refresh = () => qc.invalidateQueries({ queryKey: ['tasks'] });
@@ -77,7 +78,7 @@ export default function Tasks() {
     onError: (e) => setMsg((e as Error).message),
   });
   const create = useMutation({
-    mutationFn: () => api.post('/tasks', { title, status: newStatus, clientId: clientId ? Number(clientId) : null, syncToChatwork: sync }),
+    mutationFn: () => api.post('/tasks', { title, status: newStatus, clientId: clientId ? Number(clientId) : null, caseId: caseId ? Number(caseId) : null, syncToChatwork: sync }),
     onSuccess: () => {
       setTitle('');
       refresh();
@@ -119,7 +120,16 @@ export default function Tasks() {
         }}
       >
         <input className="input flex-1" placeholder="新しいタスク" value={title} onChange={(e) => setTitle(e.target.value)} required />
-        <ClientPicker value={clientId} onChange={setClientId} emptyLabel="依頼者なし" selectClassName="w-48" />
+        <ClientPicker
+          value={clientId}
+          onChange={(v) => {
+            setClientId(v);
+            setCaseId('');
+          }}
+          emptyLabel="依頼者なし"
+          selectClassName="w-48"
+        />
+        {clientId && <CaseSelect clientId={Number(clientId)} value={caseId} onChange={setCaseId} />}
         <select className="input w-auto" value={newStatus} onChange={(e) => setNewStatus(e.target.value as TaskStatus)}>
           {TASK_STATUSES.filter((s) => s !== 'done').map((s) => (
             <option key={s} value={s}>
@@ -206,18 +216,8 @@ export default function Tasks() {
                     {t.chatworkTaskId && <span className="badge badge-chatwork ml-1">CW</span>}
                     {t.note && <TaskNote text={t.note} />}
                   </td>
-                  <td className="max-w-[16rem] px-3 py-2">
-                    {t.clientId && (
-                      <Link to={`/clients/${t.clientId}`} className="block truncate text-[var(--accent)] hover:underline" title="依頼者ページを開く">
-                        {t.clientName}
-                      </Link>
-                    )}
-                    {t.caseId && (
-                      <Link to={`/cases/${t.caseId}`} className="block truncate text-xs text-slate-500 hover:text-[var(--accent)] hover:underline" title="事件ページを開く">
-                        <Icon name="scale" className="mr-0.5 inline h-3 w-3 align-[-1px]" />
-                        {t.caseTitle ?? '事件'}
-                      </Link>
-                    )}
+                  <td className="max-w-[18rem] px-3 py-2">
+                    <TaskLinks task={t} onSave={(patch) => update.mutate({ id: t.id, patch })} />
                   </td>
                   <td className="w-px whitespace-nowrap px-3 py-2 text-xs text-slate-600">
                     {t.waitingSince && <div>{fmtRelative(t.waitingSince)}から待ち</div>}
@@ -251,6 +251,86 @@ export default function Tasks() {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+/** 依頼者の事件を選ぶプルダウン（終了以外） */
+function CaseSelect({ clientId, value, onChange, className = 'w-56' }: { clientId: number; value: string; onChange: (v: string) => void; className?: string }) {
+  const cases = useQuery({ queryKey: ['cases', 'client', clientId, 'open'], queryFn: () => api.get<{ id: number; title: string }[]>(`/cases?clientId=${clientId}&status=open`) });
+  return (
+    <select className={`input ${className}`} value={value} onChange={(e) => onChange(e.target.value)} aria-label="事件">
+      <option value="">事件なし</option>
+      {cases.data?.map((k) => (
+        <option key={k.id} value={k.id}>
+          {k.title}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+/** 依頼者・事件へのリンクと、その場での紐付け変更 */
+function TaskLinks({ task, onSave }: { task: Task; onSave: (patch: { clientId: number | null; caseId: number | null }) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [clientId, setClientId] = useState(task.clientId ? String(task.clientId) : '');
+  const [caseId, setCaseId] = useState(task.caseId ? String(task.caseId) : '');
+  if (editing) {
+    return (
+      <div className="fade-in space-y-1">
+        <ClientPicker
+          value={clientId}
+          onChange={(v) => {
+            setClientId(v);
+            setCaseId('');
+          }}
+          emptyLabel="依頼者なし"
+          selectClassName="w-48"
+        />
+        {clientId && <CaseSelect clientId={Number(clientId)} value={caseId} onChange={setCaseId} className="w-48" />}
+        <div className="flex gap-1">
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={() => {
+              onSave({ clientId: clientId ? Number(clientId) : null, caseId: caseId ? Number(caseId) : null });
+              setEditing(false);
+            }}
+          >
+            紐付ける
+          </button>
+          <button className="btn btn-sm" onClick={() => setEditing(false)}>
+            やめる
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="group">
+      {task.clientId ? (
+        <Link to={`/clients/${task.clientId}`} className="block truncate text-[var(--accent)] hover:underline" title="依頼者ページを開く">
+          {task.clientName}
+        </Link>
+      ) : (
+        <span className="text-xs text-slate-400">依頼者なし</span>
+      )}
+      {task.caseId && (
+        <Link to={`/cases/${task.caseId}`} className="block truncate text-xs text-slate-500 hover:text-[var(--accent)] hover:underline" title="事件ページを開く">
+          <Icon name="scale" className="mr-0.5 inline h-3 w-3 align-[-1px]" />
+          {task.caseTitle ?? '事件'}
+        </Link>
+      )}
+      <button
+        type="button"
+        className="mt-0.5 text-[11px] text-slate-400 hover:text-[var(--accent)] hover:underline"
+        onClick={() => {
+          setClientId(task.clientId ? String(task.clientId) : '');
+          setCaseId(task.caseId ? String(task.caseId) : '');
+          setEditing(true);
+        }}
+      >
+        {task.clientId || task.caseId ? '紐付けを変更' : '依頼者・事件に紐付け'}
+      </button>
     </div>
   );
 }

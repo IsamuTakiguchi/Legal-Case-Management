@@ -1390,3 +1390,22 @@ describe('返信待ちの期限', () => {
     expect(updated.followUpAt).toBe(later2);
   });
 });
+
+describe('タスクの紐付け', () => {
+  it('事件を指定すると依頼者も合わせ、依頼者を別の人に変えると他人の事件は外れる', async () => {
+    const { createTask, updateTask } = await import('../services/tasks.js');
+    const a = db().insert(schema.clients).values({ name: '紐付け A', emails: [], aliases: [] }).returning().get();
+    const b = db().insert(schema.clients).values({ name: '紐付け B', emails: [], aliases: [] }).returning().get();
+    const ka = db().insert(schema.cases).values({ clientId: a.id, title: 'A の事件', caseType: 'general_civil', status: 'active' }).returning().get();
+    const t = await createTask({ title: '紐付けテスト', clientId: null, caseId: null, conversationId: null, status: 'open', followUpAt: null, note: null, syncToChatwork: false });
+    const t1 = updateTask(t.id, { caseId: ka.id });
+    expect(t1.caseId).toBe(ka.id);
+    expect(t1.clientId).toBe(a.id);
+    const t2 = updateTask(t.id, { clientId: b.id });
+    expect(t2.clientId).toBe(b.id);
+    expect(t2.caseId).toBeNull();
+    const t3 = updateTask(t.id, { clientId: a.id, caseId: ka.id });
+    expect(t3.clientId).toBe(a.id);
+    expect(t3.caseId).toBe(ka.id);
+  });
+});
