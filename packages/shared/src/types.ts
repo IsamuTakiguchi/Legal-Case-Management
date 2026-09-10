@@ -39,6 +39,7 @@ export const ALERT_TYPES = [
   'line_quota',
   'creditor_overdue',
   'scheduled_send_failed',
+  'line_followed',
 ] as const;
 export type AlertType = (typeof ALERT_TYPES)[number];
 export const ALERT_TYPE_LABEL: Record<AlertType, string> = {
@@ -51,6 +52,7 @@ export const ALERT_TYPE_LABEL: Record<AlertType, string> = {
   line_quota: 'LINE 通数が上限に接近',
   creditor_overdue: '債権者対応の期限超過',
   scheduled_send_failed: '送信予約が失敗',
+  line_followed: 'LINE 友だち追加（依頼者に紐付け）',
 };
 
 export const ATTACHMENT_STATUSES = ['pending', 'stored', 'unassigned', 'failed'] as const;

@@ -400,6 +400,19 @@ export const apiUsage = sqliteTable(
   (t) => [index('api_usage_created').on(t.createdAt)],
 );
 
+/** LINE公式の友だち（友だち追加イベント・友だち一覧 API・受信から蓄積）。依頼者への紐付けを一覧から選べるようにする */
+export const lineFriends = sqliteTable('line_friends', {
+  userId: text('user_id').primaryKey(),
+  displayName: text('display_name'),
+  pictureUrl: text('picture_url'),
+  followedAt: text('followed_at'),
+  unfollowedAt: text('unfollowed_at'),
+  lastSeenAt: text('last_seen_at'),
+  source: text('source').notNull().default('follow'), // follow | followers_api | message | conversation
+  createdAt: text('created_at').notNull().default(now()),
+  updatedAt: text('updated_at').notNull().default(now()),
+});
+
 export const syncState = sqliteTable('sync_state', {
   key: text('key').primaryKey(),
   value: text('value').notNull(),
