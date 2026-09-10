@@ -24,6 +24,7 @@ import { refreshStyleProfiles } from '../services/style.js';
 import { runDueScheduled, recoverStuckScheduled } from '../services/scheduledSend.js';
 import { refreshUnlinkedAlerts } from '../services/identity.js';
 import { repairConversationTimes } from '../services/inbox.js';
+import { backfillLineFriends } from '../services/lineFriends.js';
 
 export interface JobDef {
   name: string;
@@ -117,6 +118,16 @@ export function startJobs() {
       if (n) logger.info({ n }, '未紐付けの警告を新しい表示に作り直しました');
     } catch (err) {
       logger.warn({ err }, '未紐付けの警告の作り直しに失敗');
+    }
+  }
+  // 一度だけの後始末: 既存の LINE 会話・依頼者から友だち一覧を作る
+  if (!getSyncState('cleanup:line_friends')) {
+    try {
+      const n = backfillLineFriends();
+      setSyncState('cleanup:line_friends', new Date().toISOString());
+      if (n) logger.info({ n }, 'LINE の友だち一覧を既存データから作りました');
+    } catch (err) {
+      logger.warn({ err }, 'LINE の友だち一覧の作成に失敗');
     }
   }
   // 一度だけの後始末: 過去分の取り込みで巻き戻っていた会話の最終日時を直す

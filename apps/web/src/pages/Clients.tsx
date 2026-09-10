@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
+import { LineFriendPicker } from '../lib/LineFriendPicker';
 import { CHANNEL_LABEL } from '@lcm/shared';
 import { useSort, readingKey, SortHeader, type SortOption } from '../lib/sort';
 
@@ -91,7 +92,7 @@ export default function Clients() {
         </div>
       )}
       {showImport && <BulkImport onDone={() => { setShowImport(false); qc.invalidateQueries({ queryKey: ['clients'] }); }} />}
-      {showNew && <ClientForm initial={{ name: params.get('new') ?? '', emails: params.get('email') ? [params.get('email')!] : [] }} onSubmit={(b) => create.mutate(b)} onCancel={() => setShowNew(false)} busy={create.isPending} />}
+      {showNew && <ClientForm initial={{ name: params.get('new') ?? '', emails: params.get('email') ? [params.get('email')!] : [], lineUserId: params.get('line') || null, ...(params.get('line') ? { preferredChannel: 'line' } : {}) }} onSubmit={(b) => create.mutate(b)} onCancel={() => setShowNew(false)} busy={create.isPending} />}
       <div className="card p-0">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-left text-xs text-slate-500">
@@ -176,8 +177,8 @@ export function ClientForm({ initial, onSubmit, onCancel, busy }: { initial: Par
         <input className="input" type="number" value={f.chatworkRoomId ?? ''} onChange={(e) => set('chatworkRoomId', e.target.value ? Number(e.target.value) : null)} />
       </div>
       <div>
-        <label className="label">LINE ユーザー ID（通常は受信時に自動紐付け）</label>
-        <input className="input" value={f.lineUserId ?? ''} onChange={(e) => set('lineUserId', e.target.value || null)} />
+        <label className="label">LINE公式の友だち（一覧から選ぶ。受信があれば自動でも紐付きます）</label>
+        <LineFriendPicker value={f.lineUserId ?? null} onChange={(v) => set('lineUserId', v)} clientId={f.id ?? null} />
       </div>
       <div>
         <label className="label">依頼者フォルダ（OneDrive の依頼者ルート配下。空なら氏名と同名）</label>

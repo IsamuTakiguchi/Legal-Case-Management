@@ -102,6 +102,28 @@ export function normalizeLineEvent(ev: LineEvent): InboundMessage | null {
   };
 }
 
+/**
+ * 友だち（フォロワー）のユーザー ID 一覧。LINE の仕様上、認証済アカウントまたはプレミアムアカウントでのみ使える。
+ * 使えないアカウントでは ok: false と理由を返す
+ */
+export async function getLineFollowerIds(): Promise<{ ok: true; userIds: string[] } | { ok: false; reason: string }> {
+  const userIds: string[] = [];
+  let start: string | undefined;
+  for (let i = 0; i < 50; i++) {
+    const url = `${API}/followers/ids?limit=1000${start ? `&start=${encodeURIComponent(start)}` : ''}`;
+    const res = await fetch(url, { headers: await authHeaders() });
+    if (res.status === 403 || res.status === 404) {
+      return { ok: false, reason: '友だち一覧の取得は、LINE の仕様で「認証済アカウント」または「プレミアムアカウント」でのみ使えます。未認証の場合は、依頼者に一度メッセージを送ってもらうか、友だち追加の通知（要確認）から紐付けてください。' };
+    }
+    if (!res.ok) return { ok: false, reason: `LINE API エラー ${res.status}` };
+    const j = (await res.json()) as { userIds: string[]; next?: string };
+    userIds.push(...(j.userIds ?? []));
+    if (!j.next) break;
+    start = j.next;
+  }
+  return { ok: true, userIds };
+}
+
 export async function getLineProfile(userId: string): Promise<{ displayName: string; pictureUrl?: string } | null> {
   const res = await fetch(`${API}/profile/${encodeURIComponent(userId)}`, { headers: await authHeaders() });
   if (!res.ok) {

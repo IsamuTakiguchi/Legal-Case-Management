@@ -59,6 +59,7 @@ export default function Alerts() {
                 <div className="mt-2">
                   {type === 'unlinked_contact' && <LinkAction alert={a} onLink={(clientId) => link.mutate({ conversationId: Number(a.payload.conversationId), clientId })} onContactLinked={refresh} />}
                   {type === 'unassigned_file' && <LinkAction alert={a} label="このファイルの依頼者" onLink={(clientId) => assign.mutate({ attachmentId: Number(a.payload.attachmentId), clientId })} />}
+                  {type === 'line_followed' && <LineFollowAction alert={a} onDone={refresh} />}
                   {type === 'next_hearing_missing' && <NextHearing alert={a} onDone={refresh} />}
                   {(type === 'waiting_overdue' || type === 'reply_received' || type === 'scheduling_stale') && a.payload.conversationId ? (
                     <Link to={`/inbox/${a.payload.conversationId}`} className="btn btn-sm">
@@ -104,6 +105,29 @@ function UnlinkedHeader({ alert }: { alert: Alert }) {
         {p.sentAt && <span className="ml-2 whitespace-nowrap text-xs text-slate-400">{fmtDateTime(p.sentAt)} 受信</span>}
       </div>
       <div className="text-xs text-slate-500">依頼者か事件の関係者に紐付けると、以後の受信と添付ファイルが自動で振り分けられます。</div>
+    </div>
+  );
+}
+
+/** LINE 友だち追加: まだメッセージが無くても、名前を見て依頼者に紐付ける */
+function LineFollowAction({ alert, onDone }: { alert: Alert; onDone: () => void }) {
+  const [id, setId] = useState('');
+  const [err, setErr] = useState('');
+  const userId = String(alert.payload.lineUserId ?? '');
+  const name = String(alert.payload.displayName ?? '');
+  const link = useMutation({ mutationFn: () => api.post(`/line/friends/${encodeURIComponent(userId)}/link`, { clientId: Number(id) }), onSuccess: onDone, onError: (e) => setErr((e as Error).message) });
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <ClientPicker value={id} onChange={setId} emptyLabel="依頼者に紐付け…" />
+        <button className="btn btn-primary btn-sm" disabled={!id || link.isPending} onClick={() => link.mutate()}>
+          紐付ける
+        </button>
+        <Link to={`/clients?new=${encodeURIComponent(name)}&line=${encodeURIComponent(userId)}`} className="btn btn-sm">
+          新規依頼者として登録
+        </Link>
+      </div>
+      {err && <div className="fade-in text-xs text-red-600">{err}</div>}
     </div>
   );
 }

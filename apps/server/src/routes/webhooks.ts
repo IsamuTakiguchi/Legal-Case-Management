@@ -4,6 +4,7 @@ import { verifyChatworkSignature, type ChatworkWebhookBody } from '../channels/c
 import { ingestChatworkWebhook } from '../jobs/chatworkPoll.js';
 import { ingestMessage } from '../services/inbox.js';
 import { cleanDisplayName } from '../services/identity.js';
+import { upsertLineFriend, markLineUnfollowed, raiseLineFollowed } from '../services/lineFriends.js';
 import { logger } from '../logger.js';
 import { db, schema } from '../db/index.js';
 import { eq, and } from 'drizzle-orm';
@@ -34,8 +35,15 @@ webhookRoutes.post('/line', async (c) => {
       for (const ev of events) {
         try {
           if (ev.type === 'follow' && ev.source?.userId) {
-            const p = await getLineProfile(ev.source.userId);
+            const p = await getLineProfile(ev.source.userId).catch(() => null);
             logger.info({ userId: ev.source.userId, name: p?.displayName }, 'LINE 友だち追加');
+            upsertLineFriend({ userId: ev.source.userId, displayName: p?.displayName ?? null, pictureUrl: p?.pictureUrl ?? null, source: 'follow' });
+            raiseLineFollowed(ev.source.userId, p?.displayName ?? null);
+            continue;
+          }
+          if (ev.type === 'unfollow' && ev.source?.userId) {
+            markLineUnfollowed(ev.source.userId);
+            logger.info({ userId: ev.source.userId }, 'LINE ブロック／友だち解除');
             continue;
           }
           const norm = normalizeLineEvent(ev);
@@ -56,6 +64,7 @@ webhookRoutes.post('/line', async (c) => {
               norm.senderName = known;
               norm.identity.displayName = known;
             }
+            upsertLineFriend({ userId, displayName: norm.senderName, source: 'message' });
           }
           await ingestMessage(norm);
         } catch (err) {

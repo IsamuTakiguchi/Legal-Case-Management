@@ -17,6 +17,8 @@ import { listContacts, createContact, updateContact, deleteContact, contactBrief
 import { prepareHearingNotice } from '../services/hearingNotice.js';
 import { joinPath } from '../integrations/onedrive.js';
 
+import { listLineFriends, syncLineFollowers, linkLineFriendToClient, assertLineFriendFree } from '../services/lineFriends.js';
+
 export const clientRoutes = new Hono();
 
 // ---- 依頼者 ----
@@ -30,8 +32,11 @@ clientRoutes.get('/clients', (c) => {
 
 clientRoutes.post('/clients', async (c) => {
   const input = clientInputSchema.parse(await c.req.json());
+  if (input.lineUserId) assertLineFriendFree(input.lineUserId, null);
   const row = db().insert(schema.clients).values({ ...input, emails: input.emails.map((e) => e.toLowerCase()) }).returning().get();
-  return c.json(row);
+  // LINE の友だちを選んで登録したら、既存の会話を付け、友だち追加の通知を消す
+  if (input.lineUserId) linkLineFriendToClient(input.lineUserId, row.id);
+  return c.json(db().select().from(schema.clients).where(eq(schema.clients.id, row.id)).get());
 });
 
 clientRoutes.get('/clients/:id', (c) => {
@@ -47,13 +52,27 @@ clientRoutes.get('/clients/:id', (c) => {
   return c.json({ ...row, cases, conversations, tasks, events, folder: clientFolder(row) });
 });
 
+/** LINE の友だち一覧（依頼者に紐付けるための候補） */
+clientRoutes.get('/line/friends', (c) => c.json(listLineFriends({ unlinkedOnly: c.req.query('unlinked') === '1' })));
+
+/** 友だち一覧 API から取り込む（認証済／プレミアムアカウントのみ） */
+clientRoutes.post('/line/friends/sync', async (c) => c.json(await syncLineFollowers()));
+
+/** 友だちを依頼者に紐付ける */
+clientRoutes.post('/line/friends/:userId/link', async (c) => {
+  const body = z.object({ clientId: z.number().int() }).parse(await c.req.json());
+  return c.json(linkLineFriendToClient(c.req.param('userId'), body.clientId));
+});
+
 clientRoutes.put('/clients/:id', async (c) => {
   const id = Number(c.req.param('id'));
   const input = clientInputSchema.partial().parse(await c.req.json());
+  if (input.lineUserId) assertLineFriendFree(input.lineUserId, id);
   db().update(schema.clients)
     .set({ ...input, ...(input.emails ? { emails: input.emails.map((e) => e.toLowerCase()) } : {}), updatedAt: new Date().toISOString() })
     .where(eq(schema.clients.id, id))
     .run();
+  if (input.lineUserId) linkLineFriendToClient(input.lineUserId, id);
   return c.json(db().select().from(schema.clients).where(eq(schema.clients.id, id)).get());
 });
 

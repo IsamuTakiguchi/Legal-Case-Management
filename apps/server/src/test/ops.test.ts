@@ -1418,3 +1418,64 @@ describe('タスクの紐付け', () => {
     expect(t3.caseId).toBe(ka.id);
   });
 });
+
+describe('LINE の友だちからの紐付け', () => {
+  it('友だち追加で要確認に出て、一覧から依頼者に紐付けられ、既存の会話も付く', async () => {
+    const { upsertLineFriend, raiseLineFollowed, listLineFriends, linkLineFriendToClient, markLineUnfollowed, backfillLineFriends } = await import('../services/lineFriends.js');
+    const { ingestMessage } = await import('../services/inbox.js');
+    // 友だち追加（まだメッセージなし）
+    upsertLineFriend({ userId: 'Ufriend000000000000000000000000001', displayName: '友だち 一郎', pictureUrl: null, source: 'follow' });
+    raiseLineFollowed('Ufriend000000000000000000000000001', '友だち 一郎');
+    const alert = db().select().from(schema.alerts).all().find((a) => a.dedupeKey === 'line_followed:Ufriend000000000000000000000000001')!;
+    expect(alert.type).toBe('line_followed');
+    expect(alert.title).toBe('LINE 友だち追加: 友だち 一郎');
+    const list = listLineFriends({ unlinkedOnly: true });
+    const f = list.find((x) => x.userId === 'Ufriend000000000000000000000000001')!;
+    expect(f.displayName).toBe('友だち 一郎');
+    expect(f.client).toBeNull();
+    expect(f.conversationId).toBeNull();
+    // 依頼者に紐付け → 依頼者の lineUserId が入り、通知が消える
+    const client = db().insert(schema.clients).values({ name: '友だち 一郎', emails: [], aliases: [] }).returning().get();
+    linkLineFriendToClient('Ufriend000000000000000000000000001', client.id);
+    expect(db().select().from(schema.clients).where(eq(schema.clients.id, client.id)).get()!.lineUserId).toBe('Ufriend000000000000000000000000001');
+    expect(db().select().from(schema.alerts).where(eq(schema.alerts.id, alert.id)).get()!.status).toBe('resolved');
+    expect(listLineFriends({ unlinkedOnly: true }).some((x) => x.userId === 'Ufriend000000000000000000000000001')).toBe(false);
+    // 紐付け後に届いた LINE は最初から依頼者の会話になる
+    const r = await ingestMessage({ channel: 'line', externalThreadId: 'Ufriend000000000000000000000000001', externalId: 'friend-msg-1', direction: 'in', sentAt: new Date().toISOString(), senderName: '友だち 一郎', body: 'はじめまして', attachments: [], identity: { channel: 'line', lineUserId: 'Ufriend000000000000000000000000001', displayName: '友だち 一郎' } });
+    expect(r.conversation.clientId).toBe(client.id);
+    // 別の依頼者には付けられない
+    const other = db().insert(schema.clients).values({ name: '別の 人', emails: [], aliases: [] }).returning().get();
+    expect(() => linkLineFriendToClient('Ufriend000000000000000000000000001', other.id)).toThrow(/すでに/);
+    // 先に会話がある相手を紐付けると会話も依頼者に付く
+    const r2 = await ingestMessage({ channel: 'line', externalThreadId: 'Ufriend000000000000000000000000002', externalId: 'friend-msg-2', direction: 'in', sentAt: new Date().toISOString(), senderName: '友だち 二郎', body: 'こんにちは', attachments: [], identity: { channel: 'line', lineUserId: 'Ufriend000000000000000000000000002', displayName: '友だち 二郎' } });
+    expect(r2.conversation.clientId).toBeNull();
+    expect(backfillLineFriends()).toBeGreaterThanOrEqual(1);
+    const f2 = listLineFriends({ unlinkedOnly: true }).find((x) => x.userId === 'Ufriend000000000000000000000000002')!;
+    expect(f2.displayName).toBe('友だち 二郎');
+    expect(f2.conversationId).toBe(r2.conversation.id);
+    const c2 = db().insert(schema.clients).values({ name: '友だち 二郎', emails: [], aliases: [] }).returning().get();
+    const linked = linkLineFriendToClient('Ufriend000000000000000000000000002', c2.id);
+    expect(linked.conversationId).toBe(r2.conversation.id);
+    expect(db().select().from(schema.conversations).where(eq(schema.conversations.id, r2.conversation.id)).get()!.clientId).toBe(c2.id);
+    // ブロックされたら一覧から消える
+    markLineUnfollowed('Ufriend000000000000000000000000002');
+    expect(listLineFriends().some((x) => x.userId === 'Ufriend000000000000000000000000002')).toBe(false);
+    // 依頼者の新規登録画面で友だちを選んでも、通知が消え、既存の会話が付く
+    const app = createApp();
+    const { setPassword } = await import('../auth/index.js');
+    setPassword('line-friend-test');
+    const login = await app.request('/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'line-friend-test' }) });
+    const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+    upsertLineFriend({ userId: 'Ufriend000000000000000000000000003', displayName: '友だち 三郎', source: 'follow' });
+    raiseLineFollowed('Ufriend000000000000000000000000003', '友だち 三郎');
+    const res = await app.request('/api/clients', { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ name: '友だち 三郎', lineUserId: 'Ufriend000000000000000000000000003' }) });
+    expect(res.status).toBe(200);
+    const made = (await res.json()) as { id: number; lineUserId: string };
+    expect(made.lineUserId).toBe('Ufriend000000000000000000000000003');
+    expect(db().select().from(schema.alerts).all().find((a) => a.dedupeKey === 'line_followed:Ufriend000000000000000000000000003')!.status).toBe('resolved');
+    // 同じ友だちを別の依頼者に付けようとすると 400 系で断られる
+    const dup = await app.request('/api/clients', { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ name: '重複', lineUserId: 'Ufriend000000000000000000000000003' }) });
+    expect(dup.status).toBeGreaterThanOrEqual(400);
+    expect(db().select().from(schema.clients).all().some((c) => c.name === '重複')).toBe(false);
+  });
+});
