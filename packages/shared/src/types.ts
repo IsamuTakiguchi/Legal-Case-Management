@@ -116,6 +116,10 @@ export const sendMessageSchema = z.object({
     .default([]),
   draftId: z.number().int().optional().nullable(),
   createWaitingTask: z.boolean().default(false),
+  /** このメッセージへの返信として送る（Chatwork は [rp] タグ、ほかは表示上の結び付き） */
+  replyToMessageId: z.number().int().optional().nullable(),
+  /** このメッセージを引用して送る（Chatwork は [qt] タグ、ほかは「> 」付きの引用文） */
+  quoteMessageId: z.number().int().optional().nullable(),
   /** 返信待ちタスクの期限（いつまで待つか）。省略時は設定の営業日数 */
   waitingFollowUpAt: z.string().datetime({ offset: true }).optional().nullable(),
   /** 指定すると今は送らず、この時刻（ISO 8601）に送る */

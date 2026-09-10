@@ -23,6 +23,8 @@ interface Message {
   body: string;
   sentAt: string;
   attachments: Attachment[];
+  /** 返信先（Chatwork の返信タグ、または自分の送信時に選んだ返信先） */
+  replyTo?: { id: number; senderName: string | null; direction: string; excerpt: string } | null;
   clientId?: number | null;
   caseId?: number | null;
   clientName?: string | null;
@@ -93,6 +95,9 @@ export default function Conversation() {
   const [draftId, setDraftId] = useState<number | null>(null);
   const [createWaiting, setCreateWaiting] = useState(false);
   const [waitUntil, setWaitUntil] = useState<string | null>(null);
+  // 返信・引用の対象（会話のメッセージから選ぶ）
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [quoteOf, setQuoteOf] = useState<Message | null>(null);
   const [showTimer, setShowTimer] = useState(false);
   const [sendAt, setSendAt] = useState('');
   const [selectedAtt, setSelectedAtt] = useState<number[]>([]);
@@ -137,6 +142,8 @@ export default function Conversation() {
         draftId,
         createWaitingTask: createWaiting,
         waitingFollowUpAt: createWaiting ? waitUntil : null,
+        replyToMessageId: replyTo?.id ?? null,
+        quoteMessageId: quoteOf?.id ?? null,
         scheduledAt: scheduledAt ?? null,
       }),
     onSuccess: (r) => {
@@ -146,6 +153,8 @@ export default function Conversation() {
       setDriveFiles([]);
       setCreateWaiting(false);
       setWaitUntil(null);
+      setReplyTo(null);
+      setQuoteOf(null);
       setShowTimer(false);
       setSendAt('');
       if (r.scheduled) {
@@ -344,12 +353,32 @@ export default function Conversation() {
                   <span className="h-px flex-1 bg-orange-200" />
                 </div>
               )}
-            <div className={`flex ${m.direction === 'out' ? 'justify-end' : 'justify-start'}`}>
+            <div id={`msg-${m.id}`} className={`flex ${m.direction === 'out' ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${m.direction === 'out' ? 'bg-blue-600 text-white' : 'bg-slate-100'}`}>
                 <div className={`mb-1 text-xs ${m.direction === 'out' ? 'text-blue-100' : 'text-slate-500'}`}>
                   {m.direction === 'out' ? '自分' : (m.senderName ?? name)} ・ {fmtDateTime(m.sentAt)}
                 </div>
+                {m.replyTo && (
+                  <button
+                    type="button"
+                    className={`mb-1 block max-w-full truncate rounded-md border-l-2 px-2 py-0.5 text-left text-xs ${m.direction === 'out' ? 'border-blue-200 bg-white/10 text-blue-100' : 'border-slate-300 bg-white/70 text-slate-500'}`}
+                    title="返信先へ移動"
+                    onClick={() => document.getElementById(`msg-${m.replyTo!.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+                  >
+                    ↩ {m.replyTo.direction === 'out' ? '自分' : (m.replyTo.senderName ?? name)}: {m.replyTo.excerpt}
+                  </button>
+                )}
                 <div className="whitespace-pre-wrap break-words">{m.body}</div>
+                <div className={`mt-1 flex flex-wrap gap-2 text-[11px] ${m.direction === 'out' ? 'text-blue-100' : 'text-slate-500'}`}>
+                  {c.channel === 'chatwork' && (
+                    <button type="button" className="hover:underline" onClick={() => setReplyTo(m)} title="このメッセージへの返信として送ります（Chatwork の返信タグ付き）">
+                      ↩ 返信
+                    </button>
+                  )}
+                  <button type="button" className="hover:underline" onClick={() => setQuoteOf(m)} title={c.channel === 'chatwork' ? 'Chatwork の引用として本文に付けます' : '「> 」付きの引用文として本文に付けます'}>
+                    ❝ 引用
+                  </button>
+                </div>
                 {c.channel === 'chatwork' && m.direction === 'in' && <MessageTools m={m} onChanged={invalidate} />}
                 {m.attachments.length > 0 && (
                   <ul className="mt-1 space-y-0.5">
@@ -390,6 +419,30 @@ export default function Conversation() {
         {c.scheduled.length > 0 && <ScheduledList items={c.scheduled} onChanged={invalidate} />}
 
         <div className="card space-y-3">
+          {(replyTo || quoteOf) && (
+            <div className="fade-in space-y-1 text-xs">
+              {replyTo && (
+                <div className="flex items-center gap-2 rounded-[8px] border-l-2 border-[var(--accent)] bg-[var(--accent-soft)] px-2.5 py-1.5">
+                  <span className="min-w-0 flex-1 truncate">
+                    ↩ <b>{replyTo.direction === 'out' ? '自分' : (replyTo.senderName ?? name)}</b> への返信: {replyTo.body.replace(/\s+/g, ' ').slice(0, 80)}
+                  </span>
+                  <button type="button" className="text-slate-500 hover:text-red-600" onClick={() => setReplyTo(null)} aria-label="返信をやめる">
+                    ×
+                  </button>
+                </div>
+              )}
+              {quoteOf && (
+                <div className="flex items-center gap-2 rounded-[8px] border-l-2 border-slate-300 bg-black/[0.03] px-2.5 py-1.5">
+                  <span className="min-w-0 flex-1 truncate">
+                    ❝ <b>{quoteOf.direction === 'out' ? '自分' : (quoteOf.senderName ?? name)}</b> を引用: {quoteOf.body.replace(/\s+/g, ' ').slice(0, 80)}
+                  </span>
+                  <button type="button" className="text-slate-500 hover:text-red-600" onClick={() => setQuoteOf(null)} aria-label="引用をやめる">
+                    ×
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             <input className="input flex-1" placeholder="AI への指示（例: 来週火曜14時で確定と返す／資料の受領を伝えて次回期日を案内）" value={instruction} onChange={(e) => setInstruction(e.target.value)} />
             <select className="input w-auto" value={templateKey} onChange={(e) => setTemplateKey(e.target.value)}>

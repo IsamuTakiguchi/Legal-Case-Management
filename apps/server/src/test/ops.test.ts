@@ -1507,3 +1507,36 @@ describe('自分の送信の判定', () => {
     setSetting('my_email_addresses', '');
   });
 });
+
+describe('Chatwork の返信・引用', () => {
+  it('返信は [rp] タグ、引用は [qt] タグを付けて送り、会話には返信先が結び付いて表示される', async () => {
+    const { parseChatworkReplyTo, chatworkReplyPrefix, chatworkQuoteBlock, normalizeChatworkMessage } = await import('../channels/chatwork.js');
+    const { sendToConversation } = await import('../services/send.js');
+    const { ingestMessage, getConversation } = await import('../services/inbox.js');
+    const { setAdapter } = await import('../channels/registry.js');
+    expect(parseChatworkReplyTo('[rp aid=123 to=555-999][pname:123]さん\n了解です')).toEqual({ accountId: 123, messageId: '999' });
+    expect(chatworkReplyPrefix(555, { accountId: 123, messageId: '999' })).toBe('[rp aid=123 to=555-999][pname:123]さん\n');
+    expect(chatworkQuoteBlock({ accountId: 123, sendTimeUnix: 1700000000, body: '見積です' })).toBe('[qt][qtmeta aid=123 time=1700000000]見積です[/qt]\n');
+    const sent: string[] = [];
+    setAdapter('chatwork', { channel: 'chatwork', isConfigured: () => true, fetchAttachment: async () => Buffer.from(''), send: async (m) => { sent.push(m.text); return { externalId: `90000${sent.length}`, externalThreadId: '777001', sentAt: new Date().toISOString() }; } });
+    // 相手の発言（Chatwork の生データ付き）
+    const norm = normalizeChatworkMessage(777001, { message_id: '424242', account: { account_id: 4242, name: '事務 花子' }, body: '見積を送りました', send_time: 1700000000, update_time: 0 } as never, 1);
+    const r = await ingestMessage(norm);
+    // 返信＋引用で送信
+    await sendToConversation(r.conversation.id, { text: '確認しました', attachmentIds: [], driveFiles: [], draftId: null, createWaitingTask: false, replyToMessageId: r.message.id, quoteMessageId: r.message.id });
+    expect(sent[0]).toBe('[rp aid=4242 to=777001-424242][pname:4242]さん\n[qt][qtmeta aid=4242 time=1700000000]見積を送りました[/qt]\n確認しました');
+    const conv = getConversation(r.conversation.id)!;
+    const mine = conv.messages.find((m) => m.direction === 'out')!;
+    expect(mine.replyTo?.id).toBe(r.message.id);
+    expect(mine.replyTo?.excerpt).toBe('見積を送りました');
+    expect(mine.body).not.toContain('[rp');
+    // 相手からの返信（[rp] タグ）も返信先が結び付く
+    const norm2 = normalizeChatworkMessage(777001, { message_id: '424243', account: { account_id: 4242, name: '事務 花子' }, body: '[rp aid=1 to=777001-900001][pname:1]さん\nありがとうございます', send_time: 1700000100, update_time: 0 } as never, 1);
+    const r2 = await ingestMessage(norm2);
+    const conv2 = getConversation(r.conversation.id)!;
+    const reply = conv2.messages.find((m) => m.id === r2.message.id)!;
+    expect(reply.replyTo?.id).toBe(mine.id);
+    // 別の会話のメッセージは返信先にできない
+    await expect(sendToConversation(r.conversation.id, { text: 'x', attachmentIds: [], driveFiles: [], draftId: null, createWaitingTask: false, replyToMessageId: 999999 })).rejects.toThrow();
+  });
+});
