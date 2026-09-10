@@ -48,6 +48,8 @@ http://www.noboriohji.com/access/`,
   client_folder_name_format: '',
   /** Gmail の取込範囲: all（すべて）| primary（受信トレイの「メイン」タブだけ。プロモーション・ソーシャル・新着・フォーラムは除外） */
   gmail_categories: 'all',
+  /** 自分の送信元とみなすメールアドレス（別名・他アカウント。カンマ区切り）。ここからのメールは受信ではなく送信として扱う */
+  my_email_addresses: '',
   /** Chatwork の取込範囲: all（参加ルームの全メッセージ）| to_me（自分宛の To・自分への返信 re・全員宛・ダイレクト・自分に振られたタスクのメッセージだけ） */
   chatwork_scope: 'all',
   /** Google でログインできるメールアドレス（カンマ／改行区切り）。空なら「Google に接続」したアカウント */

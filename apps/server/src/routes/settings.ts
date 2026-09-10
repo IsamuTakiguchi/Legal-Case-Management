@@ -8,6 +8,8 @@ import { isMsConnected, msAccount } from '../integrations/onedrive.js';
 import { lineQuotaStatus } from '../services/lineQuota.js';
 import { JOBS, runJob, jobStatus } from '../jobs/index.js';
 import { usageSummary } from '../services/apiCost.js';
+import { myAddresses, configuredMyAddresses } from '../jobs/gmailPoll.js';
+import { refixOwnMessages } from '../services/inbox.js';
 import { generateStyleProfile, getStyleProfile, saveStyleProfile, importGmailSent, importChatworkMine, importPlainText, styleStats } from '../services/style.js';
 import { storage } from '../integrations/storage.js';
 import { channelSchema } from '@lcm/shared';
@@ -42,12 +44,23 @@ settingsRoutes.put('/settings', async (c) => {
     if (!EDITABLE.includes(k)) continue;
     setSetting(k, v);
   }
+  // 自分のアドレスを追加したら、そのアドレスからの「受信」を送信に直す
+  if (body.my_email_addresses !== undefined && body.my_email_addresses !== before.my_email_addresses) {
+    setImmediate(() => refixOwnMessagesNow().catch((err) => logger.warn({ err }, '自分の送信の判定し直しに失敗')));
+  }
   // 「メインだけ」に切り替えたら、区分の無い取込済み会話を裏で判定し直す
   if (body.gmail_categories === 'primary' && before.gmail_categories !== 'primary') {
     setImmediate(() => recategorizeConversations().catch((err) => logger.warn({ err }, 'Gmail 会話の再判定に失敗')));
   }
   return c.json({ ok: true });
 });
+
+/** 自分のアドレスから送った控えが受信になっているものを送信に直す */
+async function refixOwnMessagesNow() {
+  const addrs = isGoogleConnected() ? await myAddresses({ refresh: true }) : configuredMyAddresses();
+  return refixOwnMessages(addrs);
+}
+settingsRoutes.post('/gmail/refix-own', async (c) => c.json(await refixOwnMessagesNow()));
 
 /** 取込済みの Gmail 会話の区分（メイン／プロモーション等）を判定し直す */
 settingsRoutes.post('/gmail/recategorize', async (c) => c.json(await recategorizeConversations({ all: c.req.query('all') === '1' })));

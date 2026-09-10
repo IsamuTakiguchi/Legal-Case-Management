@@ -1479,3 +1479,31 @@ describe('LINE の友だちからの紐付け', () => {
     expect(db().select().from(schema.clients).all().some((c) => c.name === '重複')).toBe(false);
   });
 });
+
+describe('自分の送信の判定', () => {
+  it('別名アドレスからのメールは送信扱いになり、誤って受信になっていたものは判定し直しで直る', async () => {
+    const { normalizeGmailMessage } = await import('../channels/gmail.js');
+    const { ingestMessage, refixOwnMessages } = await import('../services/inbox.js');
+    const { configuredMyAddresses } = await import('../jobs/gmailPoll.js');
+    const { setSetting } = await import('../services/settings.js');
+    const base = { id: 'g1', threadId: 't-own-1', labelIds: ['INBOX'], internalDate: String(Date.now()), payload: { headers: [{ name: 'From', value: '瀧口 <info@example.com>' }, { name: 'To', value: 'client@example.org' }, { name: 'Subject', value: 'ご連絡' }], mimeType: 'text/plain', body: { data: Buffer.from('本文').toString('base64') } } } as never;
+    expect(normalizeGmailMessage(base, ['takiguchi@gmail.com'])!.direction).toBe('in');
+    expect(normalizeGmailMessage(base, ['takiguchi@gmail.com', 'info@example.com'])!.direction).toBe('out');
+    setSetting('my_email_addresses', 'Info@Example.com, other@example.jp');
+    expect(configuredMyAddresses()).toEqual(['info@example.com', 'other@example.jp']);
+    // 誤って受信として取り込まれていた自分の控え
+    const r = await ingestMessage({ channel: 'gmail', externalThreadId: 't-own-2', externalId: 'g-own-2', direction: 'in', sentAt: new Date().toISOString(), senderName: '瀧口', senderAddress: 'info@example.com', subject: 'ご連絡', body: 'こちらから送った控え', attachments: [], identity: { channel: 'gmail', email: 'info@example.com' } });
+    expect(r.conversation.needsReply).toBe(true);
+    const alertBefore = db().select().from(schema.alerts).all().find((a) => a.dedupeKey === 'unlinked:gmail:info@example.com');
+    expect(alertBefore?.status).toBe('open');
+    const fixed = refixOwnMessages(configuredMyAddresses());
+    expect(fixed.fixed).toBeGreaterThanOrEqual(1);
+    const conv = db().select().from(schema.conversations).where(eq(schema.conversations.id, r.conversation.id)).get()!;
+    expect(conv.needsReply).toBe(false);
+    expect(conv.lastInboundAt).toBeNull();
+    expect(conv.unread).toBe(0);
+    expect(db().select().from(schema.messages).where(eq(schema.messages.id, r.message.id)).get()!.direction).toBe('out');
+    expect(db().select().from(schema.alerts).where(eq(schema.alerts.id, alertBefore!.id)).get()!.status).toBe('resolved');
+    setSetting('my_email_addresses', '');
+  });
+});
