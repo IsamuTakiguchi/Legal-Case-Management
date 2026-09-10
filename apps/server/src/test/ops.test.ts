@@ -1388,6 +1388,15 @@ describe('返信待ちの期限', () => {
     const updated = (await res.json()) as { status: string; followUpAt: string };
     expect(updated.status).toBe('waiting_client');
     expect(updated.followUpAt).toBe(later2);
+    // 対応中のタスクは期日（dueAt）を API から変えられる
+    const { createTask } = await import('../services/tasks.js');
+    const open = await createTask({ title: '期日テスト', clientId: null, caseId: null, conversationId: null, status: 'open', followUpAt: null, note: null, syncToChatwork: false });
+    const due = new Date(Date.now() + 5 * 86400_000).toISOString();
+    const res2 = await app.request(`/api/tasks/${open.id}`, { method: 'PUT', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ dueAt: due }) });
+    expect(res2.status).toBe(200);
+    const u2 = (await res2.json()) as { status: string; dueAt: string | null };
+    expect(u2.status).toBe('open');
+    expect(u2.dueAt).toBe(due);
   });
 });
 

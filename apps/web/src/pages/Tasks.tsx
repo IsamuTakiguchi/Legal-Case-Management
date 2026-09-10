@@ -221,8 +221,9 @@ export default function Tasks() {
                   </td>
                   <td className="w-px whitespace-nowrap px-3 py-2 text-xs text-slate-600">
                     {t.waitingSince && <div>{fmtRelative(t.waitingSince)}から待ち</div>}
-                    {t.status !== 'open' && t.status !== 'done' && <DeadlineEditor compact value={t.followUpAt} onChange={(iso) => update.mutate({ id: t.id, patch: { followUpAt: iso } })} />}
-                    {t.dueAt && t.status === 'open' && <div>期日 {fmtDate(t.dueAt)}</div>}
+                    {(t.status === 'waiting_client' || t.status === 'waiting_other') && <DeadlineEditor compact value={t.followUpAt} onChange={(iso) => update.mutate({ id: t.id, patch: { followUpAt: iso } })} />}
+                    {t.status === 'open' && <DeadlineEditor compact label="期日" value={t.dueAt ?? t.followUpAt} onChange={(iso) => update.mutate({ id: t.id, patch: { dueAt: iso } })} />}
+                    {t.status === 'done' && (t.dueAt || t.followUpAt) && <div>期日 {fmtDate(t.dueAt ?? t.followUpAt)}</div>}
                   </td>
                   <td className="w-px whitespace-nowrap px-3 py-2 text-right">
                     <div className="flex justify-end gap-1">

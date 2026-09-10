@@ -889,7 +889,7 @@ function SessionCard({ s, onText, onDone }: { s: Session; onText: (t: string) =>
 
 function TaskMini({ conversationId, clientId }: { conversationId: number; clientId: number | null }) {
   const qc = useQueryClient();
-  const tasks = useQuery({ queryKey: ['tasks', 'conv', conversationId], queryFn: () => api.get<{ id: number; title: string; status: string; followUpAt: string | null }[]>(`/tasks?conversationId=${conversationId}&status=active`) });
+  const tasks = useQuery({ queryKey: ['tasks', 'conv', conversationId], queryFn: () => api.get<{ id: number; title: string; status: string; followUpAt: string | null; dueAt: string | null }[]>(`/tasks?conversationId=${conversationId}&status=active`) });
   const [title, setTitle] = useState('');
   const [status, setStatus] = useState('waiting_client');
   const add = useMutation({
@@ -901,6 +901,7 @@ function TaskMini({ conversationId, clientId }: { conversationId: number; client
   });
   const done = useMutation({ mutationFn: (id: number) => api.put(`/tasks/${id}`, { status: 'done' }), onSuccess: () => qc.invalidateQueries({ queryKey: ['tasks'] }) });
   const setDeadline = useMutation({ mutationFn: (v: { id: number; followUpAt: string }) => api.put(`/tasks/${v.id}`, { followUpAt: v.followUpAt }), onSuccess: () => qc.invalidateQueries({ queryKey: ['tasks'] }) });
+  const setDue = useMutation({ mutationFn: (v: { id: number; dueAt: string }) => api.put(`/tasks/${v.id}`, { dueAt: v.dueAt }), onSuccess: () => qc.invalidateQueries({ queryKey: ['tasks'] }) });
   return (
     <div className="card">
       <h3 className="mb-2 text-sm font-semibold">この会話のタスク</h3>
@@ -914,11 +915,13 @@ function TaskMini({ conversationId, clientId }: { conversationId: number; client
               <span className="flex-1">{t.title}</span>
               <span className="badge badge-gray">{t.status === 'open' ? '対応中' : t.status === 'waiting_client' ? '依頼者待ち' : '相手方待ち'}</span>
             </div>
-            {t.status !== 'open' && (
-              <div className="pl-5">
+            <div className="pl-5">
+              {t.status === 'open' ? (
+                <DeadlineEditor compact label="期日:" value={t.dueAt ?? t.followUpAt} onChange={(iso) => setDue.mutate({ id: t.id, dueAt: iso })} />
+              ) : (
                 <DeadlineEditor compact label="いつまで待つ:" value={t.followUpAt} onChange={(iso) => setDeadline.mutate({ id: t.id, followUpAt: iso })} />
-              </div>
-            )}
+              )}
+            </div>
           </li>
         ))}
         {tasks.data?.length === 0 && <li className="text-slate-500">なし</li>}
