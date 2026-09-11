@@ -24,6 +24,10 @@ export default function ClientDetail() {
   const [sub, setSub] = useState('');
   const d = useQuery({ queryKey: ['client', id], queryFn: () => api.get<Detail>(`/clients/${id}`) });
   const files = useQuery({ queryKey: ['client-files', id, sub], queryFn: () => api.get<{ folder: string; exists?: boolean; items: { name: string; path: string; isFolder: boolean; size?: number; modifiedAt?: string; webUrl?: string }[] }>(`/clients/${id}/files?path=${encodeURIComponent(sub)}`), retry: false });
+  const classify = useMutation({
+    mutationFn: () => api.post<{ checked: number; assigned: number; skipped: string | null }>(`/clients/${id}/classify-messages`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['timeline'] }),
+  });
   const createFolder = useMutation({
     mutationFn: () => api.post<{ folder: string; path: string }>(`/clients/${id}/folder`),
     onSuccess: () => {
@@ -110,6 +114,15 @@ export default function ClientDetail() {
               <input className="input" placeholder="事件番号" value={caseForm.caseNumber} onChange={(e) => setCaseForm({ ...caseForm, caseNumber: e.target.value })} />
               <button className="btn btn-primary">作成</button>
             </form>
+          )}
+          {c.cases.length >= 2 && (
+            <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+              <button type="button" className="btn btn-sm" onClick={() => classify.mutate()} disabled={classify.isPending} title="この依頼者とのメール・LINE・Chatwork を、内容から事件ごとに振り分けます（事件が決まっていないものだけ）">
+                {classify.isPending ? '振り分け中…' : 'メッセージを事件ごとに振り分け（AI）'}
+              </button>
+              {classify.data && <span className="fade-in text-slate-600">{classify.data.skipped ?? `${classify.data.checked} 件を確認し、${classify.data.assigned} 件を事件に振り分けました`}</span>}
+              <span className="text-slate-400">受信・送信のたびに自動でも判定します。会話画面で個別に変えられます</span>
+            </div>
           )}
           <ul className="space-y-1 text-sm">
             {c.cases.map((k) => (

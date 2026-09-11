@@ -8,6 +8,7 @@ import { onInboundForTasks } from './tasks.js';
 import { staffByChatworkAccount, caseForChatworkRoom, guessClientFromText } from './staff.js';
 import { linkGmailMessageToCreditor } from './creditors.js';
 import { findContactByIdentity, contactBriefs } from './contacts.js';
+import { maybeClassifyInBackground } from './caseClassify.js';
 import { getSetting } from './settings.js';
 import { NON_PRIMARY_CATEGORIES, type GmailCategory } from '../channels/gmail.js';
 
@@ -94,6 +95,18 @@ export async function ingestMessage(
       msgCaseId = g.caseId;
     }
   }
+  // 返信・引用として送ったものは、返信先の事件を引き継ぐ
+  if (!msgCaseId && m.raw) {
+    const ref = m.raw as { replyToMessageId?: number | null; quoteMessageId?: number | null };
+    const srcId = ref.replyToMessageId ?? ref.quoteMessageId ?? null;
+    if (srcId) {
+      const src = d.select({ caseId: schema.messages.caseId, clientId: schema.messages.clientId }).from(schema.messages).where(eq(schema.messages.id, srcId)).get();
+      if (src?.caseId) {
+        msgCaseId = src.caseId;
+        msgClientId = src.clientId ?? conv.clientId;
+      }
+    }
+  }
 
   const existing = d
     .select()
@@ -168,6 +181,14 @@ export async function ingestMessage(
       onInboundForTasks(conv.id, message);
     } catch (err) {
       logger.warn({ err }, '返信待ちタスクの更新に失敗');
+    }
+  }
+  // 依頼者に複数の事件があれば、どの事件の話かを裏で判定する（関係者・事務局の会話は対象外）
+  if (!msgCaseId && conv.clientId && !conv.contactId && !staff && !roomCase) {
+    try {
+      maybeClassifyInBackground(message.id, conv.clientId);
+    } catch (err) {
+      logger.warn({ err }, '事件判定の起動に失敗');
     }
   }
   if (m.channel === 'gmail') {

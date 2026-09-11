@@ -18,6 +18,7 @@ import { prepareHearingNotice } from '../services/hearingNotice.js';
 import { joinPath } from '../integrations/onedrive.js';
 
 import { listLineFriends, syncLineFollowers, linkLineFriendToClient, assertLineFriendFree } from '../services/lineFriends.js';
+import { classifyClientMessages, classifyMessageCase } from '../services/caseClassify.js';
 
 export const clientRoutes = new Hono();
 
@@ -51,6 +52,12 @@ clientRoutes.get('/clients/:id', (c) => {
   const events = db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.clientId, id)).orderBy(desc(schema.calendarEvents.startAt)).limit(20).all();
   return c.json({ ...row, cases, conversations, tasks, events, folder: clientFolder(row) });
 });
+
+/** 依頼者のメッセージを事件ごとに振り分け直す（AI）。all=1 で振り分け済みも判定し直す */
+clientRoutes.post('/clients/:id/classify-messages', async (c) => c.json(await classifyClientMessages(Number(c.req.param('id')), { all: c.req.query('all') === '1' })));
+
+/** 1 件のメッセージを判定し直す */
+clientRoutes.post('/messages/:id/classify', async (c) => c.json(await classifyMessageCase(Number(c.req.param('id')), { force: true })));
 
 /** LINE の友だち一覧（依頼者に紐付けるための候補） */
 clientRoutes.get('/line/friends', (c) => c.json(listLineFriends({ unlinkedOnly: c.req.query('unlinked') === '1' })));
