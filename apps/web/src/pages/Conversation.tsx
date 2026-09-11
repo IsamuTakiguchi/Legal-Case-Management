@@ -379,6 +379,7 @@ export default function Conversation() {
                     ❝ 引用
                   </button>
                 </div>
+                {c.cases.length >= 2 && !c.contact && <CaseTag m={m} cases={c.cases} out={m.direction === 'out'} onChanged={invalidate} />}
                 {c.channel === 'chatwork' && m.direction === 'in' && <MessageTools m={m} onChanged={invalidate} />}
                 {m.attachments.length > 0 && (
                   <ul className="mt-1 space-y-0.5">
@@ -1170,6 +1171,43 @@ function ExtractSchedulePanel({ conversationId, cases, onDone }: { conversationI
 }
 
 /** 事務局の伝言など、メッセージ単位の紐付けとタスク化 */
+/** 依頼者に複数の事件があるとき、このメッセージがどの事件の話かを表示・変更する */
+function CaseTag({ m, cases, out, onChanged }: { m: Message; cases: { id: number; title: string }[]; out: boolean; onChanged: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const link = useMutation({
+    mutationFn: (caseId: number | null) => api.put(`/messages/${m.id}/link`, { caseId }),
+    onSuccess: () => {
+      setEditing(false);
+      onChanged();
+    },
+  });
+  const current = cases.find((k) => k.id === m.caseId);
+  if (editing) {
+    return (
+      <div className="mt-1 flex flex-wrap items-center gap-1 text-xs">
+        <select className={`input w-auto py-0.5 text-xs ${out ? 'text-slate-800' : ''}`} value={m.caseId ?? ''} onChange={(e) => link.mutate(e.target.value ? Number(e.target.value) : null)} disabled={link.isPending} aria-label="事件">
+          <option value="">事件未確定</option>
+          {cases.map((k) => (
+            <option key={k.id} value={k.id}>
+              {k.title}
+            </option>
+          ))}
+        </select>
+        <button type="button" className={`hover:underline ${out ? 'text-blue-100' : 'text-slate-500'}`} onClick={() => setEditing(false)}>
+          やめる
+        </button>
+      </div>
+    );
+  }
+  return (
+    <button type="button" className={`mt-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] ${current ? (out ? 'bg-white/15 text-white' : 'bg-[var(--accent-soft)] text-[var(--accent)]') : out ? 'bg-white/15 text-blue-100' : 'bg-orange-50 text-orange-700'}`} onClick={() => setEditing(true)} title="このメッセージがどの事件の話かを変えます">
+      <Icon name="scale" className="h-3 w-3" />
+      {current ? current.title : '事件未確定'}
+      <span className="opacity-60">▾</span>
+    </button>
+  );
+}
+
 function MessageTools({ m, onChanged }: { m: Message; onChanged: () => void }) {
   const qc = useQueryClient();
   const [mode, setMode] = useState<'link' | 'task' | null>(null);

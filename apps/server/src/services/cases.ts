@@ -141,15 +141,22 @@ export function caseTimeline(id: number, limit = 200) {
     return [v.id, ct ? ` 〔${CASE_CONTACT_ROLE_LABEL[ct.role as CaseContactRole] ?? ct.role}: ${ct.name}〕` : ''];
   }));
   const convIds = convs.map((x) => x.id);
+  // 依頼者に事件が複数あるときは、事件が決まったメッセージはその事件だけに出し、未確定のものは印を付けて各事件に出す
+  const multiCase = db().select({ id: schema.cases.id }).from(schema.cases).where(eq(schema.cases.clientId, c.clientId)).all().length >= 2;
   const seen = new Set<number>();
   const pushMsg = (m: typeof schema.messages.$inferSelect, tag = '') => {
     if (seen.has(m.id)) return;
     seen.add(m.id);
-    items.push({ at: m.sentAt, type: `message:${m.direction}`, title: `${m.direction === 'in' ? '受信' : '送信'}（${m.channel}）${m.senderName ? ` ${m.senderName}` : ''}${tag}`, body: m.body.slice(0, 200), ref: { conversationId: m.conversationId, messageId: m.id } });
+    items.push({ at: m.sentAt, type: `message:${m.direction}`, title: `${m.direction === 'in' ? '受信' : '送信'}（${m.channel}）${m.senderName ? ` ${m.senderName}` : ''}${tag}`, body: m.body.slice(0, 200), ref: { conversationId: m.conversationId, messageId: m.id, caseId: m.caseId ?? null, unassignedCase: multiCase && !m.caseId } });
   };
   if (convIds.length) {
-    const msgs = db().select().from(schema.messages).where(inArray(schema.messages.conversationId, convIds)).orderBy(desc(schema.messages.sentAt)).limit(limit).all();
-    for (const m of msgs) pushMsg(m, convTag.get(m.conversationId) ?? '');
+    const msgs = db().select().from(schema.messages).where(inArray(schema.messages.conversationId, convIds)).orderBy(desc(schema.messages.sentAt)).limit(limit * 2).all();
+    for (const m of msgs) {
+      const contactConv = convTag.has(m.conversationId);
+      if (!contactConv && multiCase && m.caseId && m.caseId !== id) continue; // 別の事件に振り分け済み
+      const tag = contactConv ? (convTag.get(m.conversationId) ?? '') : multiCase && !m.caseId ? ' 〔事件未確定〕' : '';
+      pushMsg(m, tag);
+    }
   }
   // 事務局の伝言など、メッセージ単位でこの事件に紐付いたもの
   for (const m of db().select().from(schema.messages).where(eq(schema.messages.caseId, id)).orderBy(desc(schema.messages.sentAt)).limit(limit).all()) pushMsg(m, ' 伝言');

@@ -1540,3 +1540,59 @@ describe('Chatwork の返信・引用', () => {
     await expect(sendToConversation(r.conversation.id, { text: 'x', attachmentIds: [], driveFiles: [], draftId: null, createWaitingTask: false, replyToMessageId: 999999 })).rejects.toThrow();
   });
 });
+
+describe('複数事件のメッセージ振り分け', () => {
+  it('事件が 2 件ある依頼者のメッセージは AI 判定で事件に振り分けられ、タイムラインは事件ごとに分かれる', async () => {
+    const { setCaseClassifier, classifyMessageCase, classifyClientMessages } = await import('../services/caseClassify.js');
+    const { ingestMessage, linkMessage } = await import('../services/inbox.js');
+    const { caseTimeline } = await import('../services/cases.js');
+    const { sendToConversation } = await import('../services/send.js');
+    const { setAdapter } = await import('../channels/registry.js');
+    const client = db().insert(schema.clients).values({ name: '並行 太郎', emails: ['heikou@example.com'], aliases: [] }).returning().get();
+    const divorce = db().insert(schema.cases).values({ clientId: client.id, title: '離婚調停事件', caseType: 'divorce', status: 'active' }).returning().get();
+    const traffic = db().insert(schema.cases).values({ clientId: client.id, title: '交通事故損害賠償請求事件', caseType: 'traffic', status: 'active' }).returning().get();
+    // 判定関数を差し替え: 本文に「調停」があれば離婚、「保険」があれば交通事故、それ以外は不明
+    setCaseClassifier(async ({ message, cases }) => {
+      const t = message.body;
+      const pick = t.includes('調停') ? cases.find((c) => c.title.includes('離婚')) : t.includes('保険') ? cases.find((c) => c.title.includes('交通')) : null;
+      return { caseId: pick?.id ?? null, confidence: pick ? 'high' : 'low', reason: 'テスト' };
+    });
+    const base = { channel: 'gmail' as const, externalThreadId: 't-multi-1', attachments: [], identity: { channel: 'gmail' as const, email: 'heikou@example.com' }, senderName: '並行 太郎', senderAddress: 'heikou@example.com', subject: 'ご連絡' };
+    const m1 = await ingestMessage({ ...base, externalId: 'multi-1', direction: 'in', sentAt: '2026-09-10T01:00:00.000Z', body: '調停の期日の件でご相談です' });
+    const m2 = await ingestMessage({ ...base, externalId: 'multi-2', direction: 'in', sentAt: '2026-09-10T02:00:00.000Z', body: '保険会社から連絡がありました' });
+    const m3 = await ingestMessage({ ...base, externalId: 'multi-3', direction: 'in', sentAt: '2026-09-10T03:00:00.000Z', body: 'ありがとうございます' });
+    expect(m1.conversation.clientId).toBe(client.id);
+    // 裏の判定は非同期なので、ここでは明示的に判定する
+    await classifyMessageCase(m1.message.id);
+    await classifyMessageCase(m2.message.id);
+    const r3 = await classifyMessageCase(m3.message.id);
+    expect(r3?.caseId).toBeNull();
+    const byId = (id: number) => db().select().from(schema.messages).where(eq(schema.messages.id, id)).get()!;
+    expect(byId(m1.message.id).caseId).toBe(divorce.id);
+    expect(byId(m2.message.id).caseId).toBe(traffic.id);
+    expect(byId(m3.message.id).caseId).toBeNull();
+    // タイムライン: 離婚には調停の話と未確定、交通事故には保険の話と未確定
+    const tDiv = caseTimeline(divorce.id).filter((x) => x.type.startsWith('message:'));
+    const tTra = caseTimeline(traffic.id).filter((x) => x.type.startsWith('message:'));
+    expect(tDiv.map((x) => x.ref!.messageId).sort()).toEqual([m1.message.id, m3.message.id].sort());
+    expect(tTra.map((x) => x.ref!.messageId).sort()).toEqual([m2.message.id, m3.message.id].sort());
+    expect(tDiv.find((x) => x.ref!.messageId === m3.message.id)!.title).toContain('事件未確定');
+    expect(tDiv.find((x) => x.ref!.messageId === m1.message.id)!.title).not.toContain('事件未確定');
+    // 手動で未確定のものを交通事故に付けると、離婚側から消える
+    linkMessage(m3.message.id, { caseId: traffic.id });
+    expect(caseTimeline(divorce.id).some((x) => x.ref?.messageId === m3.message.id)).toBe(false);
+    // 返信は返信先の事件を引き継ぐ
+    setAdapter('gmail', { channel: 'gmail', isConfigured: () => true, fetchAttachment: async () => Buffer.from(''), send: async () => ({ externalId: `multi-out-${Date.now()}`, externalThreadId: 't-multi-1', sentAt: new Date().toISOString() }) });
+    const out = await sendToConversation(m1.conversation.id, { text: '承知しました', attachmentIds: [], driveFiles: [], draftId: null, createWaitingTask: false, replyToMessageId: m1.message.id });
+    expect(byId(out.messageId).caseId).toBe(divorce.id);
+    // まとめて振り分け（未確定だけ）
+    const m4 = await ingestMessage({ ...base, externalId: 'multi-4', direction: 'in', sentAt: '2026-09-10T04:00:00.000Z', body: '次回の調停はいつですか' });
+    const bulk = await classifyClientMessages(client.id);
+    expect(bulk.checked).toBeGreaterThanOrEqual(1);
+    expect(byId(m4.message.id).caseId).toBe(divorce.id);
+    // 事件が 1 件だけの依頼者では判定しない
+    const single = db().insert(schema.clients).values({ name: '単独 花子', emails: [], aliases: [] }).returning().get();
+    db().insert(schema.cases).values({ clientId: single.id, title: '単独事件', caseType: 'general_civil', status: 'active' }).run();
+    expect(await classifyClientMessages(single.id)).toMatchObject({ checked: 0, assigned: 0 });
+  });
+});
