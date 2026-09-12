@@ -1,0 +1,1 @@
+ALTER TABLE `clients` ADD `onedrive_item_id` text;

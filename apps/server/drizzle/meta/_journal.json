@@ -57,6 +57,13 @@
       "when": 1789202624117,
       "tag": "0007_unknown_vision",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1789208254528,
+      "tag": "0008_wandering_ser_duncan",
+      "breakpoints": true
     }
   ]
 }
