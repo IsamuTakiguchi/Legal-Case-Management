@@ -50,6 +50,13 @@
       "when": 1789015314015,
       "tag": "0006_strong_whizzer",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1789202624117,
+      "tag": "0007_unknown_vision",
+      "breakpoints": true
     }
   ]
 }

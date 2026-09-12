@@ -1,4 +1,4 @@
-import { eq, desc, and, inArray, lt, sql } from 'drizzle-orm';
+import { eq, desc, and, inArray, lt, or, isNull, sql } from 'drizzle-orm';
 import path from 'node:path';
 import fs from 'node:fs';
 import { dataDir } from '../config.js';
@@ -96,6 +96,14 @@ async function attachmentBytes(att: { id: number; channelRef: Record<string, unk
 }
 
 /** 添付を取得して依頼者フォルダ（または未振分）に保存。force=true なら設定に関わらず保存する */
+/** 処理中の印がこれより古ければ、途中で止まったものとみなして拾い直す */
+const PROCESSING_STALE_MS = 10 * 60_000;
+
+/**
+ * 添付を取得して保存する。
+ * 受信時・再取得ジョブ・画面の「保存」など複数の入口から呼ばれるため、処理中の印（processingAt）で
+ * 同じファイルを同時に取得・アップロードしないようにする（同じファイルが 2 つ保存されるのを防ぐ）
+ */
 export async function processAttachment(attachmentId: number, opts: { force?: boolean } = {}): Promise<void> {
   const d = db();
   const att = d.select().from(schema.attachments).where(eq(schema.attachments.id, attachmentId)).get();
@@ -121,6 +129,18 @@ export async function processAttachment(attachmentId: number, opts: { force?: bo
       return;
     }
   }
+  // ほかの処理が取得中なら何もしない（二重保存の防止）
+  const stale = new Date(Date.now() - PROCESSING_STALE_MS).toISOString();
+  const claimed = d
+    .update(schema.attachments)
+    .set({ processingAt: new Date().toISOString() })
+    .where(and(eq(schema.attachments.id, att.id), or(isNull(schema.attachments.processingAt), lt(schema.attachments.processingAt, stale))))
+    .returning()
+    .get();
+  if (!claimed) {
+    logger.info({ attachmentId: att.id }, 'この添付は別の処理が取得中のため、保存を見送りました');
+    return;
+  }
   try {
     const data = await attachmentBytes(att, msg.channel as Channel);
     // 「image_123.jpg」のような中身の分からない名前は、内容とメッセージの文脈から意味の分かる名前に付け替える
@@ -145,7 +165,8 @@ export async function processAttachment(attachmentId: number, opts: { force?: bo
     }
     const filename = storedFilename(msg.channel as Channel, msg.sentAt, displayName);
     const folder = client ? joinPath(clientFolder(client), getSetting('attachment_subfolder')) : unassignedFolder();
-    const stored = await storage().put(folder, filename, data);
+    // 同じ名前・同じ大きさのファイルが既にあれば使い回す（再取得・再デプロイでの二重保存を防ぐ）
+    const stored = await storage().put(folder, filename, data, { dedupe: true });
     d.update(schema.attachments)
       .set({
         status: client ? 'stored' : 'unassigned',
@@ -171,6 +192,8 @@ export async function processAttachment(attachmentId: number, opts: { force?: bo
   } catch (err) {
     logger.error({ err, attachmentId }, '添付の取得・保存に失敗');
     d.update(schema.attachments).set({ status: 'failed', error: String(err) }).where(eq(schema.attachments.id, att.id)).run();
+  } finally {
+    d.update(schema.attachments).set({ processingAt: null }).where(eq(schema.attachments.id, att.id)).run();
   }
 }
 
@@ -181,10 +204,18 @@ export async function processAttachment(attachmentId: number, opts: { force?: bo
  */
 export async function requeueStuckAttachments(olderThanMinutes = 10): Promise<number> {
   const threshold = new Date(Date.now() - olderThanMinutes * 60_000).toISOString();
+  const processingStale = new Date(Date.now() - PROCESSING_STALE_MS).toISOString();
   const rows = db()
     .select({ id: schema.attachments.id })
     .from(schema.attachments)
-    .where(and(eq(schema.attachments.status, 'pending'), lt(schema.attachments.createdAt, threshold)))
+    .where(
+      and(
+        eq(schema.attachments.status, 'pending'),
+        lt(schema.attachments.createdAt, threshold),
+        // 取得中のものは触らない（二重保存の防止）
+        or(isNull(schema.attachments.processingAt), lt(schema.attachments.processingAt, processingStale)),
+      ),
+    )
     .all();
   for (const r of rows) {
     await processAttachment(r.id).catch((err) => logger.warn({ err, attachmentId: r.id }, '取得中の添付の再処理に失敗'));

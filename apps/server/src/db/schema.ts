@@ -246,6 +246,8 @@ export const attachments = sqliteTable(
     driveItemId: text('drive_item_id'),
     shareUrl: text('share_url'),
     error: text('error'),
+    /** 取得・保存の処理中であることの印（二重保存の防止）。一定時間を過ぎたものは止まったとみなして拾い直す */
+    processingAt: text('processing_at'),
     createdAt: text('created_at').notNull().default(now()),
   },
   (t) => [index('att_status').on(t.status)],
