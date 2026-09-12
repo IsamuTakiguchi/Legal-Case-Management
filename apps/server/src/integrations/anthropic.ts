@@ -1,9 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import type { z } from 'zod';
+import { AI_MODEL_IDS } from '@lcm/shared';
 import { env, isConfigured } from '../config.js';
 import { logger } from '../logger.js';
 import { recordUsage } from '../services/apiCost.js';
+import { getSetting } from '../services/settings.js';
 
 let client: Anthropic | null = null;
 
@@ -13,8 +15,26 @@ export function anthropic(): Anthropic {
   return client;
 }
 
-export function model(): string {
-  return env().ANTHROPIC_MODEL;
+/**
+ * 処理の重さ。light は判定・仕分けなどの軽い処理（安いモデルに回せる）、
+ * main は下書き・サマリーなど質が要る処理。
+ */
+export type ModelTier = 'main' | 'light';
+
+/** 設定画面で選んだモデル。未設定・未知の値なら環境変数の既定に戻す */
+export function model(tier: ModelTier = 'main'): string {
+  const fallback = env().ANTHROPIC_MODEL;
+  let main = '';
+  let light = '';
+  try {
+    main = getSetting('ai_model').trim();
+    light = getSetting('ai_model_light').trim();
+  } catch {
+    // DB 未初期化（起動直後やテスト）なら環境変数の既定を使う
+    return fallback;
+  }
+  const pick = tier === 'light' ? light || main : main;
+  return pick && AI_MODEL_IDS.includes(pick) ? pick : fallback;
 }
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -42,10 +62,12 @@ export async function generateText(opts: {
   onDelta?: (text: string) => void;
   /** 利用料の内訳に出す用途名 */
   purpose?: string;
+  /** 軽い処理は light（設定で安いモデルに回せる） */
+  tier?: ModelTier;
 }): Promise<string> {
   const messages: Anthropic.MessageParam[] = typeof opts.user === 'string' ? [{ role: 'user', content: opts.user }] : opts.user;
   const stream = anthropic().messages.stream({
-    model: model(),
+    model: model(opts.tier),
     max_tokens: opts.maxTokens ?? 16000,
     system: [{ type: 'text', text: opts.system, cache_control: { type: 'ephemeral' } }],
     messages,
@@ -74,9 +96,10 @@ export async function generateStructured<T extends z.ZodType>(opts: {
   maxTokens?: number;
   effort?: Effort;
   purpose?: string;
+  tier?: ModelTier;
 }): Promise<z.infer<T>> {
   const res = await anthropic().messages.parse({
-    model: model(),
+    model: model(opts.tier),
     max_tokens: opts.maxTokens ?? 8000,
     system: opts.system,
     messages: [{ role: 'user', content: opts.user }],
@@ -97,9 +120,10 @@ export async function generateStructuredFromContent<T extends z.ZodType>(opts: {
   maxTokens?: number;
   effort?: Effort;
   purpose?: string;
+  tier?: ModelTier;
 }): Promise<z.infer<T>> {
   const res = await anthropic().messages.parse({
-    model: model(),
+    model: model(opts.tier),
     max_tokens: opts.maxTokens ?? 4000,
     system: opts.system,
     messages: [{ role: 'user', content: opts.content }],

@@ -382,3 +382,26 @@ export const formDraftRequestSchema = z.object({
   saveToClientFolder: z.boolean().default(true),
 });
 export type FormDraftRequest = z.infer<typeof formDraftRequestSchema>;
+
+/** 設定画面で選べる AI モデル。料金は 100 万トークンあたりの目安（米ドル） */
+export const AI_MODELS = [
+  {
+    id: 'claude-opus-5',
+    label: 'Opus 5（高性能・既定）',
+    hint: '最も賢い。書面の下書きや事件サマリーなど、質が要るものに向く',
+    priceIn: 5,
+    priceOut: 25,
+  },
+  {
+    id: 'claude-sonnet-5',
+    label: 'Sonnet 5（速い・安い）',
+    hint: 'Opus の約 2.5 分の 1 の料金。判定・仕分け・短い抽出なら十分',
+    priceIn: 2,
+    priceOut: 10,
+  },
+] as const;
+export type AiModelId = (typeof AI_MODELS)[number]['id'];
+export const AI_MODEL_IDS = AI_MODELS.map((m) => m.id) as readonly string[];
+export function aiModelLabel(id: string): string {
+  return AI_MODELS.find((m) => m.id === id)?.label ?? id;
+}

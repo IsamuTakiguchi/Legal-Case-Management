@@ -13,6 +13,7 @@ import { refixOwnMessages } from '../services/inbox.js';
 import { generateStyleProfile, getStyleProfile, saveStyleProfile, importGmailSent, importChatworkMine, importPlainText, styleStats } from '../services/style.js';
 import { storage } from '../integrations/storage.js';
 import { channelSchema } from '@lcm/shared';
+import { model as aiModel } from '../integrations/anthropic.js';
 import { openAlerts } from '../services/alerts.js';
 import { listTasks } from '../services/tasks.js';
 import { todaysEvents } from '../services/court.js';
@@ -90,7 +91,7 @@ settingsRoutes.get('/status', async (c) => {
     google: { configured: isConfigured('google'), connected: isGoogleConnected(), account: googleAccount(), redirectUri: `${e.PUBLIC_BASE_URL}/api/auth/google/callback` },
     microsoft: { configured: isConfigured('microsoft'), connected: await isMsConnected(), account: msAccount(), redirectUri: `${e.PUBLIC_BASE_URL}/api/auth/microsoft/callback` },
     zoom: { configured: isConfigured('zoom') },
-    anthropic: { configured: isConfigured('anthropic'), model: e.ANTHROPIC_MODEL },
+    anthropic: { configured: isConfigured('anthropic'), model: aiModel('main'), modelLight: aiModel('light') },
     jobs: jobStatus(),
     demo: demoStatus(),
   });

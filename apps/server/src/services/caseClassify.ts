@@ -25,6 +25,7 @@ let classifier: Classifier = async ({ message, context, cases }) => {
     .join('\n');
   return generateStructured({
     purpose: '事件の振り分け',
+    tier: 'light',
     system: [
       '法律事務所の事務補助者として、依頼者とのメッセージが、その依頼者の複数の事件のどれに関するものかを判定します。',
       '本文にある事件名・相手方の名前・裁判所・事件番号・固有の話題（離婚、相続、交通事故、破産など）を手がかりにします。',

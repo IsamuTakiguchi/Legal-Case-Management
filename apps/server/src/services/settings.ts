@@ -35,6 +35,10 @@ http://www.noboriohji.com/access/`,
   share_link_expiry_days: '30',
   /** API 利用料の円換算に使う為替レート（1 ドル＝何円） */
   usd_jpy_rate: '150',
+  /** 使う AI モデル（空なら環境変数 ANTHROPIC_MODEL の既定）。packages/shared の AI_MODELS 参照 */
+  ai_model: '',
+  /** 判定・仕分けなど軽い処理に使うモデル（空なら上と同じ） */
+  ai_model_light: '',
   share_link_scope: 'anonymous',
   morning_digest_hour: '8',
   web_meeting_provider: 'auto',

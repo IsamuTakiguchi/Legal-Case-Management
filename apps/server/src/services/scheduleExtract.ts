@@ -65,6 +65,7 @@ export async function extractScheduleFromConversation(conversationId: number, op
   const end = fmtHm(bh.endMin);
   const result = await generateStructured({
     purpose: '日程の希望の読み取り',
+    tier: 'light',
     system: [
       '日本の法律事務所の弁護士と依頼者・関係者のメッセージのやり取りから、面談・打合せ・WEB相談・裁判の期日などの日程を読み取ります。',
       `今日は ${today} です。「来週火曜」「明後日」「月末」などの相対表現は今日を基準に、日本時間で具体的な日付に直してください。年が書かれていなければ、今日以降で最も近い日付とします。`,
@@ -156,6 +157,7 @@ export async function extractSchedulePreferences(conversationId: number, opts: {
   const bh = businessHours();
   const r = await generateStructured({
     purpose: '予定の抽出',
+    tier: 'light',
     system: [
       '日本の法律事務所の弁護士と依頼者・関係者のメッセージのやり取りから、面談・打合せの日程について「相手（依頼者側）が述べた希望や都合」を読み取ります。',
       `今日は ${today} です。「来週」「月末」「再来週の火曜」などの相対表現は今日を基準に日本時間の日付に直してください。年が無ければ今日以降で最も近い日付とします。`,
