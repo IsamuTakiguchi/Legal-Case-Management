@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
+import { useDraft, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
 import { fmtDate, fmtRelative } from '../lib/format';
 import { DeadlineEditor } from '../lib/Deadline';
@@ -77,10 +78,13 @@ export default function Tasks() {
     },
     onError: (e) => setMsg((e as Error).message),
   });
+  // 書きかけのタスク名を自動保存する
+  const titleDraft = useDraft('tasks:new-title', title, setTitle);
   const create = useMutation({
     mutationFn: () => api.post('/tasks', { title, status: newStatus, clientId: clientId ? Number(clientId) : null, caseId: caseId ? Number(caseId) : null, syncToChatwork: sync }),
     onSuccess: () => {
       setTitle('');
+      titleDraft.clear();
       refresh();
     },
   });
@@ -120,6 +124,7 @@ export default function Tasks() {
         }}
       >
         <input className="input flex-1" placeholder="新しいタスク" value={title} onChange={(e) => setTitle(e.target.value)} required />
+        <DraftHint handle={titleDraft} className="w-full" />
         <ClientPicker
           value={clientId}
           onChange={(v) => {

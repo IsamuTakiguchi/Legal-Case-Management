@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AI_MODELS, aiModelLabel } from '@lcm/shared';
 import { api } from '../lib/api';
+import { useDraft, useDraftRecord, DraftHint } from '../lib/draft';
 import { fmtDateTime } from '../lib/format';
 
 interface Status {
@@ -138,7 +139,15 @@ export default function Settings() {
   useEffect(() => {
     if (settings.data) setForm(settings.data);
   }, [settings.data]);
-  const save = useMutation({ mutationFn: () => api.put('/settings', form), onSuccess: () => qc.invalidateQueries({ queryKey: ['settings'] }) });
+  // 保存前の変更はこの端末に自動保存する（画面を離れても消えない）
+  const formDraft = useDraftRecord('settings:form', form, setForm, settings.data);
+  const save = useMutation({
+    mutationFn: () => api.put('/settings', form),
+    onSuccess: () => {
+      formDraft.clear();
+      qc.invalidateQueries({ queryKey: ['settings'] });
+    },
+  });
   const runJob = useMutation({ mutationFn: (name: string) => api.post<{ ok: boolean; summary?: string; error?: string }>(`/jobs/${name}/run`), onSuccess: () => qc.invalidateQueries({ queryKey: ['status'] }) });
   const disconnect = useMutation({ mutationFn: (p: string) => api.post(`/auth/${p}/disconnect`), onSuccess: () => qc.invalidateQueries({ queryKey: ['status'] }) });
   const [msg, setMsg] = useState('');
@@ -168,7 +177,15 @@ export default function Settings() {
   useEffect(() => {
     if (style.data) setProfile(style.data.profiles[profileChannel] ?? '');
   }, [style.data, profileChannel]);
-  const saveProfile = useMutation({ mutationFn: () => api.put('/style/profile', { channel: profileChannel, markdown: profile }), onSuccess: () => { setMsg('プロファイルを保存しました'); qc.invalidateQueries({ queryKey: ['style'] }); } });
+  const profileDraft = useDraft(`settings:style-profile:${profileChannel}`, profile, setProfile, style.data?.profiles[profileChannel] ?? '');
+  const saveProfile = useMutation({
+    mutationFn: () => api.put('/style/profile', { channel: profileChannel, markdown: profile }),
+    onSuccess: () => {
+      profileDraft.clear();
+      setMsg('プロファイルを保存しました');
+      qc.invalidateQueries({ queryKey: ['style'] });
+    },
+  });
   const PROFILE_TABS: { key: 'all' | 'gmail' | 'line' | 'chatwork'; label: string }[] = [
     { key: 'gmail', label: 'Gmail' },
     { key: 'line', label: 'LINE' },
@@ -176,6 +193,7 @@ export default function Settings() {
     { key: 'all', label: '全体（共通）' },
   ];
   const [importText, setImportText] = useState('');
+  const importDraft = useDraft('settings:style-import', importText, setImportText);
   const [importChannel, setImportChannel] = useState('line');
   const [pw, setPw] = useState({ current: '', next: '' });
   const changePw = useMutation({ mutationFn: () => api.post('/auth/password', pw), onSuccess: () => { setMsg('パスワードを変更しました'); setPw({ current: '', next: '' }); }, onError: (e) => setMsg((e as Error).message) });
@@ -316,6 +334,7 @@ export default function Settings() {
               {style.data?.stats.profiles?.find((p) => p.channel === profileChannel)?.generatedAt ? <span className="ml-1 text-slate-400">（生成 {fmtDateTime(style.data.stats.profiles.find((p) => p.channel === profileChannel)!.generatedAt)}）</span> : <span className="ml-1 text-orange-600">（未生成）</span>}
             </label>
             <textarea className="input min-h-48 font-mono text-xs" value={profile} onChange={(e) => setProfile(e.target.value)} placeholder="「生成」を押すと、このチャネルで送った文面から文体の特徴をまとめます" />
+            <DraftHint handle={profileDraft} />
             <div className="mt-1 flex flex-wrap gap-2">
               <button className="btn btn-primary btn-sm" onClick={() => styleAction.mutate({ url: '/style/profile', body: { channel: profileChannel } })} disabled={styleAction.isPending || (profileChannel !== 'all' && (style.data?.stats.byChannel[profileChannel] ?? 0) < 5)}>
                 {styleAction.isPending ? '処理中…' : `${PROFILE_TABS.find((t) => t.key === profileChannel)?.label} のプロファイルを生成`}
@@ -333,6 +352,7 @@ export default function Settings() {
               <option value="gmail">Gmail</option>
             </select>
             <textarea className="input min-h-32 text-xs" value={importText} onChange={(e) => setImportText(e.target.value)} placeholder="LINE のトーク履歴から自分の発言をコピーして貼り付け" />
+            <DraftHint handle={importDraft} />
             <button className="btn btn-sm mt-1" onClick={() => { styleAction.mutate({ url: '/style/import/text', body: { channel: importChannel, text: importText } }); setImportText(''); }} disabled={!importText.trim()}>
               取込
             </button>
@@ -387,9 +407,12 @@ export default function Settings() {
             </div>
           ))}
         </div>
-        <button className="btn btn-primary mt-3" onClick={() => save.mutate()} disabled={save.isPending}>
-          保存
-        </button>
+        <div className="mt-3 flex items-center gap-2">
+          <button className="btn btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>
+            保存
+          </button>
+          <DraftHint handle={formDraft} />
+        </div>
       </section>
 
       <StaffSection />

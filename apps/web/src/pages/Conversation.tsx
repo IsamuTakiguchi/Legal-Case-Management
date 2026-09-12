@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
+import { useDraft, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
 import { ContactLinkForm } from '../lib/ContactLinkForm';
 import { channelBadge, channelLabel, fmtDateTime, fmtBytes, fromLocalInput, toLocalInput, todayLocalInput } from '../lib/format';
@@ -108,6 +109,10 @@ export default function Conversation() {
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [linkClientId, setLinkClientId] = useState('');
 
+  // 入力途中の返信本文・指示はこの端末に自動保存し、画面を離れても消えないようにする
+  const textDraft = useDraft(id ? `conv:${id}:text` : null, text, setText);
+  const instructionDraft = useDraft(id ? `conv:${id}:instruction` : null, instruction, setInstruction);
+
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['conversation', id] });
     qc.invalidateQueries({ queryKey: ['conversations'] });
@@ -148,6 +153,7 @@ export default function Conversation() {
       }),
     onSuccess: (r) => {
       setText('');
+      textDraft.clear();
       setDraftId(null);
       setSelectedAtt([]);
       setDriveFiles([]);
@@ -446,6 +452,7 @@ export default function Conversation() {
           )}
           <div className="flex flex-wrap items-center gap-2">
             <input className="input flex-1" placeholder="AI への指示（例: 来週火曜14時で確定と返す／資料の受領を伝えて次回期日を案内）" value={instruction} onChange={(e) => setInstruction(e.target.value)} />
+            <DraftHint handle={instructionDraft} className="w-full" />
             <select className="input w-auto" value={templateKey} onChange={(e) => setTemplateKey(e.target.value)}>
               <option value="">テンプレートなし</option>
               {templates.data?.map((t) => (
@@ -459,6 +466,7 @@ export default function Conversation() {
             </button>
           </div>
           <textarea className="input min-h-40 font-mono text-sm" value={text} onChange={(e) => setText(e.target.value)} placeholder="返信本文（AI 下書きを編集して送信）" />
+          <DraftHint handle={textDraft} />
           {(selectedAtt.length > 0 || driveFiles.length > 0) && (
             <div className="flex flex-wrap gap-1 text-xs">
               {selectedAtt.map((aid) => {

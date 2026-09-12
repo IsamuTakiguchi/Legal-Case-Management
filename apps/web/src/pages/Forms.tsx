@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
+import { useDraftGroup, DraftHint } from '../lib/draft';
 import { api, postSSE } from '../lib/api';
 import { fmtDate, fmtBytes } from '../lib/format';
 
@@ -142,6 +143,12 @@ function DraftPanel({ templateIds, caseId, onClose }: { templateIds: number[]; c
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<{ filename: string; savedPath?: string; webUrl?: string; docxBase64: string } | null>(null);
   const [err, setErr] = useState('');
+  // 書きかけの題名・事実関係・指示を自動保存する（画面を閉じても消えない）
+  const draft = useDraftGroup('forms:draft', {
+    title: { value: title, set: setTitle },
+    facts: { value: facts, set: setFacts },
+    instruction: { value: instruction, set: setInstruction },
+  });
   const run = async () => {
     setBusy(true);
     setOut('');
@@ -190,6 +197,7 @@ function DraftPanel({ templateIds, caseId, onClose }: { templateIds: number[]; c
         <input className="input" placeholder="書面の題名（例: 答弁書）" value={title} onChange={(e) => setTitle(e.target.value)} />
         <textarea className="input md:col-span-2" rows={4} placeholder="事実関係・書きたい内容（当事者、経緯、主張したい点）" value={facts} onChange={(e) => setFacts(e.target.value)} />
         <textarea className="input md:col-span-2" rows={2} placeholder="指示（例: 請求棄却を求める答弁書。争点は消滅時効。）" value={instruction} onChange={(e) => setInstruction(e.target.value)} />
+        <DraftHint handle={draft} className="md:col-span-2" />
       </div>
       <div className="flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-1">

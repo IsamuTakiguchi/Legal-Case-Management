@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
+import { useDraftRecord, clearDraft, DraftHint } from '../lib/draft';
 import { LineFriendPicker } from '../lib/LineFriendPicker';
 import { CHANNEL_LABEL } from '@lcm/shared';
 import { useSort, readingKey, SortHeader, type SortOption } from '../lib/sort';
@@ -39,6 +40,7 @@ export default function Clients() {
   const create = useMutation({
     mutationFn: (body: Partial<ClientRow>) => api.post<ClientRow>('/clients', body),
     onSuccess: (c) => {
+      clearDraft(clientFormDraftKey(null));
       qc.invalidateQueries({ queryKey: ['clients'] });
       nav(`/clients/${c.id}`);
     },
@@ -144,8 +146,14 @@ export default function Clients() {
   );
 }
 
+/** 新規・編集フォームの下書きキー（保存できたら親から clearDraft で消す） */
+export const clientFormDraftKey = (id?: number | null) => `client:${id ?? 'new'}:form`;
+
 export function ClientForm({ initial, onSubmit, onCancel, busy }: { initial: Partial<ClientRow>; onSubmit: (b: Partial<ClientRow>) => void; onCancel: () => void; busy?: boolean }) {
-  const [f, setF] = useState<Partial<ClientRow>>({ aliases: [], emails: [], ...initial });
+  const base = { aliases: [], emails: [], ...initial } as Partial<ClientRow>;
+  const [f, setF] = useState<Partial<ClientRow>>(base);
+  // 入力途中の内容を自動保存する（保存前に画面を離れても消えない）
+  const draft = useDraftRecord(clientFormDraftKey(initial.id), f as Record<string, unknown>, (v) => setF(v as Partial<ClientRow>), base as Record<string, unknown>);
   const folders = useQuery({ queryKey: ['drive-folders'], queryFn: () => api.get<{ path: string; items: { name: string; isFolder: boolean }[] }>('/drive/folders'), retry: false });
   const set = (k: keyof ClientRow, v: unknown) => setF({ ...f, [k]: v });
   return (
@@ -198,10 +206,11 @@ export function ClientForm({ initial, onSubmit, onCancel, busy }: { initial: Par
         <label className="label">メモ</label>
         <textarea className="input" rows={2} value={f.notes ?? ''} onChange={(e) => set('notes', e.target.value)} />
       </div>
-      <div className="flex gap-2 md:col-span-2">
+      <div className="flex items-center gap-2 md:col-span-2">
         <button className="btn btn-primary" disabled={busy}>
           保存
         </button>
+        <DraftHint handle={draft} />
         <button type="button" className="btn" onClick={onCancel}>
           キャンセル
         </button>
