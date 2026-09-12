@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { AI_MODELS, aiModelLabel } from '@lcm/shared';
 import { api } from '../lib/api';
 import { fmtDateTime } from '../lib/format';
 
@@ -11,7 +12,7 @@ interface Status {
   google: { configured: boolean; connected: boolean; account: string | null; redirectUri: string };
   microsoft: { configured: boolean; connected: boolean; account: string | null; redirectUri: string };
   zoom: { configured: boolean };
-  anthropic: { configured: boolean; model: string };
+  anthropic: { configured: boolean; model: string; modelLight: string };
   jobs: { name: string; label: string; cron: string; enabled: boolean; running: boolean; last: { startedAt: string; ok: boolean | null; summary: string | null; error: string | null } | null }[];
   demo: { seeded: boolean; seededAt: string | null };
 }
@@ -23,6 +24,24 @@ interface BackupInfo {
 }
 
 const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean; options?: { value: string; label: string }[] }[] = [
+  {
+    key: 'ai_model',
+    label: '使う AI モデル',
+    hint: '下書き・要約・判定に使うモデルです。Sonnet 5 は Opus 5 の 2.5 分の 1 ほどの料金で、速く動きます。料金の実績は下の「API 利用料」で確認できます',
+    options: [
+      { value: '', label: '既定（Opus 5）' },
+      ...AI_MODELS.map((m) => ({ value: m.id, label: `${m.label}　入力 $${m.priceIn} / 出力 $${m.priceOut}（100万トークンあたり）` })),
+    ],
+  },
+  {
+    key: 'ai_model_light',
+    label: '軽い処理に使う AI モデル',
+    hint: '返信待ちの判定・日程の読み取り・受信ファイルの命名・事件の振り分けなど、短い判定だけに使うモデルです。ここを Sonnet 5 にすると、書面の下書きや事件サマリーは上のモデルのまま、利用料だけ下げられます',
+    options: [
+      { value: '', label: '上と同じモデルを使う' },
+      ...AI_MODELS.map((m) => ({ value: m.id, label: m.label })),
+    ],
+  },
   {
     key: 'gmail_categories',
     label: 'Gmail の取込範囲',
@@ -253,7 +272,15 @@ export default function Settings() {
               <div className="text-xs text-slate-500">Webhook URL: {s.chatwork.webhookUrl}</div>
             </Conn>
             <Conn ok={s.zoom.configured} label="Zoom" detail={s.zoom.configured ? 'Server-to-Server OAuth 設定済' : '.env に ZOOM_ACCOUNT_ID / CLIENT_ID / SECRET を設定'} />
-            <Conn ok={s.anthropic.configured} label="Claude（Anthropic API）" detail={s.anthropic.configured ? `モデル: ${s.anthropic.model}` : '.env に ANTHROPIC_API_KEY を設定'} />
+            <Conn
+              ok={s.anthropic.configured}
+              label="Claude（Anthropic API）"
+              detail={s.anthropic.configured ? `モデル: ${aiModelLabel(s.anthropic.model)}` : '.env に ANTHROPIC_API_KEY を設定'}
+            >
+              {s.anthropic.configured && s.anthropic.modelLight !== s.anthropic.model && (
+                <div className="text-xs text-slate-500">軽い処理: {aiModelLabel(s.anthropic.modelLight)}</div>
+              )}
+            </Conn>
           </div>
         </section>
       )}

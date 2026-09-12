@@ -20,6 +20,7 @@ const { createApp } = await import('../index.js');
 const { listCases, activeCasesForClient } = await import('../services/cases.js');
 const { setSetting } = await import('../services/settings.js');
 const { loginAllowedEmails } = await import('../routes/auth.js');
+const { model: aiModel } = await import('../integrations/anthropic.js');
 
 beforeAll(() => openTestDatabase());
 afterAll(() => closeDatabase());
@@ -1661,5 +1662,35 @@ describe('受信ファイルの二重保存の防止', () => {
     );
     expect(db().select().from(schema.attachments).where(eq(schema.attachments.messageId, r.message.id)).all().length).toBe(1);
     setSetting('attachment_smart_names', '1');
+  });
+});
+
+
+describe('AI モデルの選択', () => {
+  it('未設定なら環境変数の既定、設定すればそのモデル、軽い処理は別に選べる', () => {
+    setSetting('ai_model', '');
+    setSetting('ai_model_light', '');
+    expect(aiModel()).toBe('claude-opus-5');
+    expect(aiModel('light')).toBe('claude-opus-5');
+
+    // 主モデルだけ変えると軽い処理もそれに従う
+    setSetting('ai_model', 'claude-sonnet-5');
+    expect(aiModel()).toBe('claude-sonnet-5');
+    expect(aiModel('light')).toBe('claude-sonnet-5');
+
+    // 軽い処理だけ安いモデルに回す
+    setSetting('ai_model', 'claude-opus-5');
+    setSetting('ai_model_light', 'claude-sonnet-5');
+    expect(aiModel()).toBe('claude-opus-5');
+    expect(aiModel('light')).toBe('claude-sonnet-5');
+
+    // 知らないモデル名は既定に戻す（設定ミスで止まらないように）
+    setSetting('ai_model', 'gpt-9');
+    setSetting('ai_model_light', 'gpt-9');
+    expect(aiModel()).toBe('claude-opus-5');
+    expect(aiModel('light')).toBe('claude-opus-5');
+
+    setSetting('ai_model', '');
+    setSetting('ai_model_light', '');
   });
 });

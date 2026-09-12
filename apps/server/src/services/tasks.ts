@@ -278,6 +278,7 @@ const waitingJudgeSchema = z.object({
 export async function judgeWaiting(text: string, clientName?: string | null) {
   return generateStructured({
     purpose: '返信待ちの判定',
+    tier: 'light',
     system: '法律事務所の事務補助者として、弁護士が送ったメッセージを読み、相手からの返答・資料・連絡を待つ状態になるかを判定します。日本語で簡潔に。',
     user: `相手: ${clientName ?? '不明'}\n\n送信文:\n${text}`,
     schema: waitingJudgeSchema,
