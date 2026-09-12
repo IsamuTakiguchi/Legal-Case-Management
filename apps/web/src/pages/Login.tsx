@@ -53,7 +53,7 @@ export default function Login() {
         <div className="flex flex-col items-center gap-3 text-center">
           <img src="/icon.svg?v=2" alt="" className="h-16 w-16 rounded-[16px] shadow-[0_4px_14px_rgba(0,0,0,0.16)]" />
           <div>
-            <h1 className="text-[19px] font-semibold tracking-[-0.01em]">統合コミュニケーション管理</h1>
+            <h1 className="text-[22px] font-semibold tracking-[-0.02em]">Lex</h1>
             <p className="mt-0.5 text-xs text-slate-500">登大路総合法律事務所</p>
           </div>
         </div>

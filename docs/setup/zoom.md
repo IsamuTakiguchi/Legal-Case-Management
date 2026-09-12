@@ -11,7 +11,7 @@ Server-to-Server OAuth アプリを作るには、Zoom アカウントのオー�
 ## 2. アプリの作成
 
 1. [Zoom App Marketplace](https://marketplace.zoom.us/) → Develop → **Build App** → **Server-to-Server OAuth**
-2. アプリ名を入力（例: 事務所アプリ）
+2. アプリ名を入力（例: Lex）
 3. App Credentials に表示される **Account ID / Client ID / Client Secret** を `.env` の `ZOOM_ACCOUNT_ID` / `ZOOM_CLIENT_ID` / `ZOOM_CLIENT_SECRET` に設定
 4. Scopes で以下を追加
    - `meeting:write:meeting:admin`（または `meeting:write:admin`）

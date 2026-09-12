@@ -213,7 +213,7 @@ const GOOGLE_STEPS: { title: string; url?: string; linkLabel?: string; actions: 
     title: 'API を有効にする',
     url: 'https://console.cloud.google.com/apis/enableflow?apiid=gmail.googleapis.com,calendar-json.googleapis.com',
     linkLabel: 'Gmail API と Calendar API を一括で有効化',
-    actions: ['リンクを開き、事務所の Google アカウントでログイン', 'プロジェクトの選択画面が出たら「新しいプロジェクト」→ 名前は任意（例: 事務所アプリ）→「作成」', '「次へ」→「有効にする」を押す'],
+    actions: ['リンクを開き、事務所の Google アカウントでログイン', 'プロジェクトの選択画面が出たら「新しいプロジェクト」→ 名前は任意（例: Lex）→「作成」', '「次へ」→「有効にする」を押す'],
     note: 'すでにプロジェクトがある場合はそれを選んで構いません。',
   },
   {
@@ -222,7 +222,7 @@ const GOOGLE_STEPS: { title: string; url?: string; linkLabel?: string; actions: 
     linkLabel: 'OAuth 同意画面（Google Auth Platform）',
     actions: [
       '「開始」を押す',
-      'アプリ名: 事務所アプリ（任意）、ユーザーサポートメール: 自分のアドレス →「次へ」',
+      'アプリ名: Lex（任意）、ユーザーサポートメール: 自分のアドレス →「次へ」',
       '対象: Google Workspace を使っていれば「内部」、個人の Gmail なら「外部」→「次へ」',
       '連絡先メール: 自分のアドレス →「次へ」→ 同意にチェック →「作成」',
     ],

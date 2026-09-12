@@ -12,7 +12,7 @@
 ## 1. アプリ登録
 
 1. [Microsoft Entra 管理センター](https://entra.microsoft.com/) → アプリケーション → アプリの登録 → **新規登録**
-2. 名前: 事務所アプリ（任意）
+2. 名前: Lex（任意）
 3. サポートされているアカウントの種類: **この組織ディレクトリのみ**
 4. リダイレクト URI: 「Web」を選び `https://<公開URL>/api/auth/microsoft/callback`（アプリの設定画面にも表示されます）
 5. 登録後の「概要」で **アプリケーション (クライアント) ID** と **ディレクトリ (テナント) ID** を控える → `.env` の `MS_CLIENT_ID` / `MS_TENANT_ID`
