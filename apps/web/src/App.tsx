@@ -109,27 +109,87 @@ export default function App() {
   );
 }
 
-/** 左メニュー。選択中の淡い青の枠は別の項目を選ぶと滑って移動する（macOS のサイドバー風） */
-function SideNav({ counts }: { counts: NavCounts }) {
+
+/**
+ * 選択中の項目を追いかける「ガラスの粒」。
+ * 進む向きに伸び、着地でぷるんと戻る（Liquid Glass 風）。axis は滑る向き。
+ */
+interface PillState {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+  anim: boolean;
+  visible: boolean;
+  sx: number;
+  sy: number;
+  origin: string;
+}
+function useLiquidPill(axis: 'x' | 'y', inset: { x: number; y: number }) {
+  const ref = useRef<HTMLElement>(null);
+  const [pill, setPill] = useState<PillState | null>(null);
+  const [moving, setMoving] = useState(false);
+  const last = useRef<{ top: number; left: number } | null>(null);
+  const timer = useRef<number | undefined>(undefined);
   const loc = useLocation();
-  const navRef = useRef<HTMLElement>(null);
-  const [pill, setPill] = useState<{ top: number; height: number; anim: boolean } | null>(null);
   useEffect(() => {
-    const nav = navRef.current;
-    if (!nav) return;
-    const active = nav.querySelector<HTMLElement>('a[aria-current="page"]');
+    const root = ref.current;
+    if (!root) return;
+    const active = root.querySelector<HTMLElement>('a[aria-current="page"]');
     if (!active) {
-      setPill(null);
+      setPill((p) => (p ? { ...p, visible: false, sx: 1, sy: 1 } : p));
       return;
     }
-    const top = active.getBoundingClientRect().top - nav.getBoundingClientRect().top;
-    const height = active.offsetHeight;
-    // 初回は動かさずに置き、2 回目以降は滑らせる
-    setPill((prev) => ({ top, height, anim: prev !== null }));
-  }, [loc.pathname]);
+    const rb = root.getBoundingClientRect();
+    const ab = active.getBoundingClientRect();
+    const box = {
+      top: ab.top - rb.top + inset.y,
+      left: ab.left - rb.left + inset.x,
+      width: ab.width - inset.x * 2,
+      height: ab.height - inset.y * 2,
+    };
+    const prev = last.current;
+    last.current = { top: box.top, left: box.left };
+    if (!prev) {
+      // 初回は動かさずに置く
+      setPill({ ...box, anim: false, visible: true, sx: 1, sy: 1, origin: 'center' });
+      return;
+    }
+    const d = axis === 'y' ? box.top - prev.top : box.left - prev.left;
+    // 移動距離が長いほど大きく伸びる（伸びすぎないよう上限を付ける）
+    const k = Math.min(0.22, Math.abs(d) / 480);
+    setPill({
+      ...box,
+      anim: true,
+      visible: true,
+      sx: axis === 'x' ? 1 + k : 1 - k * 0.45,
+      sy: axis === 'y' ? 1 + k : 1 - k * 0.45,
+      origin: axis === 'y' ? (d > 0 ? 'center top' : 'center bottom') : d > 0 ? 'left center' : 'right center',
+    });
+    if (k < 0.01) return;
+    setMoving(true);
+    window.clearTimeout(timer.current);
+    // 伸びきったところから、ばねで元の形に戻す
+    timer.current = window.setTimeout(() => {
+      setPill((p) => (p ? { ...p, sx: 1, sy: 1 } : p));
+      setMoving(false);
+    }, 170);
+  }, [loc.pathname, axis, inset.x, inset.y]);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const style = pill
+    ? ({ top: pill.top, left: pill.left, width: pill.width, height: pill.height, opacity: pill.visible ? 1 : 0, '--lg-sx': pill.sx, '--lg-sy': pill.sy, '--lg-origin': pill.origin } as React.CSSProperties)
+    : undefined;
+  return { ref, pill, style, className: `liquid-pill ${pill?.anim ? '' : 'no-anim'} ${moving ? 'is-moving' : ''}` };
+}
+
+/** 左メニュー。選択中のガラスの粒は、別の項目を選ぶと伸びながら滑って移動する */
+const SIDE_INSET = { x: 0, y: 0 };
+const TAB_INSET = { x: 8, y: 4 };
+function SideNav({ counts }: { counts: NavCounts }) {
+  const pill = useLiquidPill('y', SIDE_INSET);
   return (
-    <nav ref={navRef} className="relative flex flex-col gap-px px-3 pt-2">
-      {pill && <div className={`nav-pill mx-3 ${pill.anim ? '' : 'no-anim'}`} style={{ top: pill.top, height: pill.height }} aria-hidden />}
+    <nav ref={pill.ref as React.RefObject<HTMLElement>} className="relative flex flex-col gap-px px-3 pt-2">
+      {pill.pill && <div className={`${pill.className} nav-pill`} style={pill.style} aria-hidden />}
       {NAV.map((n, i) => (
         <div key={n.to}>
           {i === NAV.length - 2 && <div className="mx-1 my-2 border-t border-[var(--hairline)]" />}
@@ -305,6 +365,8 @@ function MobileTabs({ counts }: { counts: NavCounts }) {
   const rest = NAV.filter((n) => !PRIMARY_TABS.includes(n.to));
   const restActive = rest.some((n) => loc.pathname.startsWith(n.to));
   const short = (label: string) => label.replace('・返信待ち', '').replace('ダッシュボード', 'ホーム');
+  // 選んだタブの下に敷くガラスの粒（横に滑る）
+  const tabPill = useLiquidPill('x', TAB_INSET);
   return (
     <>
       {mounted && (
@@ -329,7 +391,12 @@ function MobileTabs({ counts }: { counts: NavCounts }) {
           </div>
         </div>
       )}
-      <nav className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-[var(--hairline)] bg-white/80 pb-[env(safe-area-inset-bottom)] backdrop-blur-2xl md:hidden" aria-label="主要メニュー">
+      <nav
+        ref={tabPill.ref as React.RefObject<HTMLElement>}
+        className="glass-bar fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-[var(--hairline)] pb-[env(safe-area-inset-bottom)] md:hidden"
+        aria-label="主要メニュー"
+      >
+        {tabPill.pill && <div className={`${tabPill.className} tab-pill`} style={tabPill.style} aria-hidden />}
         {primary.map((n) => (
           <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => `tab-item relative flex flex-col items-center gap-0.5 pb-1 pt-2 text-[10px] font-medium ${isActive ? 'text-[var(--accent)]' : 'text-slate-500'}`}>
             {({ isActive }) => (
