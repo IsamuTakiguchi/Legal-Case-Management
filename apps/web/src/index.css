@@ -18,6 +18,9 @@
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
   --ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
+  /* 選択中を示すガラスの色みと、そのふちの光 */
+  --lg-tint: rgba(0, 113, 227, 0.16);
+  --lg-edge: rgba(0, 113, 227, 0.22);
 }
 
 body {
@@ -355,20 +358,86 @@ td > select.input {
   transition: transform 160ms var(--ease-out);
 }
 
-/* 左メニューの選択中の枠: 別項目を選ぶと枠が滑って移動する */
-.nav-pill {
+/*
+ * 選択中の項目を示す「ガラスの粒」。Liquid Glass 風に、
+ * 背景を透かしてぼかし、ふちに光を乗せ、移動中は進む向きに伸びて着地でぷるんと戻る。
+ */
+.liquid-pill {
   position: absolute;
-  left: 0;
-  right: 0;
-  border-radius: 0.5rem;
-  background: var(--accent-soft);
+  border-radius: 999px;
   pointer-events: none;
+  /* 透明なガラス。後ろの文字や背景の色を拾って少し濃く見せる */
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.16) 46%, rgba(255, 255, 255, 0.36)),
+    var(--lg-tint);
+  -webkit-backdrop-filter: blur(14px) saturate(190%) brightness(1.04);
+  backdrop-filter: blur(14px) saturate(190%) brightness(1.04);
+  box-shadow:
+    /* ふちの屈折（上は強く、下はうっすら） */
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.35),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.5),
+    0 0 0 0.5px var(--lg-edge),
+    /* 落ち影はごく薄く、浮いている程度に */
+    0 6px 16px -10px rgba(0, 60, 130, 0.45);
+  transform: scale(var(--lg-sx, 1), var(--lg-sy, 1));
+  transform-origin: var(--lg-origin, center);
+  will-change: transform, top, left, width, height;
   transition:
-    top 360ms var(--ease-spring),
-    height 200ms var(--ease-out);
+    top 460ms var(--ease-spring),
+    left 460ms var(--ease-spring),
+    width 320ms var(--ease-out),
+    height 260ms var(--ease-out),
+    transform 380ms var(--ease-spring),
+    opacity 220ms var(--ease-out);
 }
-.nav-pill.no-anim {
+/* 表面を流れる光。移動中だけ強く出て、止まると静かになる */
+.liquid-pill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(var(--lg-sheen-angle, 180deg), rgba(255, 255, 255, 0.75), rgba(255, 255, 255, 0) 55%);
+  opacity: 0.5;
+  transition: opacity 280ms var(--ease-out);
+}
+.liquid-pill.is-moving {
+  /* 伸びるときは素早く、戻るときはばねで */
+  transition-duration: 460ms, 460ms, 320ms, 260ms, 130ms, 220ms;
+}
+.liquid-pill.is-moving::after {
+  opacity: 0.95;
+}
+.liquid-pill.no-anim {
   transition: none;
+}
+
+/* 左メニュー（縦に滑る） */
+.nav-pill {
+  border-radius: 10px;
+}
+
+/* スマホの下メニュー（横に滑る） */
+.tab-pill {
+  border-radius: 16px;
+}
+
+/* すりガラスの帯（スマホの下メニュー）。上のふちに細い光を乗せる */
+.glass-bar {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(255, 255, 255, 0.72));
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  backdrop-filter: blur(22px) saturate(180%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .liquid-pill {
+    transform: none;
+    transition-duration: 1ms;
+  }
+  .liquid-pill::after {
+    opacity: 0.5;
+  }
 }
 
 /* 読み込み中の文字はゆっくり明滅させる */
