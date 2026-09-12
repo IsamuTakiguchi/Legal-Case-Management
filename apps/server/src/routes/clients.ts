@@ -12,6 +12,7 @@ import { clientFolder } from '../services/attachments.js';
 import { listCaseTypes, upsertCaseType, createCase, updateCase, listCases, getCase, caseTimeline, addCaseNote, updateCaseNote, deleteCaseNote, generateCaseSummary, structureNote } from '../services/cases.js';
 import * as creditors from '../services/creditors.js';
 import { onedriveCandidates, chatworkCandidates, applyImport, deleteClient } from '../services/clientImport.js';
+import { findDuplicateClients, mergeClients } from '../services/clientMerge.js';
 import { clientFolderParents, defaultClientFolderRel, syncClientFolderName, syncClientFolderNames, rememberClientFolderId } from '../services/clientFolders.js';
 import { listContacts, createContact, updateContact, deleteContact, contactBriefs } from '../services/contacts.js';
 import { prepareHearingNotice } from '../services/hearingNotice.js';
@@ -38,6 +39,17 @@ clientRoutes.post('/clients', async (c) => {
   // LINE の友だちを選んで登録したら、既存の会話を付け、友だち追加の通知を消す
   if (input.lineUserId) linkLineFriendToClient(input.lineUserId, row.id);
   return c.json(db().select().from(schema.clients).where(eq(schema.clients.id, row.id)).get());
+});
+
+// ---- 同じ名前で二重に登録した依頼者の統合 ----
+
+/** 名前が同じ依頼者の組（空白・全角半角の違いは無視） */
+clientRoutes.get('/clients/duplicates', (c) => c.json(findDuplicateClients()));
+
+/** 選んだ依頼者を 1 件にまとめる。事件・会話・タスク・記録・ファイルの紐付けを残す側へ付け替える */
+clientRoutes.post('/clients/merge', async (c) => {
+  const body = z.object({ keepId: z.number().int(), mergeIds: z.array(z.number().int()).min(1).max(20) }).parse(await c.req.json());
+  return c.json(mergeClients(body.keepId, body.mergeIds));
 });
 
 clientRoutes.get('/clients/:id', (c) => {

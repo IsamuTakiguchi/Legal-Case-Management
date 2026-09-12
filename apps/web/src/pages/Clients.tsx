@@ -54,6 +54,7 @@ export default function Clients() {
       qc.invalidateQueries({ queryKey: ['cases'] });
     },
   });
+  const [showMerge, setShowMerge] = useState(false);
   const [folderMsg, setFolderMsg] = useState('');
   // OneDrive 側でフォルダ名を変えたとき、アプリ側の紐付けを付け直す
   const syncFolders = useMutation({
@@ -89,6 +90,9 @@ export default function Clients() {
         <button className="btn" onClick={() => syncFolders.mutate()} disabled={syncFolders.isPending} title="OneDrive でフォルダ名を変えた・別の区分へ移した場合に、アプリ側の紐付けを付け直します">
           {syncFolders.isPending ? '確認中…' : 'フォルダ名の変更を取り込む'}
         </button>
+        <button className="btn" onClick={() => setShowMerge(!showMerge)} title="同じ名前で二重に登録した依頼者を 1 件にまとめます">
+          重複の統合
+        </button>
         <button className="btn btn-primary" onClick={() => setShowNew(!showNew)}>
           ＋ 新規依頼者
         </button>
@@ -112,6 +116,7 @@ export default function Clients() {
         </div>
       )}
       {showImport && <BulkImport onDone={() => { setShowImport(false); qc.invalidateQueries({ queryKey: ['clients'] }); }} />}
+      {showMerge && <MergeDuplicates onDone={() => { qc.invalidateQueries({ queryKey: ['clients'] }); qc.invalidateQueries({ queryKey: ['cases'] }); }} />}
       {showNew && <ClientForm initial={{ name: params.get('new') ?? '', emails: params.get('email') ? [params.get('email')!] : [], lineUserId: params.get('line') || null, ...(params.get('line') ? { preferredChannel: 'line' } : {}) }} onSubmit={(b) => create.mutate(b)} onCancel={() => setShowNew(false)} busy={create.isPending} />}
       <div className="card p-0">
         <table className="w-full text-sm">
@@ -338,5 +343,135 @@ function BulkImport({ onDone }: { onDone: () => void }) {
         </div>
       )}
     </div>
+  );
+}
+
+// ---- 同じ名前の依頼者を 1 件に統合 ----
+
+interface MergeCandidate {
+  id: number;
+  name: string;
+  kana: string | null;
+  emails: string[];
+  lineUserId: string | null;
+  chatworkRoomId: number | null;
+  onedriveFolderPath: string | null;
+  createdAt: string;
+  updatedAt: string;
+  counts: { cases: number; conversations: number; messages: number; tasks: number; notes: number; attachments: number; events: number };
+}
+
+interface DuplicateGroup {
+  key: string;
+  name: string;
+  clients: MergeCandidate[];
+  suggestedKeepId: number;
+}
+
+interface MergeResult {
+  keepId: number;
+  mergedIds: number[];
+  moved: { cases: number; conversations: number; messages: number; tasks: number; notes: number; attachments: number; events: number };
+  conflicts: string[];
+}
+
+function MergeDuplicates({ onDone }: { onDone: () => void }) {
+  const qc = useQueryClient();
+  const dups = useQuery({ queryKey: ['client-duplicates'], queryFn: () => api.get<DuplicateGroup[]>('/clients/duplicates') });
+  const [keep, setKeep] = useState<Record<string, number>>({});
+  const [msg, setMsg] = useState('');
+  const merge = useMutation({
+    mutationFn: (v: { keepId: number; mergeIds: number[] }) => api.post<MergeResult>('/clients/merge', v),
+    onSuccess: (r) => {
+      const m = r.moved;
+      setMsg(
+        `統合しました（事件 ${m.cases} 件、会話 ${m.conversations} 件、タスク ${m.tasks} 件、記録 ${m.notes} 件、ファイル ${m.attachments} 件を引き継ぎ）` +
+          (r.conflicts.length ? `\n※ ${r.conflicts.join('\n※ ')}` : ''),
+      );
+      qc.invalidateQueries({ queryKey: ['client-duplicates'] });
+      onDone();
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
+  const groups = dups.data ?? [];
+  return (
+    <section className="card space-y-3 text-sm">
+      <div className="flex items-center gap-2">
+        <h2 className="font-semibold">重複の統合</h2>
+        <button className="btn btn-sm ml-auto" onClick={() => dups.refetch()} disabled={dups.isFetching}>
+          {dups.isFetching ? '確認中…' : '再確認'}
+        </button>
+      </div>
+      <p className="text-xs text-slate-500">
+        名前が同じ依頼者（空白や全角半角の違いは無視）を探します。残す依頼者を選んで統合すると、もう一方の事件・会話・タスク・記録・受信ファイル・予定がすべて残す側に付け替わります。OneDrive のフォルダは自動では統合しません（別のフォルダがある場合はお知らせします）。
+      </p>
+      {msg && <div className="fade-in whitespace-pre-wrap rounded border border-blue-200 bg-blue-50 p-2 text-slate-700">{msg}</div>}
+      {dups.isLoading && <div className="loading-text text-slate-500">確認中…</div>}
+      {!dups.isLoading && groups.length === 0 && <div className="text-slate-500">同じ名前の依頼者は見つかりませんでした。</div>}
+      {groups.map((g) => {
+        const keepId = keep[g.key] ?? g.suggestedKeepId;
+        const mergeIds = g.clients.filter((c) => c.id !== keepId).map((c) => c.id);
+        return (
+          <div key={g.key} className="rounded border border-slate-200 p-2">
+            <div className="mb-1 font-semibold">{g.name}（{g.clients.length} 件）</div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="text-left text-slate-500">
+                  <tr>
+                    <th className="py-1 pr-2">残す</th>
+                    <th className="py-1 pr-2">名前 / かな</th>
+                    <th className="py-1 pr-2">事件</th>
+                    <th className="py-1 pr-2">会話</th>
+                    <th className="py-1 pr-2">タスク</th>
+                    <th className="py-1 pr-2">記録</th>
+                    <th className="py-1 pr-2">ファイル</th>
+                    <th className="py-1 pr-2">連絡先</th>
+                    <th className="py-1 pr-2">フォルダ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {g.clients.map((c) => (
+                    <tr key={c.id} className={c.id === keepId ? 'bg-blue-50' : ''}>
+                      <td className="py-1 pr-2">
+                        <input type="radio" name={`keep-${g.key}`} checked={c.id === keepId} onChange={() => setKeep({ ...keep, [g.key]: c.id })} aria-label={`${c.name} を残す`} />
+                      </td>
+                      <td className="py-1 pr-2">
+                        <Link to={`/clients/${c.id}`} className="text-blue-700 hover:underline">
+                          {c.name}
+                        </Link>
+                        {c.kana && <span className="ml-1 text-slate-500">{c.kana}</span>}
+                        <span className="ml-1 text-slate-400">ID {c.id}</span>
+                      </td>
+                      <td className="py-1 pr-2">{c.counts.cases}</td>
+                      <td className="py-1 pr-2">{c.counts.conversations}</td>
+                      <td className="py-1 pr-2">{c.counts.tasks}</td>
+                      <td className="py-1 pr-2">{c.counts.notes}</td>
+                      <td className="py-1 pr-2">{c.counts.attachments}</td>
+                      <td className="py-1 pr-2">
+                        {[c.emails.join(' '), c.lineUserId ? 'LINE' : '', c.chatworkRoomId ? `CW ${c.chatworkRoomId}` : ''].filter(Boolean).join(' / ') || '—'}
+                      </td>
+                      <td className="py-1 pr-2 text-slate-500">{c.onedriveFolderPath ?? '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <button
+              className="btn btn-primary btn-sm mt-2"
+              disabled={merge.isPending || mergeIds.length === 0}
+              onClick={() => {
+                const names = g.clients.filter((c) => mergeIds.includes(c.id)).map((c) => `${c.name}（ID ${c.id}）`).join('、');
+                const target = g.clients.find((c) => c.id === keepId);
+                if (confirm(`${names} を ${target?.name}（ID ${keepId}）に統合します。事件・会話・タスク・記録・ファイルは残す側に移り、統合した依頼者は削除されます。よろしいですか？`)) {
+                  merge.mutate({ keepId, mergeIds });
+                }
+              }}
+            >
+              {merge.isPending ? '統合中…' : 'この組を統合する'}
+            </button>
+          </div>
+        );
+      })}
+    </section>
   );
 }
