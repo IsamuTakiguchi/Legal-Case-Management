@@ -20,6 +20,7 @@ const { createApp } = await import('../index.js');
 const { listCases, activeCasesForClient } = await import('../services/cases.js');
 const { setSetting } = await import('../services/settings.js');
 const { loginAllowedEmails } = await import('../routes/auth.js');
+const { findDuplicateClients, mergeClients } = await import('../services/clientMerge.js');
 const { model: aiModel } = await import('../integrations/anthropic.js');
 
 beforeAll(() => openTestDatabase());
@@ -1692,5 +1693,64 @@ describe('AI モデルの選択', () => {
 
     setSetting('ai_model', '');
     setSetting('ai_model_light', '');
+  });
+});
+
+describe('依頼者の統合', () => {
+  it('同じ名前の依頼者を 1 件にまとめ、事件・会話・タスク・記録・ファイルを引き継ぐ', () => {
+    const a = db().insert(schema.clients).values({ name: '重複 花子', kana: 'じゅうふく はなこ', emails: ['a@example.com'], onedriveFolderPath: '重複花子' }).returning().get();
+    // 空白の入った同じ名前（別登録）
+    const b = db().insert(schema.clients).values({ name: '重複　花子', emails: ['b@example.com'], lineUserId: 'Udup0000000000000000000000000001' }).returning().get();
+
+    const caseA = db().insert(schema.cases).values({ clientId: a.id, title: '離婚', status: 'active' }).returning().get();
+    const caseB = db().insert(schema.cases).values({ clientId: b.id, title: '遺産分割', status: 'active' }).returning().get();
+    const convB = db().insert(schema.conversations).values({ channel: 'gmail', externalThreadId: 'dup-thread-1', clientId: b.id, lastMessageAt: new Date().toISOString() }).returning().get();
+    const msgB = db().insert(schema.messages).values({ conversationId: convB.id, channel: 'gmail', externalId: 'dup-m1', direction: 'in', body: 'よろしくお願いします', sentAt: new Date().toISOString(), clientId: b.id }).returning().get();
+    db().insert(schema.attachments).values({ messageId: msgB.id, clientId: b.id, filename: '戸籍.pdf', status: 'stored', storedPath: '/重複花子2/受領資料/戸籍.pdf' }).run();
+    db().insert(schema.tasks).values({ clientId: b.id, caseId: caseB.id, title: '戸籍を確認', status: 'open' }).run();
+    db().insert(schema.caseNotes).values({ caseId: caseB.id, clientId: b.id, kind: 'phone', occurredAt: new Date().toISOString(), rawText: '電話あり' }).run();
+
+    const groups = findDuplicateClients();
+    const group = groups.find((g) => g.clients.some((c) => c.id === a.id));
+    expect(group?.clients.map((c) => c.id).sort()).toEqual([a.id, b.id].sort());
+
+    const r = mergeClients(a.id, [b.id]);
+    expect(r.moved.cases).toBe(1);
+    expect(r.moved.conversations).toBe(1);
+    expect(r.moved.tasks).toBe(1);
+    expect(r.moved.notes).toBe(1);
+    expect(r.moved.attachments).toBe(1);
+
+    // 統合された側は消え、事件は残す側に付く
+    expect(db().select().from(schema.clients).where(eq(schema.clients.id, b.id)).get()).toBeUndefined();
+    const cases = db().select().from(schema.cases).where(eq(schema.cases.clientId, a.id)).all();
+    expect(cases.map((c) => c.id).sort()).toEqual([caseA.id, caseB.id].sort());
+    expect(db().select().from(schema.conversations).where(eq(schema.conversations.id, convB.id)).get()?.clientId).toBe(a.id);
+    expect(db().select().from(schema.messages).where(eq(schema.messages.id, msgB.id)).get()?.clientId).toBe(a.id);
+
+    // 連絡先はまとまり、別名に旧登録の名前が入る
+    const kept = db().select().from(schema.clients).where(eq(schema.clients.id, a.id)).get()!;
+    expect(kept.emails.sort()).toEqual(['a@example.com', 'b@example.com']);
+    expect(kept.lineUserId).toBe('Udup0000000000000000000000000001');
+    expect(kept.aliases).toContain('重複　花子');
+    expect(kept.onedriveFolderPath).toBe('重複花子');
+    expect(kept.notes ?? '').toContain('統合');
+  });
+
+  it('残す側と違う OneDrive フォルダ・LINE の紐付けは引き継がずに知らせる', () => {
+    const keep = db().insert(schema.clients).values({ name: '衝突 太郎', onedriveFolderPath: '1.進行事件/衝突太郎', lineUserId: 'Uconflict000000000000000000000001' }).returning().get();
+    const other = db().insert(schema.clients).values({ name: '衝突 太郎', onedriveFolderPath: '0.相談/衝突太郎', lineUserId: 'Uconflict000000000000000000000002' }).returning().get();
+    const r = mergeClients(keep.id, [other.id]);
+    expect(r.conflicts.some((x) => x.includes('0.相談/衝突太郎'))).toBe(true);
+    expect(r.conflicts.some((x) => x.includes('LINE'))).toBe(true);
+    const kept = db().select().from(schema.clients).where(eq(schema.clients.id, keep.id)).get()!;
+    expect(kept.onedriveFolderPath).toBe('1.進行事件/衝突太郎');
+    expect(kept.lineUserId).toBe('Uconflict000000000000000000000001');
+  });
+
+  it('残す依頼者を統合対象に含めても壊れない', () => {
+    const keep = db().insert(schema.clients).values({ name: '単独 一郎' }).returning().get();
+    expect(() => mergeClients(keep.id, [keep.id])).toThrow();
+    expect(db().select().from(schema.clients).where(eq(schema.clients.id, keep.id)).get()).toBeTruthy();
   });
 });
