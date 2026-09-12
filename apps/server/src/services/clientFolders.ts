@@ -1,7 +1,7 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { storage } from '../integrations/storage.js';
-import { isMsConnected, moveItem, getItemByPath, joinPath } from '../integrations/onedrive.js';
+import { isMsConnected, moveItem, getItem, getItemByPath, joinPath } from '../integrations/onedrive.js';
 import { getSetting, setSetting } from './settings.js';
 import { logger } from '../logger.js';
 import { CASE_STATUSES, CASE_STATUS_LABEL, type CaseStatus } from '@lcm/shared';
@@ -130,6 +130,7 @@ export async function resolveAllClientFolders(): Promise<{ scanned: number; upda
   const root = st.clientRoot();
   const index = new Map<string, string>(); // フォルダ名（空白除去） → 区分/名前
   const byBareName = new Map<string, string>(); // 先頭かなを除いた氏名 → 区分/名前
+  const itemIdByRel = new Map<string, string>(); // 区分/名前 → OneDrive のフォルダ ID
   const allNames: string[] = [];
   let scanned = 0;
   for (const parent of parents) {
@@ -139,6 +140,7 @@ export async function resolveAllClientFolders(): Promise<{ scanned: number; upda
       scanned++;
       allNames.push(i.name);
       const key = i.name.replace(/[\s　]/g, '');
+      if (i.itemId) itemIdByRel.set(`${parent}/${i.name}`, i.itemId);
       if (!index.has(key)) index.set(key, `${parent}/${i.name}`);
       const bare = parseFolderName(i.name).name.replace(/[\s　]/g, '');
       if (bare && !byBareName.has(bare)) byBareName.set(bare, `${parent}/${i.name}`);
@@ -172,12 +174,14 @@ export async function resolveAllClientFolders(): Promise<{ scanned: number; upda
         db().update(schema.clients).set({ onedriveFolderPath: found, updatedAt: now }).where(eq(schema.clients.id, c.id)).run();
         updated++;
       }
+      rememberClientFolderId(c.id, itemIdByRel.get(found ?? cur));
       continue;
     }
     const key = (cur || c.name).replace(/[\s　]/g, '');
     const found = index.get(key) ?? byBareName.get(key) ?? byBareName.get(parseFolderName(cur || c.name).name.replace(/[\s　]/g, ''));
     if (found) {
       db().update(schema.clients).set({ onedriveFolderPath: found, updatedAt: now }).where(eq(schema.clients.id, c.id)).run();
+      rememberClientFolderId(c.id, itemIdByRel.get(found));
       updated++;
     } else {
       missing.push(c.name);
@@ -230,4 +234,117 @@ export async function syncClientFolderWithStatus(clientId: number, caseId?: numb
   }
   logger.info({ clientId, from: parent, to: expectedParent }, '依頼者フォルダを区分に合わせて移動');
   return { moved: true, from: parent, to: expectedParent };
+}
+
+// ---- OneDrive 側でフォルダ名を変えられたときの追従 ----
+
+/**
+ * OneDrive のフォルダは ID で追える。依頼者フォルダの ID を控えておき、
+ * 名前を変えられたり別の区分フォルダに移されたりしても、アプリ側のパスを付け直す。
+ */
+export function rememberClientFolderId(clientId: number, itemId: string | null | undefined) {
+  if (!itemId) return;
+  const cur = db().select({ id: schema.clients.onedriveItemId }).from(schema.clients).where(eq(schema.clients.id, clientId)).get();
+  if (cur?.id === itemId) return;
+  db().update(schema.clients).set({ onedriveItemId: itemId, updatedAt: new Date().toISOString() }).where(eq(schema.clients.id, clientId)).run();
+}
+
+/** Graph の parentReference.path（/drive/root:/依頼者/1.進行事件）から、依頼者ルートからの相対パスを求める */
+export function relPathFromItem(item: { name: string; parentReference?: { path?: string } }, root: string): string | null {
+  const raw = item.parentReference?.path ?? '';
+  const idx = raw.indexOf('root:');
+  if (idx < 0) return null;
+  let parent: string;
+  try {
+    parent = decodeURIComponent(raw.slice(idx + 'root:'.length));
+  } catch {
+    parent = raw.slice(idx + 'root:'.length);
+  }
+  const norm = (p: string) => '/' + p.replace(/^\/+|\/+$/g, '');
+  const r = norm(root);
+  const p = norm(parent);
+  if (r !== '/' && p !== r && !p.startsWith(`${r}/`)) return null; // 依頼者ルートの外に出された
+  const rel = (r === '/' ? p : p.slice(r.length)).replace(/^\/+|\/+$/g, '');
+  return rel ? `${rel}/${item.name}` : item.name;
+}
+
+export interface FolderRename {
+  clientId: number;
+  clientName: string;
+  from: string;
+  to: string;
+}
+
+/** 依頼者フォルダのパスを付け替え、保存済みファイルの表示パスも直す */
+function applyNewFolderPath(client: { id: number; name: string; onedriveFolderPath: string | null }, newRel: string): FolderRename {
+  const from = client.onedriveFolderPath ?? '';
+  const now = new Date().toISOString();
+  db().update(schema.clients).set({ onedriveFolderPath: newRel, updatedAt: now }).where(eq(schema.clients.id, client.id)).run();
+  if (from) {
+    // 保存済みファイルの表示用パスも新しいフォルダ名に置き換える（実体は ID で追えているので移動は不要）
+    const oldFolder = joinPath(storage().clientRoot(), from);
+    const newFolder = joinPath(storage().clientRoot(), newRel);
+    db()
+      .run(sql`update attachments set stored_path = ${newFolder} || substr(stored_path, ${oldFolder.length + 1}) where stored_path like ${oldFolder + '/%'}`);
+    db().run(sql`update form_templates set path = ${newFolder} || substr(path, ${oldFolder.length + 1}) where path like ${oldFolder + '/%'}`);
+  }
+  logger.info({ clientId: client.id, from, to: newRel }, 'OneDrive 側のフォルダ名の変更を取り込みました');
+  return { clientId: client.id, clientName: client.name, from, to: newRel };
+}
+
+/**
+ * 依頼者 1 件分。OneDrive 側で名前・場所が変わっていたらパスを付け直す。
+ * ID をまだ控えていなければ、今のパスから引いて控える（次回以降の名前変更に備える）。
+ */
+export async function syncClientFolderName(clientId: number): Promise<FolderRename | null> {
+  const st = storage();
+  if (st.kind !== 'onedrive') return null;
+  if (!(await isMsConnected())) return null;
+  const c = db().select().from(schema.clients).where(eq(schema.clients.id, clientId)).get();
+  if (!c) return null;
+  const rel = c.onedriveFolderPath?.trim() ?? '';
+  if (rel.startsWith('/')) return null; // 絶対パス指定はそのまま
+  const root = st.clientRoot();
+  if (!c.onedriveItemId) {
+    if (!rel) return null;
+    const item = await getItemByPath(joinPath(root, rel)).catch(() => null);
+    if (item) rememberClientFolderId(clientId, item.id);
+    return null;
+  }
+  const item = await getItem(c.onedriveItemId).catch(() => null);
+  if (!item || item.deleted) return null; // 消された・ごみ箱送り。パスはそのまま残す
+  const newRel = relPathFromItem(item, root);
+  if (!newRel || newRel === rel) return null;
+  return applyNewFolderPath(c, newRel);
+}
+
+/** 全依頼者ぶん。OneDrive 側の名前変更・移動をまとめて取り込む */
+export async function syncClientFolderNames(): Promise<{ checked: number; renamed: number; adopted: number; renames: FolderRename[] }> {
+  const st = storage();
+  if (st.kind !== 'onedrive') return { checked: 0, renamed: 0, adopted: 0, renames: [] };
+  if (!(await isMsConnected())) return { checked: 0, renamed: 0, adopted: 0, renames: [] };
+  const root = st.clientRoot();
+  const renames: FolderRename[] = [];
+  let checked = 0;
+  let adopted = 0;
+  for (const c of db().select().from(schema.clients).all()) {
+    const rel = c.onedriveFolderPath?.trim() ?? '';
+    if (rel.startsWith('/')) continue;
+    if (!c.onedriveItemId) {
+      if (!rel) continue;
+      const item = await getItemByPath(joinPath(root, rel)).catch(() => null);
+      if (item) {
+        rememberClientFolderId(c.id, item.id);
+        adopted++;
+      }
+      continue;
+    }
+    checked++;
+    const item = await getItem(c.onedriveItemId).catch(() => null);
+    if (!item || item.deleted) continue;
+    const newRel = relPathFromItem(item, root);
+    if (!newRel || newRel === rel) continue;
+    renames.push(applyNewFolderPath(c, newRel));
+  }
+  return { checked, renamed: renames.length, adopted, renames };
 }

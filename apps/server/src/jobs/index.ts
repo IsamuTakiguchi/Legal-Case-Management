@@ -19,7 +19,7 @@ import { isGoogleConnected } from '../integrations/google.js';
 import { getSettingInt } from '../services/settings.js';
 import { refreshLineTokenIfNeeded } from '../services/lineSetup.js';
 import { runBackup } from '../services/backup.js';
-import { resolveAllClientFolders } from '../services/clientFolders.js';
+import { resolveAllClientFolders, syncClientFolderNames } from '../services/clientFolders.js';
 import { refreshStyleProfiles } from '../services/style.js';
 import { runDueScheduled, recoverStuckScheduled } from '../services/scheduledSend.js';
 import { refreshUnlinkedAlerts } from '../services/identity.js';
@@ -92,6 +92,17 @@ export const JOBS: JobDef[] = [
   { name: 'backup', label: 'バックアップ（OneDrive に世代保存）', cron: '0 18 * * *', run: runBackup, enabled: () => true },
   { name: 'scheduledSend', label: '送信予約の実行（毎分）', cron: '* * * * *', run: () => runDueScheduled(), enabled: () => true, quiet: true },
   { name: 'housekeeping', label: 'ジョブ履歴の整理（60 日より古いものを削除）', cron: '50 16 * * *', run: async () => ({ deleted: pruneJobRuns(60) }), enabled: () => true },
+  {
+    name: 'clientFolderSync',
+    label: 'OneDrive のフォルダ名の変更を取り込む',
+    cron: '45 * * * *',
+    run: async () => {
+      const r = await syncClientFolderNames();
+      return { renamed: r.renamed, adopted: r.adopted };
+    },
+    enabled: () => true,
+    quiet: true,
+  },
   { name: 'retryAttachments', label: '添付の再取得（失敗・取得中のまま止まったもの）', cron: '40 * * * *', run: async () => ({ requeued: await requeueStuckAttachments(), retried: await retryFailedAttachments() }), enabled: () => true },
 ];
 

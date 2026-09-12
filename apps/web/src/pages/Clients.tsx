@@ -54,6 +54,20 @@ export default function Clients() {
       qc.invalidateQueries({ queryKey: ['cases'] });
     },
   });
+  const [folderMsg, setFolderMsg] = useState('');
+  // OneDrive 側でフォルダ名を変えたとき、アプリ側の紐付けを付け直す
+  const syncFolders = useMutation({
+    mutationFn: () => api.post<{ checked: number; renamed: number; adopted: number; renames: { clientName: string; from: string; to: string }[] }>('/clients/folders/sync-names'),
+    onSuccess: (r) => {
+      setFolderMsg(
+        r.renamed > 0
+          ? `${r.renamed} 件のフォルダ名の変更を取り込みました: ${r.renames.map((x) => `${x.clientName}（${x.from} → ${x.to}）`).join('、')}`
+          : `変更はありませんでした（${r.checked} 件を確認${r.adopted ? `、${r.adopted} 件のフォルダを新たに覚えました` : ''}）`,
+      );
+      qc.invalidateQueries({ queryKey: ['clients'] });
+    },
+    onError: (e) => setFolderMsg((e as Error).message),
+  });
   const toggle = (id: number) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
   const sort = useSort('clients', CLIENT_SORTS, 'reading');
   const rows = sort.apply(list.data ?? []);
@@ -72,10 +86,14 @@ export default function Clients() {
         <button className="btn" onClick={() => setShowImport(!showImport)}>
           一括登録（フォルダ / Chatwork）
         </button>
+        <button className="btn" onClick={() => syncFolders.mutate()} disabled={syncFolders.isPending} title="OneDrive でフォルダ名を変えた・別の区分へ移した場合に、アプリ側の紐付けを付け直します">
+          {syncFolders.isPending ? '確認中…' : 'フォルダ名の変更を取り込む'}
+        </button>
         <button className="btn btn-primary" onClick={() => setShowNew(!showNew)}>
           ＋ 新規依頼者
         </button>
       </div>
+      {folderMsg && <div className="fade-in card text-sm text-slate-700">{folderMsg}</div>}
       {selected.length > 0 && (
         <div className="card flex flex-wrap items-center gap-2 border-red-200 bg-red-50 text-sm">
           <span>{selected.length} 件を選択中</span>

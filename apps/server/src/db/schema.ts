@@ -13,6 +13,8 @@ export const clients = sqliteTable('clients', {
   chatworkRoomId: integer('chatwork_room_id'),
   chatworkAccountId: integer('chatwork_account_id'),
   onedriveFolderPath: text('onedrive_folder_path'),
+  /** 依頼者フォルダの OneDrive 上の ID。フォルダ名を変えられても追えるように控える */
+  onedriveItemId: text('onedrive_item_id'),
   preferredChannel: text('preferred_channel'),
   notes: text('notes'),
   archived: integer('archived', { mode: 'boolean' }).notNull().default(false),

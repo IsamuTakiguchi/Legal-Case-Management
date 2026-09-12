@@ -12,10 +12,10 @@ import { clientFolder } from '../services/attachments.js';
 import { listCaseTypes, upsertCaseType, createCase, updateCase, listCases, getCase, caseTimeline, addCaseNote, updateCaseNote, deleteCaseNote, generateCaseSummary, structureNote } from '../services/cases.js';
 import * as creditors from '../services/creditors.js';
 import { onedriveCandidates, chatworkCandidates, applyImport, deleteClient } from '../services/clientImport.js';
-import { clientFolderParents, defaultClientFolderRel } from '../services/clientFolders.js';
+import { clientFolderParents, defaultClientFolderRel, syncClientFolderName, syncClientFolderNames, rememberClientFolderId } from '../services/clientFolders.js';
 import { listContacts, createContact, updateContact, deleteContact, contactBriefs } from '../services/contacts.js';
 import { prepareHearingNotice } from '../services/hearingNotice.js';
-import { joinPath } from '../integrations/onedrive.js';
+import { joinPath, getItemByPath } from '../integrations/onedrive.js';
 
 import { listLineFriends, syncLineFollowers, linkLineFriendToClient, assertLineFriendFree } from '../services/lineFriends.js';
 import { classifyClientMessages, classifyMessageCase } from '../services/caseClassify.js';
@@ -95,16 +95,33 @@ clientRoutes.get('/clients/:id/files', async (c) => {
   const row = db().select().from(schema.clients).where(eq(schema.clients.id, id)).get();
   if (!row) return c.json({ error: 'not found' }, 404);
   const sub = c.req.query('path') ?? '';
-  const folder = sub ? `${clientFolder(row)}/${sub.replace(/^\/+/, '')}` : clientFolder(row);
+  const pathOf = (r: typeof row) => (sub ? `${clientFolder(r)}/${sub.replace(/^\/+/, '')}` : clientFolder(r));
+  let folder = pathOf(row);
   try {
     const items = await storage().list(folder);
     return c.json({ folder, items, exists: true });
   } catch (err) {
+    if (!(err instanceof FolderNotFoundError)) throw err;
+    // OneDrive 側でフォルダ名を変えられたのかもしれない。ID から今の名前を引いて開き直す
+    const renamed = await syncClientFolderName(id).catch(() => null);
+    if (renamed) {
+      const fresh = db().select().from(schema.clients).where(eq(schema.clients.id, id)).get();
+      if (fresh) {
+        folder = pathOf(fresh);
+        try {
+          return c.json({ folder, items: await storage().list(folder), exists: true, renamedFrom: renamed.from });
+        } catch (err2) {
+          if (!(err2 instanceof FolderNotFoundError)) throw err2;
+        }
+      }
+    }
     // 新規依頼者などでフォルダがまだ無いのはエラーではない（最初の保存時か「作成」で作られる）
-    if (err instanceof FolderNotFoundError) return c.json({ folder, items: [], exists: false });
-    throw err;
+    return c.json({ folder, items: [], exists: false });
   }
 });
+
+/** OneDrive 側で変えたフォルダ名をまとめて取り込む */
+clientRoutes.post('/clients/folders/sync-names', async (c) => c.json(await syncClientFolderNames()));
 
 /** 依頼者フォルダを OneDrive に作る。パス未設定なら既定の場所に作り、依頼者に記録する */
 clientRoutes.post('/clients/:id/folder', async (c) => {
@@ -118,6 +135,9 @@ clientRoutes.post('/clients/:id/folder', async (c) => {
   }
   const folder = clientFolder({ ...row, onedriveFolderPath: rel });
   await storage().ensureFolder(folder);
+  // 以後 OneDrive 側で名前を変えられても追えるよう、フォルダの ID を控える
+  const item = await getItemByPath(folder).catch(() => null);
+  if (item) rememberClientFolderId(id, item.id);
   return c.json({ folder, path: rel });
 });
 

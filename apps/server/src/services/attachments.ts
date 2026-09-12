@@ -10,7 +10,7 @@ import { getSetting } from './settings.js';
 import { upsertAlert, resolveAlertsByKeyPrefix } from './alerts.js';
 import { yyyymmdd, CHANNEL_LABEL, type Channel } from '@lcm/shared';
 import { logger } from '../logger.js';
-import { defaultClientFolderRel } from './clientFolders.js';
+import { defaultClientFolderRel, syncClientFolderName } from './clientFolders.js';
 import { isGenericFilename, suggestFilename } from './fileNaming.js';
 
 export function clientFolder(client: { id?: number; name: string; onedriveFolderPath: string | null }): string {
@@ -112,7 +112,7 @@ export async function processAttachment(attachmentId: number, opts: { force?: bo
   if (!msg) return;
   const conv = d.select().from(schema.conversations).where(eq(schema.conversations.id, msg.conversationId)).get();
   const clientId = att.clientId ?? conv?.clientId ?? null;
-  const client = clientId ? d.select().from(schema.clients).where(eq(schema.clients.id, clientId)).get() : null;
+  let client = clientId ? d.select().from(schema.clients).where(eq(schema.clients.id, clientId)).get() ?? null : null;
   if (!opts.force) {
     const policy = attachmentPolicy();
     if (policy === 'manual' || (policy === 'client_only' && !client)) {
@@ -164,6 +164,11 @@ export async function processAttachment(attachmentId: number, opts: { force?: bo
       }
     }
     const filename = storedFilename(msg.channel as Channel, msg.sentAt, displayName);
+    // OneDrive 側でフォルダ名を変えられていたら、ここで取り込んでから保存する（古い名前で作り直さないため）
+    if (client) {
+      await syncClientFolderName(client.id).catch(() => null);
+      client = d.select().from(schema.clients).where(eq(schema.clients.id, client.id)).get() ?? client;
+    }
     const folder = client ? joinPath(clientFolder(client), getSetting('attachment_subfolder')) : unassignedFolder();
     // 同じ名前・同じ大きさのファイルが既にあれば使い回す（再取得・再デプロイでの二重保存を防ぐ）
     const stored = await storage().put(folder, filename, data, { dedupe: true });
@@ -247,6 +252,7 @@ export async function assignAttachment(attachmentId: number, clientId: number): 
   const d = db();
   const att = d.select().from(schema.attachments).where(eq(schema.attachments.id, attachmentId)).get();
   if (!att) throw new Error('添付が見つかりません');
+  await syncClientFolderName(clientId).catch(() => null);
   const client = d.select().from(schema.clients).where(eq(schema.clients.id, clientId)).get();
   if (!client) throw new Error('依頼者が見つかりません');
   const target = joinPath(clientFolder(client), getSetting('attachment_subfolder'));
