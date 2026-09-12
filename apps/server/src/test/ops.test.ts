@@ -1596,3 +1596,70 @@ describe('複数事件のメッセージ振り分け', () => {
     expect(await classifyClientMessages(single.id)).toMatchObject({ checked: 0, assigned: 0 });
   });
 });
+
+describe('受信ファイルの二重保存の防止', () => {
+  it('同時に取得しても 1 つしか保存されず、途中で止まった後の再取得でも同じファイルを増やさない', async () => {
+    const { processAttachment } = await import('../services/attachments.js');
+    const { setAdapter } = await import('../channels/registry.js');
+    const { extractDownloadIds } = await import('../channels/chatwork.js');
+    const { ingestMessage } = await import('../services/inbox.js');
+    const { setSetting } = await import('../services/settings.js');
+    setSetting('attachment_policy', 'client_only');
+    setSetting('attachment_smart_names', '0');
+    let fetches = 0;
+    setAdapter('chatwork', {
+      channel: 'chatwork',
+      isConfigured: () => true,
+      fetchAttachment: async () => {
+        fetches++;
+        // 取得に時間がかかる状況を作り、同時実行を起こす
+        await new Promise((r) => setTimeout(r, 30));
+        return Buffer.from('DUPLICATE-TEST-BODY');
+      },
+      send: async () => ({ externalId: 'x', externalThreadId: 'y', sentAt: new Date().toISOString() }),
+    });
+    const client = db().insert(schema.clients).values({ name: '二重 太郎', kana: 'にじゅうたろう', emails: [], aliases: [] }).returning().get();
+    const now = new Date().toISOString();
+    const conv = db().insert(schema.conversations).values({ channel: 'chatwork', externalThreadId: 'dup-room', clientId: client.id, lastMessageAt: now, lastInboundAt: now }).returning().get();
+    const msg = db().insert(schema.messages).values({ conversationId: conv.id, channel: 'chatwork', externalId: 'dup-msg-1', direction: 'in', sentAt: now }).returning().get();
+    const att = db().insert(schema.attachments).values({ messageId: msg.id, filename: '見積書.pdf', channelRef: { roomId: 1, fileId: 1 } }).returning().get();
+    // 受信時の保存とジョブの再取得が重なった状況
+    await Promise.all([processAttachment(att.id), processAttachment(att.id)]);
+    expect(fetches).toBe(1);
+    const saved = db().select().from(schema.attachments).where(eq(schema.attachments.id, att.id)).get()!;
+    expect(saved.status).toBe('stored');
+    expect(saved.processingAt).toBeNull();
+    const folder = path.dirname(path.join(tmp, 'clients', saved.storedPath!));
+    const names = () => fs.readdirSync(folder).filter((n) => n.includes('見積書'));
+    expect(names().length).toBe(1);
+    // アップロードは済んだが記録できずに終わった状況（処理中の印が残ったまま・未保存）
+    db().update(schema.attachments).set({ status: 'pending', storedPath: null, driveItemId: null, processingAt: new Date(Date.now() - 30 * 60_000).toISOString() }).where(eq(schema.attachments.id, att.id)).run();
+    await processAttachment(att.id);
+    expect(fetches).toBe(2); // 取得はやり直すが
+    expect(names().length).toBe(1); // 同じ内容なので保存は増えない
+    expect(db().select().from(schema.attachments).where(eq(schema.attachments.id, att.id)).get()!.status).toBe('stored');
+
+    // Chatwork の本文に同じファイルが 2 回書かれていても 1 件
+    expect(extractDownloadIds('[download:55]見積書.pdf[/download]\n引用: [download:55]見積書.pdf[/download]')).toEqual([{ fileId: 55, filename: '見積書.pdf' }]);
+    // 受信時も同じファイルは 1 行だけ登録する
+    const r = await ingestMessage(
+      {
+        channel: 'chatwork',
+        externalThreadId: 'dup-room',
+        externalId: 'dup-msg-2',
+        direction: 'in',
+        sentAt: new Date().toISOString(),
+        senderName: '二重 太郎',
+        body: '資料です',
+        attachments: [
+          { filename: '契約書.pdf', ref: { roomId: 1, fileId: 9 } },
+          { filename: '契約書.pdf', ref: { roomId: 1, fileId: 9 } },
+        ],
+        identity: { channel: 'chatwork', chatworkRoomId: 1, chatworkAccountId: 2 },
+      },
+      { processAttachments: false },
+    );
+    expect(db().select().from(schema.attachments).where(eq(schema.attachments.messageId, r.message.id)).all().length).toBe(1);
+    setSetting('attachment_smart_names', '1');
+  });
+});

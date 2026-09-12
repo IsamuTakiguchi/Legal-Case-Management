@@ -33,7 +33,11 @@ export interface StorageBackend {
   clientRoot(): string;
   /** フォルダを（親も含めて）作る。既にあれば何もしない */
   ensureFolder(folderPath: string): Promise<void>;
-  put(folderPath: string, filename: string, data: Buffer): Promise<StoredFile>;
+  /**
+   * ファイルを保存する。dedupe を付けると、同じ名前・同じ大きさのファイルが既にあれば
+   * それを使い回す（再実行・再デプロイでの二重保存を防ぐ）。違う中身なら従来どおり連番を付けて別ファイルにする
+   */
+  put(folderPath: string, filename: string, data: Buffer, opts?: { dedupe?: boolean }): Promise<StoredFile>;
   get(file: { itemId?: string | null; path: string }): Promise<Buffer>;
   move(file: { itemId?: string | null; path: string }, newFolderPath: string): Promise<StoredFile>;
   list(folderPath: string): Promise<ListedFile[]>;
@@ -46,7 +50,13 @@ class OneDriveStorage implements StorageBackend {
   clientRoot() {
     return env().ONEDRIVE_CLIENT_ROOT;
   }
-  async put(folderPath: string, filename: string, data: Buffer): Promise<StoredFile> {
+  async put(folderPath: string, filename: string, data: Buffer, opts: { dedupe?: boolean } = {}): Promise<StoredFile> {
+    if (opts.dedupe) {
+      const existing = await od.getItemByPath(od.joinPath(folderPath, filename)).catch(() => null);
+      if (existing && existing.size === data.length) {
+        return { path: od.joinPath(folderPath, existing.name), itemId: existing.id, webUrl: existing.webUrl, size: existing.size };
+      }
+    }
     const item = await od.uploadFile(folderPath, filename, data, 'rename');
     return { path: od.joinPath(folderPath, item.name), itemId: item.id, webUrl: item.webUrl, size: item.size ?? data.length };
   }
@@ -104,9 +114,15 @@ export class LocalFolderStorage implements StorageBackend {
     if (abs !== this.base && !abs.startsWith(this.base + path.sep)) throw new Error('不正なパスです');
     return abs;
   }
-  async put(folderPath: string, filename: string, data: Buffer): Promise<StoredFile> {
+  async put(folderPath: string, filename: string, data: Buffer, opts: { dedupe?: boolean } = {}): Promise<StoredFile> {
     const dir = this.abs(folderPath);
     await fs.mkdir(dir, { recursive: true });
+    if (opts.dedupe) {
+      const st = await fs.stat(path.join(dir, filename)).catch(() => null);
+      if (st?.isFile() && st.size === data.length) {
+        return { path: od.joinPath(folderPath, filename), size: st.size };
+      }
+    }
     let name = filename;
     let n = 1;
     for (;;) {

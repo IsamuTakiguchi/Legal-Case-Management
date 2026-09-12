@@ -208,7 +208,10 @@ export function extractDownloadIds(body: string): { fileId: number; filename: st
   const re = /\[download:(\d+)\]([^\[]*?)\s*(?:\([^)]*\))?\s*\[\/download\]/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(body))) {
-    out.push({ fileId: Number(m[1]), filename: m[2].trim() || `file_${m[1]}` });
+    const fileId = Number(m[1]);
+    // 引用などで同じファイルが 2 回書かれていても 1 件として扱う（二重保存の防止）
+    if (out.some((x) => x.fileId === fileId)) continue;
+    out.push({ fileId, filename: m[2].trim() || `file_${fileId}` });
   }
   return out;
 }

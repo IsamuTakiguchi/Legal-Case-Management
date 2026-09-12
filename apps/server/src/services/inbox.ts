@@ -156,8 +156,17 @@ export async function ingestMessage(
   if (m.subject && !conv.subject) patch.subject = m.subject;
   if (Object.keys(patch).length) d.update(schema.conversations).set(patch).where(eq(schema.conversations.id, conv.id)).run();
 
-  // 受信ファイルは相手から届いたものだけ。自分が送った添付は登録しない
-  for (const a of m.direction === 'in' ? m.attachments : []) {
+  // 受信ファイルは相手から届いたものだけ。自分が送った添付は登録しない。
+  // 同じメッセージ内に同じファイルが 2 回出てくることがある（引用など）ので 1 件にまとめる
+  const inbound = m.direction === 'in' ? m.attachments : [];
+  const seenAtt = new Set<string>();
+  const uniqueAtts = inbound.filter((a) => {
+    const key = `${a.filename}\u0000${JSON.stringify(a.ref)}`;
+    if (seenAtt.has(key)) return false;
+    seenAtt.add(key);
+    return true;
+  });
+  for (const a of uniqueAtts) {
     const row = d
       .insert(schema.attachments)
       .values({
