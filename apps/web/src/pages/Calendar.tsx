@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { EVENT_KINDS, EVENT_KIND_LABEL, parseHoldText, type EventKind } from '@lcm/shared';
 import { api } from '../lib/api';
+import { useDraftGroup, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
 import { toLocalInput, fromLocalInput } from '../lib/format';
 
@@ -377,6 +378,12 @@ function EventForm({ initial, defaultDay, onClose, onSaved, onError }: { initial
   const [location, setLocation] = useState(base.location ?? '');
   const [description, setDescription] = useState(base.description ?? '');
   const [tentative, setTentative] = useState(base.status === 'tentative');
+  // 入力途中の内容を自動保存する（元の予定が変わっていたら戻さない）
+  const draft = useDraftGroup(isEdit ? `event:${initial!.id}:edit` : `event:new:${defaultDay}`, {
+    title: { value: title, set: setTitle, base: base.title },
+    location: { value: location, set: setLocation, base: base.location ?? '' },
+    description: { value: description, set: setDescription, base: base.description ?? '' },
+  });
   const cases = useQuery({ queryKey: ['cases', 'open'], queryFn: () => api.get<{ id: number; title: string; clientId: number; clientName: string }[]>('/cases?status=open') });
   const caseOptions = (cases.data ?? []).filter((c) => !clientId || c.clientId === Number(clientId));
 
@@ -404,7 +411,10 @@ function EventForm({ initial, defaultDay, onClose, onSaved, onError }: { initial
       };
       return isEdit ? api.put(`/calendar/events/${initial!.id}`, body) : api.post('/calendar/events', body);
     },
-    onSuccess: () => onSaved(isEdit ? '予定を更新しました' : '予定を登録しました'),
+    onSuccess: () => {
+      draft.clear();
+      onSaved(isEdit ? '予定を更新しました' : '予定を登録しました');
+    },
     onError: (e) => onError((e as Error).message),
   });
 
@@ -426,6 +436,7 @@ function EventForm({ initial, defaultDay, onClose, onSaved, onError }: { initial
         <div className="md:col-span-2">
           <label className="label">件名</label>
           <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例: 山田 第2回調停期日" required autoFocus />
+          <DraftHint handle={draft} />
         </div>
         <div>
           <label className="label">種別</label>
@@ -527,6 +538,14 @@ function HoldForm({ defaultDay, onClose, onSaved, onError }: { defaultDay: strin
   const clientName = clients.data?.find((c) => c.id === Number(clientId))?.name ?? '';
   const preview = `${clientName ? clientName.split(/[\s　]/)[0] : counterpartName || '（相手）'} ${title || '（内容）'} 仮`;
 
+  // 仮押さえの入力途中も自動保存する
+  const holdDraft = useDraftGroup(`calendar:hold:${defaultDay}`, {
+    title: { value: title, set: setTitle, base: '打合せ' },
+    counterpartName: { value: counterpartName, set: setCounterpartName },
+    location: { value: location, set: setLocation },
+    text: { value: text, set: setText },
+  });
+
   const addSlot = () => {
     const last = slots[slots.length - 1];
     const start = last ? plus(last.start, 24 * 60) : `${defaultDay}T10:00`;
@@ -551,7 +570,10 @@ function HoldForm({ defaultDay, onClose, onSaved, onError }: { defaultDay: strin
       };
       return api.post<{ sessionId: number; events: unknown[] }>('/calendar/holds', body);
     },
-    onSuccess: (r) => onSaved(`仮押さえを ${r.events.length} 件登録しました。相手の返事が来たら、その候補の「この候補で確定」を押してください`),
+    onSuccess: (r) => {
+      holdDraft.clear();
+      onSaved(`仮押さえを ${r.events.length} 件登録しました。相手の返事が来たら、その候補の「この候補で確定」を押してください`);
+    },
     onError: (e) => onError((e as Error).message),
   });
 
@@ -627,6 +649,7 @@ function HoldForm({ defaultDay, onClose, onSaved, onError }: { defaultDay: strin
           <label className="label">候補をまとめて入力（1 行に日付と時間帯。例: 12/21（月）10～11：30　13～15）</label>
           <div className="flex flex-wrap items-start gap-2">
             <textarea className="input min-h-16 flex-1 text-sm" value={text} onChange={(e) => setText(e.target.value)} placeholder={'12/21（月）10～11：30　13～15\n12/22 14～16'} />
+          <DraftHint handle={holdDraft} />
             <button type="button" className="btn" onClick={readText} disabled={!text.trim()}>
               読み取って候補に追加
             </button>

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
+import { useDraftGroup, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
 import { ContactLinkForm } from '../lib/ContactLinkForm';
 import { channelBadge, channelLabel, fmtDateTime, fromLocalInput, todayLocalInput } from '../lib/format';
@@ -190,9 +191,17 @@ function NextHearing({ alert, onDone }: { alert: Alert; onDone: () => void }) {
   const [title, setTitle] = useState('');
   const [location, setLocation] = useState('');
   const [err, setErr] = useState('');
+  // 入力途中の予定名・場所を自動保存する
+  const draft = useDraftGroup(`alert:${alert.id}:next-hearing`, {
+    title: { value: title, set: setTitle },
+    location: { value: location, set: setLocation },
+  });
   const register = useMutation({
     mutationFn: (decision: 'register' | 'undecided') => api.post('/court/next-hearing', { alertId: alert.id, decision, startAt: fromLocalInput(start), title: title || undefined, location: location || undefined }),
-    onSuccess: onDone,
+    onSuccess: () => {
+      draft.clear();
+      onDone();
+    },
     onError: (e) => setErr((e as Error).message),
   });
   return (
@@ -220,6 +229,7 @@ function NextHearing({ alert, onDone }: { alert: Alert; onDone: () => void }) {
           期日報告を送る
         </Link>
       ) : null}
+      <DraftHint handle={draft} className="w-full" />
       {err && <div className="fade-in text-red-600">{err}</div>}
     </div>
   );

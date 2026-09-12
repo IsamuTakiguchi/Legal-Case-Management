@@ -2,8 +2,9 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
+import { useDraftRecord, clearDraft, DraftHint } from '../lib/draft';
 import { channelBadge, channelLabel, fmtDateTime, fmtBytes } from '../lib/format';
-import { ClientForm, type ClientRow } from './Clients';
+import { ClientForm, clientFormDraftKey, type ClientRow } from './Clients';
 import { EVENT_KIND_LABEL, TASK_STATUS_LABEL, type EventKind, type TaskStatus, CASE_STATUSES, CASE_STATUS_LABEL } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
 
@@ -39,14 +40,20 @@ export default function ClientDetail() {
   const update = useMutation({
     mutationFn: (b: Partial<ClientRow>) => api.put(`/clients/${id}`, b),
     onSuccess: () => {
+      clearDraft(clientFormDraftKey(Number(id)));
       setEdit(false);
       qc.invalidateQueries({ queryKey: ['client', id] });
     },
   });
   const [caseForm, setCaseForm] = useState({ title: '', caseType: 'general_civil', status: 'active', courtName: '', caseNumber: '' });
+  const CASE_FORM_BASE = { title: '', caseType: 'general_civil', status: 'active', courtName: '', caseNumber: '' };
+  // 入力途中の新規事件はこの端末に自動保存する
+  const caseDraft = useDraftRecord(`client:${id}:new-case`, caseForm, setCaseForm, CASE_FORM_BASE);
   const createCase = useMutation({
     mutationFn: () => api.post<{ id: number }>('/cases', { ...caseForm, clientId: Number(id) }),
     onSuccess: () => {
+      caseDraft.clear();
+      setCaseForm(CASE_FORM_BASE);
       setNewCase(false);
       qc.invalidateQueries({ queryKey: ['client', id] });
     },
@@ -112,7 +119,10 @@ export default function ClientDetail() {
               </select>
               <input className="input" placeholder="裁判所" value={caseForm.courtName} onChange={(e) => setCaseForm({ ...caseForm, courtName: e.target.value })} />
               <input className="input" placeholder="事件番号" value={caseForm.caseNumber} onChange={(e) => setCaseForm({ ...caseForm, caseNumber: e.target.value })} />
-              <button className="btn btn-primary">作成</button>
+              <div className="flex items-center gap-2 md:col-span-2">
+                <button className="btn btn-primary">作成</button>
+                <DraftHint handle={caseDraft} />
+              </div>
             </form>
           )}
           {c.cases.length >= 2 && (

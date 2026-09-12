@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
+import { useDraftRecord, useDraftGroup, useDraft, DraftHint } from '../lib/draft';
 import { fmtDateTime, fmtDate, fmtYen, toLocalInput, fromLocalInput } from '../lib/format';
 import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR_LABEL, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
@@ -63,11 +64,17 @@ export default function CaseDetail() {
   useEffect(() => {
     if (c) setForm({ title: c.title, caseType: c.caseType?.key ?? 'general_civil', courtName: c.courtName ?? '', caseNumber: c.caseNumber ?? '', stage: c.stage ?? '', policy: c.policy ?? '', status: c.status, staffId: c.staffId ? String(c.staffId) : '', chatworkRoomId: c.chatworkRoomId ? String(c.chatworkRoomId) : '' });
   }, [c]);
+  // 入力途中の内容はこの端末に自動保存する（保存前に画面を離れても消えない）
+  const caseBase = c
+    ? { title: c.title, caseType: c.caseType?.key ?? 'general_civil', courtName: c.courtName ?? '', caseNumber: c.caseNumber ?? '', stage: c.stage ?? '', policy: c.policy ?? '', status: c.status, staffId: c.staffId ? String(c.staffId) : '', chatworkRoomId: c.chatworkRoomId ? String(c.chatworkRoomId) : '' }
+    : null;
+  const caseDraft = useDraftRecord(id ? `case:${id}:edit` : null, form, setForm, caseBase);
   const staffList = useQuery({ queryKey: ['staff'], queryFn: () => api.get<{ id: number; name: string }[]>('/staff') });
   const rooms = useQuery({ queryKey: ['chatwork-rooms'], queryFn: () => api.get<{ roomId: number; name: string; type: string }[]>('/chatwork/rooms'), staleTime: 5 * 60_000 });
   const save = useMutation({
     mutationFn: () => api.put(`/cases/${id}`, { ...form, staffId: form.staffId ? Number(form.staffId) : null, chatworkRoomId: form.chatworkRoomId ? Number(form.chatworkRoomId) : null }),
     onSuccess: () => {
+      caseDraft.clear();
       qc.invalidateQueries({ queryKey: ['case', id] });
       qc.invalidateQueries({ queryKey: ['cases'] });
     },
@@ -180,6 +187,7 @@ export default function CaseDetail() {
               <div>
                 <label className="label">方針メモ {c.policyUpdatedAt && <span className="font-normal text-slate-400">（更新 {fmtDate(c.policyUpdatedAt)}）</span>}</label>
                 <textarea className="input min-h-32" value={form.policy} onChange={(e) => setForm({ ...form, policy: e.target.value })} placeholder="今後の方針、争点、依頼者の希望など" />
+                <DraftHint handle={caseDraft} />
               </div>
               <button className="btn btn-primary w-full justify-center" onClick={() => save.mutate()} disabled={save.isPending}>
                 保存
@@ -405,6 +413,8 @@ function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClo
     }
   }, [prep.data]);
   const n = prep.data;
+  // 下書きを直した内容を自動保存する（AI の下書きが変わったら戻さない）
+  const noticeDraft = useDraft(n ? `note:${noteId}:hearing-notice` : null, text, setText, n?.text ?? '');
   const send = useMutation({
     mutationFn: () =>
       api.post<{ note?: string; links: { name: string }[]; manualFiles: string[] }>(`/conversations/${n!.conversationId}/send`, {
@@ -415,6 +425,7 @@ function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClo
         createWaitingTask: false,
       }),
     onSuccess: (r) => {
+      noticeDraft.clear();
       setMsg(`${n!.channelLabel} で送信しました${r.note ? `（${r.note}）` : ''}${r.links.length ? `。${r.links.length} 件はリンクで送付` : ''}${r.manualFiles.length ? `。${r.manualFiles.join('、')} は手動送付が必要です` : ''}`);
       setTimeout(onSent, 1500);
     },
@@ -455,6 +466,7 @@ function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClo
       {n && (
         <>
           <textarea className="input min-h-44 text-sm" value={text} onChange={(e) => setText(e.target.value)} disabled={prep.isFetching} />
+          <DraftHint handle={noticeDraft} />
           {n.docs.length > 0 && (
             <div className="text-sm">
               <div className="mb-1 text-xs text-slate-500">
@@ -511,6 +523,14 @@ function NoteComposer({ caseId, onSaved }: { caseId: number; onSaved: (note?: { 
   const [taskMode, setTaskMode] = useState<'each' | 'single' | 'none'>('single');
   const [taskPick, setTaskPick] = useState<Set<number>>(new Set());
   const [err, setErr] = useState('');
+  // 書きかけのメモはこの端末に自動保存する（保存前に画面を離れても消えない）
+  const noteDraft = useDraftGroup(`case:${caseId}:note:new`, {
+    counterpart: { value: counterpart, set: setCounterpart },
+    phone: { value: phone, set: setPhone },
+    raw: { value: raw, set: setRaw },
+    theirSaid: { value: theirSaid, set: setTheirSaid },
+    ourSaid: { value: ourSaid, set: setOurSaid },
+  });
   const structure = useMutation({
     mutationFn: () => api.post<NonNullable<typeof preview>>(`/cases/${caseId}/notes/structure`, { rawText: raw, kind, counterpart: counterpart || null, phone: phone || null }),
     onSuccess: (r) => {
@@ -544,6 +564,7 @@ function NoteComposer({ caseId, onSaved }: { caseId: number; onSaved: (note?: { 
       setTheirSaid('');
       setOurSaid('');
       setPhone('');
+      noteDraft.clear();
       setPreview(null);
       setErr('');
       onSaved(r);
@@ -566,6 +587,7 @@ function NoteComposer({ caseId, onSaved }: { caseId: number; onSaved: (note?: { 
         <input type="datetime-local" className="input w-auto" value={occurredAt} onChange={(e) => setOccurredAt(e.target.value)} />
       </div>
       <textarea className="input min-h-28" placeholder="走り書きで OK。例: 相手方代理人から電話。和解案として300万を提示。依頼者に持ち帰り、来週金曜までに回答。証拠の追加提出は不要とのこと。" value={raw} onChange={(e) => setRaw(e.target.value)} />
+      <DraftHint handle={noteDraft} />
       <div className="grid gap-2 md:grid-cols-2">
         <div>
           <label className="label">相手が言ったこと（1 行 1 項目。AI 整理で自動入力、手で直せます）</label>
@@ -660,6 +682,16 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
   // 古い記録に想定外の値が入っていても保存できるよう、選べる値に丸める
   const [waitingFor, setWaitingFor] = useState<string>(n.waitingFor && (WAITING as readonly string[]).includes(n.waitingFor) ? n.waitingFor : 'none');
   const [err, setErr] = useState('');
+  // 編集途中の内容を自動保存する。元の記録が変わっていたら戻さない
+  const editDraft = useDraftGroup(`note:${n.id}:edit`, {
+    counterpart: { value: counterpart, set: setCounterpart, base: n.counterpart ?? '' },
+    phone: { value: phone, set: setPhone, base: n.phone ?? '' },
+    gist: { value: gist, set: setGist, base: n.gist ?? '' },
+    rawText: { value: rawText, set: setRawText, base: n.rawText ?? '' },
+    theirSaid: { value: theirSaid, set: setTheirSaid, base: joinLines(n.theirSaid) },
+    ourSaid: { value: ourSaid, set: setOurSaid, base: joinLines(n.ourSaid) },
+    decisions: { value: decisions, set: setDecisions, base: joinLines(n.decisions) },
+  });
   const save = useMutation({
     mutationFn: () =>
       api.put(`/case-notes/${n.id}`, {
@@ -679,7 +711,10 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
         }),
         waitingFor: waitingFor === 'none' ? null : waitingFor,
       }),
-    onSuccess: onSaved,
+    onSuccess: () => {
+      editDraft.clear();
+      onSaved();
+    },
     onError: (e) => setErr((e as Error).message),
   });
   return (
@@ -706,6 +741,7 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
       <div>
         <label className="label">要旨</label>
         <textarea className="input min-h-16 text-sm" value={gist} onChange={(e) => setGist(e.target.value)} placeholder="空なら元メモがそのまま表示されます" />
+        <DraftHint handle={editDraft} />
       </div>
       <div className="grid gap-2 md:grid-cols-2">
         <div>
