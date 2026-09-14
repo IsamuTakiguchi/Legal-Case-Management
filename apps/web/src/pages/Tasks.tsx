@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
@@ -47,6 +47,15 @@ const BULK_LABEL: Record<BulkAction, string> = {
   delete: '削除しました',
 };
 
+/** 入力欄の 1 行目をタスク名、2 行目以降をメモにする */
+export function splitTitleAndNote(text: string): { title: string; note: string | null } {
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  const head = lines.findIndex((l) => l.trim());
+  if (head < 0) return { title: text.trim(), note: null };
+  const note = lines.slice(head + 1).join('\n').trim();
+  return { title: lines[head]!.trim(), note: note || null };
+}
+
 export default function Tasks() {
   const qc = useQueryClient();
   const [status, setStatus] = useState<string>(() => new URLSearchParams(location.search).get('status') ?? 'active');
@@ -80,8 +89,19 @@ export default function Tasks() {
   });
   // 書きかけのタスク名を自動保存する
   const titleDraft = useDraft('tasks:new-title', title, setTitle);
+  // 入力欄は中身に合わせて背が伸びる（2 行から、最大 12 行くらいまで）
+  const titleRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const el = titleRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.max(72, Math.min(el.scrollHeight, 260))}px`;
+  }, [title]);
   const create = useMutation({
-    mutationFn: () => api.post('/tasks', { title, status: newStatus, clientId: clientId ? Number(clientId) : null, caseId: caseId ? Number(caseId) : null, syncToChatwork: sync }),
+    mutationFn: () => {
+      const { title: name, note } = splitTitleAndNote(title);
+      return api.post('/tasks', { title: name, note, status: newStatus, clientId: clientId ? Number(clientId) : null, caseId: caseId ? Number(caseId) : null, syncToChatwork: sync });
+    },
     onSuccess: () => {
       setTitle('');
       titleDraft.clear();
@@ -120,11 +140,28 @@ export default function Tasks() {
         className="card flex flex-wrap items-center gap-2"
         onSubmit={(e) => {
           e.preventDefault();
-          create.mutate();
+          if (title.trim()) create.mutate();
         }}
       >
-        <input className="input flex-1" placeholder="新しいタスク" value={title} onChange={(e) => setTitle(e.target.value)} required />
-        <DraftHint handle={titleDraft} className="w-full" />
+        <div className="w-full">
+          <textarea
+            ref={titleRef}
+            className="input w-full resize-y"
+            rows={2}
+            placeholder={'新しいタスク（1 行目がタスク名、2 行目からはメモ）\n例: 山田様に中間報告\n　　診断書の再提出について確認する'}
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            onKeyDown={(e) => {
+              // 改行はそのまま。⌘／Ctrl＋Enter で追加できる
+              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && title.trim()) {
+                e.preventDefault();
+                create.mutate();
+              }
+            }}
+            required
+          />
+          <DraftHint handle={titleDraft} />
+        </div>
         <ClientPicker
           value={clientId}
           onChange={(v) => {
@@ -145,7 +182,10 @@ export default function Tasks() {
         <label className="flex items-center gap-1 text-sm">
           <input type="checkbox" checked={sync} onChange={(e) => setSync(e.target.checked)} /> Chatwork にも作成
         </label>
-        <button className="btn btn-primary">追加</button>
+        <button className="btn btn-primary" disabled={create.isPending}>
+          {create.isPending ? '追加中…' : '追加'}
+        </button>
+        <span className="text-xs text-slate-400">⌘／Ctrl＋Enter でも追加できます</span>
       </form>
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <label className="flex items-center gap-1">
