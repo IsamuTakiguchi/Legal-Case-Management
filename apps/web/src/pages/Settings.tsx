@@ -172,6 +172,7 @@ export default function Settings() {
     },
     onError: (e) => setMsg((e as Error).message),
   });
+  const myAddrs = useQuery({ queryKey: ['my-addresses'], queryFn: () => api.get<{ addresses: string[]; googleConnected: boolean }>('/gmail/my-addresses'), staleTime: 5 * 60_000 });
   const [profileChannel, setProfileChannel] = useState<'all' | 'gmail' | 'line' | 'chatwork'>('gmail');
   const [profile, setProfile] = useState('');
   useEffect(() => {
@@ -398,6 +399,13 @@ export default function Settings() {
                     <span>保存後に押すと、これらのアドレスから送ったメールを受信箱の「受信」から「送信」に直します</span>
                     {refixOwn.data && <span className="text-slate-700">{refixOwn.data.fixed} 件を送信に直しました（{refixOwn.data.conversations} 会話）</span>}
                   </div>
+                  {myAddrs.data && (
+                    <div className="mt-1 text-xs text-slate-500">
+                      いま「自分の送信」とみなしているアドレス: <span className="text-slate-700">{myAddrs.data.addresses.join('、') || '（なし）'}</span>
+                      <br />
+                      ここに無いアドレスから送ったメールは「受信」として入ります。足りないものがあれば上の欄に追記してください。
+                    </div>
+                  )}
                 </>
               ) : f.multiline ? (
                 <textarea className="input" rows={3} value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} />

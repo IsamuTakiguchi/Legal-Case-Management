@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { eq, desc } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { listConversations, getConversation, markRead, setNeedsReply, archiveConversation, bulkUpdateConversations, linkMessage } from '../services/inbox.js';
+import { listConversations, getConversation, markRead, setNeedsReply, archiveConversation, bulkUpdateConversations, linkMessage, setMessageDirection } from '../services/inbox.js';
 import { createTask } from '../services/tasks.js';
 import { linkConversationToClient, suggestClients } from '../services/identity.js';
 import { linkConversationToContact, unlinkConversation, createContact, getContact } from '../services/contacts.js';
@@ -28,14 +28,23 @@ inboxRoutes.get('/conversations', (c) => {
       q: q.q || undefined,
       archived: q.archived === '1',
       limit: q.limit ? Number(q.limit) : undefined,
+      // show が指定されていればそれに従う（受信箱の表示切替）
+      show: (['unanswered', 'mine-last', 'all', 'own'] as const).find((x) => x === q.show),
       // 既定では相手からの受信がある会話だけ（自分の送信だけの会話は outbound=1 のときだけ表示）
-      inboundOnly: q.outbound !== '1',
+      inboundOnly: !q.show && q.outbound !== '1',
     }),
   );
 });
 
 /** 一括操作（対応済み・アーカイブ・アーカイブ解除・既読） */
 /** メッセージ単位の紐付け（事務局の伝言など） */
+/** メッセージの向き（受信／送信）を直す。自分が別の手段で送ったものが受信で入ったときの手直し */
+inboxRoutes.put('/messages/:id/direction', async (c) => {
+  const body = z.object({ direction: z.enum(['in', 'out']) }).parse(await c.req.json());
+  const r = setMessageDirection(Number(c.req.param('id')), body.direction);
+  return r.ok ? c.json(r) : c.json({ error: 'not found' }, 404);
+});
+
 inboxRoutes.put('/messages/:id/link', async (c) => {
   const body = z.object({ clientId: z.number().int().nullable().optional(), caseId: z.number().int().nullable().optional() }).parse(await c.req.json());
   return c.json(linkMessage(Number(c.req.param('id')), body));

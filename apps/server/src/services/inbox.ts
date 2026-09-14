@@ -220,11 +220,30 @@ export function listConversations(filter: {
   archived?: boolean;
   /** true なら相手からの受信が 1 件も無い会話（自分の送信だけ）を除く */
   inboundOnly?: boolean;
+  /**
+   * 受信箱に出す範囲。
+   * unanswered=相手からの連絡が最後（まだ返していない）／mine-last=自分が最後に送った（相手の返事待ち）／
+   * all=受信が 1 件でもある会話すべて／own=自分の送信だけの会話
+   */
+  show?: 'unanswered' | 'mine-last' | 'all' | 'own';
 }) {
   const d = db();
   const conds = [];
   if (filter.clientId) conds.push(eq(schema.conversations.clientId, filter.clientId));
   if (filter.inboundOnly) conds.push(isNotNull(schema.conversations.lastInboundAt));
+  // 最後のメッセージがどちら向きかは、会話の控えの日時ではなくメッセージ本体から見る（取り込み方によって控えがずれていても正しく出す）
+  const lastDirection = sql`(select m.direction from messages m where m.conversation_id = ${schema.conversations.id} order by m.sent_at desc, m.id desc limit 1)`;
+  const hasInbound = sql`exists (select 1 from messages m where m.conversation_id = ${schema.conversations.id} and m.direction = 'in')`;
+  if (filter.show === 'unanswered') {
+    // 相手からの連絡で終わっている会話だけ（自分が送って終わったものは出さない）
+    conds.push(sql`${lastDirection} = 'in'`);
+  } else if (filter.show === 'mine-last') {
+    conds.push(sql`${hasInbound} and ${lastDirection} = 'out'`);
+  } else if (filter.show === 'all') {
+    conds.push(sql`${hasInbound}`);
+  } else if (filter.show === 'own') {
+    conds.push(sql`not ${hasInbound}`);
+  }
   if (filter.channel) conds.push(eq(schema.conversations.channel, filter.channel));
   if (filter.needsReply) conds.push(eq(schema.conversations.needsReply, true));
   if (filter.unlinked) conds.push(isNull(schema.conversations.clientId));
@@ -407,6 +426,48 @@ export function repairConversationTimes(): number {
  * 自分のアドレス（別名・他アカウント）から送ったのに「受信」として取り込まれていたメールを「送信」に直し、
  * 会話の要返信・未読・最終受信日時を計算し直す。設定「自分のメールアドレス」を変えたときと、設定画面のボタンから呼ぶ
  */
+/** 会話の最終受信・最終送信・要返信を、今あるメッセージから計算し直す */
+export function recomputeConversation(conversationId: number) {
+  const d = db();
+  const msgs = d.select().from(schema.messages).where(eq(schema.messages.conversationId, conversationId)).orderBy(schema.messages.sentAt).all();
+  const last = msgs.at(-1);
+  const lastIn = [...msgs].reverse().find((m) => m.direction === 'in');
+  const lastOut = [...msgs].reverse().find((m) => m.direction === 'out');
+  d.update(schema.conversations)
+    .set({
+      lastInboundAt: lastIn?.sentAt ?? null,
+      lastOutboundAt: lastOut?.sentAt ?? null,
+      lastMessageAt: last?.sentAt ?? null,
+      needsReply: !!last && last.direction === 'in',
+      ...(lastIn ? {} : { unread: 0 }),
+    })
+    .where(eq(schema.conversations.id, conversationId))
+    .run();
+}
+
+/**
+ * 1 件のメッセージの向き（受信／送信）を直す。
+ * 自分が別の手段で送ったものが「受信」として入ってしまったときの手直し用。
+ */
+export function setMessageDirection(messageId: number, direction: 'in' | 'out'): { ok: boolean; conversationId?: number } {
+  const d = db();
+  const m = d.select().from(schema.messages).where(eq(schema.messages.id, messageId)).get();
+  if (!m) return { ok: false };
+  if (m.direction !== direction) {
+    d.update(schema.messages).set({ direction }).where(eq(schema.messages.id, messageId)).run();
+    // 自分の送信に直したら、その添付は受信ファイルの対象から外す
+    if (direction === 'out') {
+      d.update(schema.attachments)
+        .set({ status: 'ignored' })
+        .where(and(eq(schema.attachments.messageId, messageId), inArray(schema.attachments.status, ['pending', 'unassigned', 'failed'])))
+        .run();
+    }
+    recomputeConversation(m.conversationId);
+    logger.info({ messageId, direction }, 'メッセージの向きを直しました');
+  }
+  return { ok: true, conversationId: m.conversationId };
+}
+
 export function refixOwnMessages(myAddrs: string[]): { fixed: number; conversations: number } {
   const d = db();
   const addrs = new Set(myAddrs.map((a) => a.toLowerCase()));

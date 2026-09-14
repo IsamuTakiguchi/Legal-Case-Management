@@ -11,7 +11,7 @@ process.env.DATA_DIR = tmp;
 
 const { openTestDatabase, closeDatabase, db, schema } = await import('../db/index.js');
 const { setAdapter } = await import('../channels/registry.js');
-const { ingestMessage, listConversations, getConversation } = await import('../services/inbox.js');
+const { ingestMessage, listConversations, getConversation, setMessageDirection } = await import('../services/inbox.js');
 const { processAttachment, assignAttachment } = await import('../services/attachments.js');
 const { linkConversationToClient } = await import('../services/identity.js');
 const { createTask, checkOverdueWaitingTasks } = await import('../services/tasks.js');
@@ -132,5 +132,58 @@ describe('文体サンプル検索（FTS5 trigram）', () => {
     addStyleSample({ channel: 'line', text: '了解しました。明日連絡します。', source: 'import', externalId: 's3' });
     const hits = findSimilarSamples('委任状を提出', { channel: 'gmail', limit: 2 });
     expect(hits[0].text).toContain('委任状');
+  });
+});
+
+
+describe('受信箱の表示範囲（自分の送信で終わった会話）', () => {
+  it('相手が最後の会話だけを既定で出し、自分が最後のものは切り替えで見られる', async () => {
+    const t = (min: number) => new Date(Date.UTC(2026, 8, 14, 1, min)).toISOString();
+    // 相手の連絡で終わっている会話
+    await ingestMessage({
+      channel: 'gmail', externalThreadId: 'show-them', externalId: 'show-them-1', direction: 'in', sentAt: t(0),
+      body: 'ご連絡お待ちしております', senderName: '見せ 太郎', senderAddress: 'show-them@example.com',
+      identity: { channel: 'gmail', email: 'show-them@example.com' }, attachments: [],
+    });
+    // 自分の返信で終わっている会話
+    await ingestMessage({
+      channel: 'gmail', externalThreadId: 'show-mine', externalId: 'show-mine-1', direction: 'in', sentAt: t(1),
+      body: '書面を確認しました', senderName: '見せ 花子', senderAddress: 'show-mine@example.com',
+      identity: { channel: 'gmail', email: 'show-mine@example.com' }, attachments: [],
+    });
+    await ingestMessage({
+      channel: 'gmail', externalThreadId: 'show-mine', externalId: 'show-mine-2', direction: 'out', sentAt: t(2),
+      body: '承知しました。追ってご連絡します', identity: { channel: 'gmail', email: 'show-mine@example.com' }, attachments: [],
+    });
+    // 自分の送信だけの会話
+    await ingestMessage({
+      channel: 'gmail', externalThreadId: 'show-own', externalId: 'show-own-1', direction: 'out', sentAt: t(3),
+      body: 'ご案内です', identity: { channel: 'gmail', email: 'show-own@example.com' }, attachments: [],
+    });
+
+    const threads = (show: 'unanswered' | 'mine-last' | 'all' | 'own') => listConversations({ show }).map((c) => c.externalThreadId);
+    expect(threads('unanswered')).toContain('show-them');
+    expect(threads('unanswered')).not.toContain('show-mine');
+    expect(threads('unanswered')).not.toContain('show-own');
+    expect(threads('mine-last')).toContain('show-mine');
+    expect(threads('mine-last')).not.toContain('show-them');
+    expect(threads('all')).toEqual(expect.arrayContaining(['show-them', 'show-mine']));
+    expect(threads('all')).not.toContain('show-own');
+    expect(threads('own')).toContain('show-own');
+  });
+
+  it('受信で入ったものを「自分の送信」に直すと、受信箱の既定から外れる', async () => {
+    const r = await ingestMessage({
+      channel: 'line', externalThreadId: 'U-fix-me', externalId: 'fix-me-1', direction: 'in', sentAt: new Date(Date.UTC(2026, 8, 14, 2, 0)).toISOString(),
+      body: '（自分が LINE アプリから送った控え）', identity: { channel: 'line', lineUserId: 'U-fix-me' }, attachments: [],
+    });
+    expect(listConversations({ show: 'unanswered' }).map((c) => c.externalThreadId)).toContain('U-fix-me');
+
+    setMessageDirection(r.message.id, 'out');
+    const conv = getConversation(r.conversation.id)!;
+    expect(conv.messages[0]?.direction).toBe('out');
+    expect(conv.needsReply).toBe(false);
+    expect(listConversations({ show: 'unanswered' }).map((c) => c.externalThreadId)).not.toContain('U-fix-me');
+    expect(listConversations({ show: 'own' }).map((c) => c.externalThreadId)).toContain('U-fix-me');
   });
 });
