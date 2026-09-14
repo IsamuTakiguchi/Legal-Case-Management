@@ -63,6 +63,17 @@ async function refixOwnMessagesNow() {
 }
 settingsRoutes.post('/gmail/refix-own', async (c) => c.json(await refixOwnMessagesNow()));
 
+/** いま「自分の送信」とみなしているメールアドレス（Gmail のプロフィール・別名・設定で足したもの） */
+settingsRoutes.get('/gmail/my-addresses', async (c) => {
+  const configured = configuredMyAddresses();
+  if (!isGoogleConnected()) return c.json({ addresses: configured, googleConnected: false });
+  try {
+    return c.json({ addresses: await myAddresses(), googleConnected: true });
+  } catch {
+    return c.json({ addresses: configured, googleConnected: true });
+  }
+});
+
 /** 取込済みの Gmail 会話の区分（メイン／プロモーション等）を判定し直す */
 settingsRoutes.post('/gmail/recategorize', async (c) => c.json(await recategorizeConversations({ all: c.req.query('all') === '1' })));
 

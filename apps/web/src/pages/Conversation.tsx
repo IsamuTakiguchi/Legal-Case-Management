@@ -109,6 +109,15 @@ export default function Conversation() {
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [linkClientId, setLinkClientId] = useState('');
 
+  // 自分が別の手段で送ったものが「受信」で入ったときに、向きを直す
+  const fixDirection = useMutation({
+    mutationFn: (v: { id: number; direction: 'in' | 'out' }) => api.put(`/messages/${v.id}/direction`, { direction: v.direction }),
+    onSuccess: (_r, v) => {
+      setMsg({ kind: 'ok', text: v.direction === 'out' ? '自分の送信に直しました' : '受信に戻しました' });
+      invalidate();
+    },
+    onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
+  });
   // 入力途中の返信本文・指示はこの端末に自動保存し、画面を離れても消えないようにする
   const textDraft = useDraft(id ? `conv:${id}:text` : null, text, setText);
   const instructionDraft = useDraft(id ? `conv:${id}:instruction` : null, instruction, setInstruction);
@@ -383,6 +392,15 @@ export default function Conversation() {
                   )}
                   <button type="button" className="hover:underline" onClick={() => setQuoteOf(m)} title={c.channel === 'chatwork' ? 'Chatwork の引用として本文に付けます' : '「> 」付きの引用文として本文に付けます'}>
                     ❝ 引用
+                  </button>
+                  <button
+                    type="button"
+                    className="hover:underline"
+                    onClick={() => fixDirection.mutate({ id: m.id, direction: m.direction === 'out' ? 'in' : 'out' })}
+                    disabled={fixDirection.isPending}
+                    title={m.direction === 'out' ? 'これは相手からの受信だった、というときに戻します' : '自分が別の方法（Gmail や LINE アプリなど）で送ったものが受信として入ったときに直します'}
+                  >
+                    {m.direction === 'out' ? '↩ 受信に戻す' : '✓ 自分の送信に直す'}
                   </button>
                 </div>
                 {c.cases.length >= 2 && !c.contact && <CaseTag m={m} cases={c.cases} out={m.direction === 'out'} onChanged={invalidate} />}

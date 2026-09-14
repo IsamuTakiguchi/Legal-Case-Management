@@ -23,7 +23,15 @@ interface ConversationListItem {
 export default function Inbox() {
   const [params, setParams] = useSearchParams();
   const [q, setQ] = useState(params.get('q') ?? '');
-  const filter = { channel: params.get('channel') ?? '', needsReply: params.get('needsReply') ?? '', unlinked: params.get('unlinked') ?? '', q: params.get('q') ?? '', archived: params.get('archived') ?? '', outbound: params.get('outbound') ?? '' };
+  // 受信箱の既定は「相手からの連絡で終わっている会話」だけ。自分が送って終わったものは出さない
+  const filter = {
+    channel: params.get('channel') ?? '',
+    needsReply: params.get('needsReply') ?? '',
+    unlinked: params.get('unlinked') ?? '',
+    q: params.get('q') ?? '',
+    archived: params.get('archived') ?? '',
+    show: params.get('show') ?? 'unanswered',
+  };
   const query = useQuery({
     queryKey: ['conversations', filter],
     queryFn: () => api.get<ConversationListItem[]>(`/conversations?${new URLSearchParams(Object.fromEntries(Object.entries(filter).filter(([, v]) => v))).toString()}`),
@@ -39,7 +47,7 @@ export default function Inbox() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [msg, setMsg] = useState('');
   // 絞り込みを変えたら選択を解除
-  useEffect(() => setSelected(new Set()), [filter.channel, filter.needsReply, filter.unlinked, filter.q, filter.archived, filter.outbound]);
+  useEffect(() => setSelected(new Set()), [filter.channel, filter.needsReply, filter.unlinked, filter.q, filter.archived, filter.show]);
   const ids = query.data?.map((c) => c.id) ?? [];
   const allSelected = ids.length > 0 && ids.every((id) => selected.has(id));
   const toggle = (id: number) =>
@@ -90,9 +98,12 @@ export default function Inbox() {
           <label className="flex items-center gap-1 text-sm">
             <input type="checkbox" checked={filter.archived === '1'} onChange={(e) => set('archived', e.target.checked ? '1' : '')} /> アーカイブ
           </label>
-          <label className="flex items-center gap-1 text-sm" title="相手からの受信が無く、自分が送っただけの会話も一覧に出します">
-            <input type="checkbox" checked={filter.outbound === '1'} onChange={(e) => set('outbound', e.target.checked ? '1' : '')} /> 送信のみの会話も表示
-          </label>
+          <select className="input w-auto" value={filter.show} onChange={(e) => set('show', e.target.value)} title="自分が送って終わっている会話を出すかどうか">
+            <option value="unanswered">未対応（相手が最後）</option>
+            <option value="mine-last">自分が最後（返事待ち）</option>
+            <option value="all">すべての会話</option>
+            <option value="own">自分の送信だけの会話</option>
+          </select>
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -138,7 +149,11 @@ export default function Inbox() {
       )}
       <div className="card p-0">
         {query.isLoading && <div className="loading-text p-4 text-slate-500">読み込み中…</div>}
-        {query.data?.length === 0 && <div className="p-4 text-slate-500">会話はありません。設定画面で各チャネルを接続してください。</div>}
+        {query.data?.length === 0 && (
+          <div className="p-4 text-slate-500">
+            {filter.show === 'unanswered' ? '相手からの連絡で終わっている会話はありません。自分が最後に送ったものは、右上の表示を「自分が最後（返事待ち）」に変えると見られます。' : '会話はありません。設定画面で各チャネルを接続してください。'}
+          </div>
+        )}
         <ul className="divide-y divide-slate-100">
           {query.data?.map((c) => (
             <li key={c.id} className={`flex items-start ${selected.has(c.id) ? 'bg-blue-50' : ''}`}>
