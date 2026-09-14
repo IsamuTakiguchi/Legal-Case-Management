@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useDraftRecord, useDraftGroup, useDraft, DraftHint } from '../lib/draft';
+import { RoomPicker } from '../lib/RoomPicker';
 import { fmtDateTime, fmtDate, fmtYen, toLocalInput, fromLocalInput } from '../lib/format';
 import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR_LABEL, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
@@ -70,7 +71,6 @@ export default function CaseDetail() {
     : null;
   const caseDraft = useDraftRecord(id ? `case:${id}:edit` : null, form, setForm, caseBase);
   const staffList = useQuery({ queryKey: ['staff'], queryFn: () => api.get<{ id: number; name: string }[]>('/staff') });
-  const rooms = useQuery({ queryKey: ['chatwork-rooms'], queryFn: () => api.get<{ roomId: number; name: string; type: string }[]>('/chatwork/rooms'), staleTime: 5 * 60_000 });
   const save = useMutation({
     mutationFn: () => api.put(`/cases/${id}`, { ...form, staffId: form.staffId ? Number(form.staffId) : null, chatworkRoomId: form.chatworkRoomId ? Number(form.chatworkRoomId) : null }),
     onSuccess: () => {
@@ -173,15 +173,7 @@ export default function CaseDetail() {
               </div>
               <div>
                 <label className="label">事件専用の Chatwork ルーム</label>
-                <select className="input" value={form.chatworkRoomId} onChange={(e) => setForm({ ...form, chatworkRoomId: e.target.value })}>
-                  <option value="">（なし。全体ルームの伝言は本文の依頼者名で振り分け）</option>
-                  {rooms.data?.map((r) => (
-                    <option key={r.roomId} value={r.roomId}>
-                      {r.name}
-                    </option>
-                  ))}
-                  {form.chatworkRoomId && !rooms.data?.some((r) => String(r.roomId) === form.chatworkRoomId) && <option value={form.chatworkRoomId}>ルーム {form.chatworkRoomId}</option>}
-                </select>
+                <RoomPicker value={form.chatworkRoomId} onChange={(v) => setForm({ ...form, chatworkRoomId: v })} emptyLabel="（なし。全体ルームの伝言は本文の依頼者名で振り分け）" />
                 <div className="mt-0.5 text-xs text-slate-400">このルームのメッセージはすべてこの事件の記録に入ります</div>
               </div>
               <div>
