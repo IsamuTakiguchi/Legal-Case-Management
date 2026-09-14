@@ -51,7 +51,7 @@ export default function Login() {
     <div className="flex min-h-screen items-center justify-center p-4">
       <div className="card w-full max-w-[380px] space-y-6 p-8 shadow-[var(--shadow-float)]">
         <div className="flex flex-col items-center gap-3 text-center">
-          <img src="/icon.svg?v=2" alt="" className="h-16 w-16 rounded-[16px] shadow-[0_4px_14px_rgba(0,0,0,0.16)]" />
+          <img src="/icon.svg?v=3" alt="" className="h-16 w-16 rounded-[16px] shadow-[0_4px_14px_rgba(0,0,0,0.16)]" />
           <div>
             <h1 className="text-[22px] font-semibold tracking-[-0.02em]">T-Lex</h1>
             <p className="mt-0.5 text-xs text-slate-500">登大路総合法律事務所</p>
