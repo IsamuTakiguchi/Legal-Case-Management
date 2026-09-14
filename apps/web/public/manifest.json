@@ -1,6 +1,6 @@
 {
-  "name": "Lex（依頼者との連絡と事件の管理）",
-  "short_name": "Lex",
+  "name": "T-Lex（依頼者との連絡と事件の管理）",
+  "short_name": "T-Lex",
   "description": "LINE公式・Chatwork・Gmail の依頼者連絡、事件・期日・タスクをひとつに",
   "lang": "ja",
   "start_url": "/",

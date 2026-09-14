@@ -54,11 +54,11 @@ export default function App() {
   // メニューの件数（受信箱の要返信・未完了タスク・要確認）
   const counts = useQuery({ queryKey: ['nav-counts'], queryFn: () => api.get<NavCounts>('/nav-counts'), enabled: me.data?.authenticated === true, refetchInterval: 60_000 });
   const nav = counts.data ?? EMPTY_COUNTS;
-  // ブラウザのタブには「Lex — 事務所名」を出す（事務所名は設定から）
+  // ブラウザのタブには「T-Lex — 事務所名」を出す（事務所名は設定から）
   const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.get<Record<string, string>>('/settings'), enabled: me.data?.authenticated === true, staleTime: 5 * 60_000 });
   const officeName = settings.data?.office_name?.trim();
   useEffect(() => {
-    document.title = officeName ? `Lex — ${officeName}` : 'Lex';
+    document.title = officeName ? `T-Lex — ${officeName}` : 'T-Lex';
   }, [officeName]);
 
   if (loc.pathname === '/login') return <Login />;
@@ -71,7 +71,7 @@ export default function App() {
         <div className="flex items-center gap-3 px-4 pb-3 pt-5">
           <img src="/icon.svg?v=2" alt="" className="h-9 w-9 rounded-[10px] shadow-[0_2px_6px_rgba(0,0,0,0.12)]" />
           <div className="min-w-0">
-            <div className="truncate text-[15px] font-semibold tracking-[-0.02em]">Lex</div>
+            <div className="truncate text-[15px] font-semibold tracking-[-0.02em]">T-Lex</div>
             <div className="truncate whitespace-nowrap text-[11px] text-slate-500">連絡・事件・期日をひとつに</div>
           </div>
         </div>
