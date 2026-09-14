@@ -434,3 +434,94 @@ export async function cancelHoldSet(sessionId: number) {
   holdMeta.delete(sessionId);
   resolveAlertsByKeyPrefix(`scheduling_stale:${sessionId}`);
 }
+
+// ---- 事件ページから仮押さえを扱う ----
+
+export interface CaseHoldCandidate {
+  /** 予定の ID（確定・取消に使う）。カレンダーから消えていれば null */
+  eventId: number | null;
+  googleEventId: string;
+  startAt: string;
+  endAt: string;
+  title: string | null;
+  location: string | null;
+}
+
+export interface CaseHoldSet {
+  sessionId: number;
+  kind: string;
+  proposedAt: string | null;
+  clientId: number | null;
+  clientName: string | null;
+  conversationId: number | null;
+  /** 候補の予定がこの事件に紐付いているか（依頼者だけ一致なら false） */
+  linkedToCase: boolean;
+  candidates: CaseHoldCandidate[];
+}
+
+/**
+ * この事件に関係する「調整中の仮押さえ」を返す。
+ * 会話から始めた日程調整は事件まで決まっていないことがあるので、
+ * 同じ依頼者のもので、ほかの事件に紐付いていないものも出す（linkedToCase=false）。
+ */
+export function listCaseHolds(caseId: number): CaseHoldSet[] {
+  const kase = db().select().from(schema.cases).where(eq(schema.cases.id, caseId)).get();
+  if (!kase) throw new Error('事件が見つかりません');
+  const sessions = db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.state, 'proposing')).all();
+  const out: CaseHoldSet[] = [];
+  for (const s of sessions) {
+    const withEvent = s.candidates.filter((c) => c.eventId);
+    if (withEvent.length === 0) continue;
+    const rows = withEvent.map((c) => ({ c, ev: db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.googleEventId, c.eventId!)).get() ?? null }));
+    const caseIds = new Set(rows.map((r) => r.ev?.caseId ?? null));
+    const linkedToCase = caseIds.has(caseId);
+    // この事件のもの、または「依頼者が同じでまだ事件が決まっていないもの」だけを出す
+    if (!linkedToCase && !(s.clientId === kase.clientId && caseIds.size === 1 && caseIds.has(null))) continue;
+    const client = s.clientId ? (db().select().from(schema.clients).where(eq(schema.clients.id, s.clientId)).get() ?? null) : null;
+    out.push({
+      sessionId: s.id,
+      kind: s.kind,
+      proposedAt: s.proposedAt ?? null,
+      clientId: s.clientId ?? null,
+      clientName: client?.name ?? null,
+      conversationId: s.conversationId ?? null,
+      linkedToCase,
+      candidates: rows
+        .map(({ c, ev }) => ({
+          eventId: ev?.id ?? null,
+          googleEventId: c.eventId!,
+          startAt: ev?.startAt ?? c.startAt,
+          endAt: ev?.endAt ?? c.endAt,
+          title: ev?.title ?? null,
+          location: ev?.location ?? null,
+        }))
+        .sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime()),
+    });
+  }
+  return out.sort((a, b) => {
+    const at = a.candidates[0]?.startAt ?? '';
+    const bt = b.candidates[0]?.startAt ?? '';
+    return at.localeCompare(bt);
+  });
+}
+
+/** 会話から始めた仮押さえを、この事件のものとして紐付ける（確定した予定が事件に残るように） */
+export function attachHoldSetToCase(sessionId: number, caseId: number): { updated: number } {
+  const kase = db().select().from(schema.cases).where(eq(schema.cases.id, caseId)).get();
+  if (!kase) throw new Error('事件が見つかりません');
+  const session = db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, sessionId)).get();
+  if (!session) throw new Error('日程調整が見つかりません');
+  if (session.state !== 'proposing') throw new Error('この日程調整はすでに確定または取消されています');
+  let updated = 0;
+  for (const c of session.candidates) {
+    if (!c.eventId) continue;
+    const ev = db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.googleEventId, c.eventId)).get();
+    if (!ev || ev.caseId === caseId) continue;
+    if (ev.caseId && ev.caseId !== caseId) throw new Error('この仮押さえはすでに別の事件に紐付いています');
+    db().update(schema.calendarEvents).set({ caseId, clientId: ev.clientId ?? kase.clientId }).where(eq(schema.calendarEvents.id, ev.id)).run();
+    updated++;
+  }
+  if (!session.clientId) db().update(schema.schedulingSessions).set({ clientId: kase.clientId, updatedAt: new Date().toISOString() }).where(eq(schema.schedulingSessions.id, sessionId)).run();
+  logger.info({ sessionId, caseId, updated }, '仮押さえを事件に紐付けました');
+  return { updated };
+}

@@ -4,6 +4,7 @@ import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useDraftRecord, useDraftGroup, useDraft, DraftHint } from '../lib/draft';
 import { RoomPicker } from '../lib/RoomPicker';
+import { HoldForm } from '../lib/HoldForm';
 import { fmtDateTime, fmtDate, fmtYen, toLocalInput, fromLocalInput } from '../lib/format';
 import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR_LABEL, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
@@ -126,6 +127,7 @@ export default function CaseDetail() {
                 }}
               />
             )}
+            <CaseHolds caseId={c.id} clientId={c.client?.id ?? null} clientName={c.client?.name ?? null} caseTitle={c.title} />
             <section className="card">
               <h2 className="mb-2 font-semibold">記録（電話・打合せ・メモ）</h2>
               <ul className="space-y-3">
@@ -232,6 +234,162 @@ export default function CaseDetail() {
       {tab === 'timeline' && <Timeline caseId={c.id} />}
       {tab === 'creditors' && <Creditors caseId={c.id} stages={c.caseType?.creditorStages ?? []} />}
     </div>
+  );
+}
+
+interface HoldCandidate {
+  eventId: number | null;
+  googleEventId: string;
+  startAt: string;
+  endAt: string;
+  title: string | null;
+  location: string | null;
+}
+interface HoldSet {
+  sessionId: number;
+  kind: string;
+  proposedAt: string | null;
+  clientId: number | null;
+  clientName: string | null;
+  conversationId: number | null;
+  linkedToCase: boolean;
+  candidates: HoldCandidate[];
+}
+
+function fmtSlot(startAt: string, endAt: string): string {
+  const t = (iso: string) => new Date(iso).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' });
+  return `${fmtDate(startAt)} ${t(startAt)}〜${t(endAt)}`;
+}
+
+/**
+ * 調整中の仮押さえを事件ページから扱う。
+ * 相手が選んだ候補で確定（ほかの候補は自動で削除）、まとめて取消、この事件への紐付け、新しい仮押さえの追加ができる。
+ */
+function CaseHolds({ caseId, clientId, clientName, caseTitle }: { caseId: number; clientId: number | null; clientName: string | null; caseTitle: string }) {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['case-holds', caseId], queryFn: () => api.get<HoldSet[]>(`/cases/${caseId}/holds`) });
+  const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [adding, setAdding] = useState(false);
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['case-holds', caseId] });
+    qc.invalidateQueries({ queryKey: ['case', String(caseId)] });
+    qc.invalidateQueries({ queryKey: ['calendar'] });
+    qc.invalidateQueries({ queryKey: ['timeline', caseId] });
+  };
+  const fail = (e: unknown) => setMsg({ kind: 'err', text: (e as Error).message });
+  const confirmHold = useMutation({
+    mutationFn: (v: { sessionId: number; eventId: number }) => api.post(`/calendar/holds/${v.sessionId}/confirm`, { eventId: v.eventId }),
+    onSuccess: () => {
+      refresh();
+      setMsg({ kind: 'ok', text: '確定しました。ほかの候補の仮押さえは削除しました' });
+    },
+    onError: fail,
+  });
+  const cancelHold = useMutation({
+    mutationFn: (sessionId: number) => api.post(`/calendar/holds/${sessionId}/cancel`),
+    onSuccess: () => {
+      refresh();
+      setMsg({ kind: 'ok', text: '仮押さえをすべて取り消しました' });
+    },
+    onError: fail,
+  });
+  const attach = useMutation({
+    mutationFn: (sessionId: number) => api.post(`/cases/${caseId}/holds/${sessionId}/attach`),
+    onSuccess: () => {
+      refresh();
+      setMsg({ kind: 'ok', text: 'この事件の日程調整として紐付けました' });
+    },
+    onError: fail,
+  });
+  const sets = q.data ?? [];
+  return (
+    <section className="card space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="font-semibold">日程調整（仮押さえ中）</h2>
+        {sets.length > 0 && <span className="badge badge-orange">{sets.length} 件</span>}
+        {!adding && (
+          <button className="btn btn-sm ml-auto" onClick={() => setAdding(true)} title="候補日時をまとめて仮押さえします">
+            ＋ 仮押さえを追加
+          </button>
+        )}
+        <Link to={`/calendar`} className={`btn btn-sm${adding ? ' ml-auto' : ''}`}>
+          予定を見る
+        </Link>
+      </div>
+      {msg && <div className={`fade-in rounded-md px-3 py-2 text-sm ${msg.kind === 'ok' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700'}`}>{msg.text}</div>}
+      {adding && (
+        <HoldForm
+          defaultDay={new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10)}
+          fixed={{ clientId, clientName, caseId, caseTitle }}
+          onClose={() => setAdding(false)}
+          onSaved={(text) => {
+            setAdding(false);
+            refresh();
+            setMsg({ kind: 'ok', text });
+          }}
+          onError={(text) => setMsg({ kind: 'err', text })}
+        />
+      )}
+      {q.isLoading && <div className="loading-text text-sm text-slate-500">読み込み中…</div>}
+      {!q.isLoading && sets.length === 0 && !adding && <div className="text-sm text-slate-500">調整中の仮押さえはありません。候補日時をまとめて押さえるときは「＋ 仮押さえを追加」から。</div>}
+      <ul className="space-y-3">
+        {sets.map((s) => (
+          <li key={s.sessionId} className="rounded border border-slate-200 p-2 text-sm">
+            <div className="mb-1 flex flex-wrap items-center gap-2">
+              <span className="badge badge-gray">{s.kind}</span>
+              <span className="font-medium">{s.candidates[0]?.title?.replace(/\s*仮$/, '') ?? '日程調整'}</span>
+              <span className="text-xs text-slate-500">候補 {s.candidates.length} 件</span>
+              {s.proposedAt && <span className="text-xs text-slate-400">{fmtDate(s.proposedAt)} 提案</span>}
+              {!s.linkedToCase && <span className="badge badge-orange">この事件に未紐付け</span>}
+              {s.conversationId && (
+                <Link to={`/inbox/${s.conversationId}`} className="text-xs text-blue-700 hover:underline">
+                  会話を開く
+                </Link>
+              )}
+              <button
+                className="btn btn-sm ml-auto"
+                disabled={cancelHold.isPending}
+                onClick={() => {
+                  if (window.confirm(`この日程調整の仮押さえ ${s.candidates.length} 件をすべて取り消しますか？`)) cancelHold.mutate(s.sessionId);
+                }}
+                title="候補をすべて取り消す"
+              >
+                全候補を取消
+              </button>
+            </div>
+            {!s.linkedToCase && (
+              <div className="mb-1 flex flex-wrap items-center gap-2 rounded bg-orange-50 px-2 py-1 text-xs text-orange-800">
+                <span>会話から始めた日程調整です。紐付けると、確定した予定がこの事件の「予定」に入ります。</span>
+                <button className="btn btn-sm" disabled={attach.isPending} onClick={() => attach.mutate(s.sessionId)}>
+                  この事件に紐付ける
+                </button>
+              </div>
+            )}
+            <ul className="divide-y divide-slate-100">
+              {s.candidates.map((v) => (
+                <li key={v.googleEventId} className="flex flex-wrap items-center gap-2 py-1">
+                  <span className="text-slate-700">{fmtSlot(v.startAt, v.endAt)}</span>
+                  {v.location && <span className="text-xs text-slate-500">{v.location}</span>}
+                  {v.eventId ? (
+                    <button
+                      className="btn btn-sm btn-primary ml-auto"
+                      disabled={confirmHold.isPending}
+                      onClick={() => {
+                        if (window.confirm(`${fmtSlot(v.startAt, v.endAt)} で確定しますか？\nほかの候補（${Math.max(s.candidates.length - 1, 0)} 件）の仮押さえは削除されます。`)) confirmHold.mutate({ sessionId: s.sessionId, eventId: v.eventId! });
+                      }}
+                    >
+                      この候補で確定
+                    </button>
+                  ) : (
+                    <span className="ml-auto text-xs text-slate-400">カレンダーにありません</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

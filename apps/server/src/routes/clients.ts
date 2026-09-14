@@ -16,6 +16,7 @@ import { findDuplicateClients, mergeClients } from '../services/clientMerge.js';
 import { clientFolderParents, defaultClientFolderRel, syncClientFolderName, syncClientFolderNames, rememberClientFolderId } from '../services/clientFolders.js';
 import { listContacts, createContact, updateContact, deleteContact, contactBriefs } from '../services/contacts.js';
 import { prepareHearingNotice } from '../services/hearingNotice.js';
+import { listCaseHolds, attachHoldSetToCase } from '../services/court.js';
 import { joinPath, getItemByPath } from '../integrations/onedrive.js';
 
 import { listLineFriends, syncLineFollowers, linkLineFriendToClient, assertLineFriendFree } from '../services/lineFriends.js';
@@ -230,6 +231,10 @@ clientRoutes.get('/cases/:id', (c) => {
 });
 
 clientRoutes.get('/cases/:id/timeline', (c) => c.json(caseTimeline(Number(c.req.param('id')))));
+
+// ---- 事件から見た日程調整（仮押さえ）。確定・取消は /calendar/holds/:sessionId/... ----
+clientRoutes.get('/cases/:id/holds', (c) => c.json(listCaseHolds(Number(c.req.param('id')))));
+clientRoutes.post('/cases/:id/holds/:sessionId/attach', (c) => c.json(attachHoldSetToCase(Number(c.req.param('sessionId')), Number(c.req.param('id')))));
 
 // ---- 事件の関係者（相手方・相手方代理人など） ----
 clientRoutes.get('/cases/:id/contacts', (c) => c.json(listContacts(Number(c.req.param('id')))));
