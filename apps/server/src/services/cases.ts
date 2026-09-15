@@ -2,7 +2,7 @@ import { and, eq, desc, gt, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/index.js';
 import { generateStructured, generateText } from '../integrations/anthropic.js';
-import { formatJaDateTime, type CaseInput, type CaseNoteInput, WAITING_FOR, CASE_NOTE_KIND_LABEL, type CaseNoteKind, OPEN_CASE_STATUSES, CASE_CONTACT_ROLE_LABEL, type CaseContactRole } from '@lcm/shared';
+import { formatJaDateTime, type CaseInput, type CaseNoteInput, WAITING_FOR, CASE_NOTE_KIND_LABEL, type CaseNoteKind, OPEN_CASE_STATUSES, CASE_CONTACT_ROLE_LABEL, type CaseContactRole, type TaskStatus } from '@lcm/shared';
 import { createTask } from './tasks.js';
 import { syncClientFolderWithStatus } from './clientFolders.js';
 import { logger } from '../logger.js';
@@ -282,6 +282,83 @@ export async function addCaseNote(input: CaseNoteInput, opts: AddNoteOptions = {
   }
   db().update(schema.cases).set({ updatedAt: new Date().toISOString() }).where(eq(schema.cases.id, c.id)).run();
   return row;
+}
+
+/** 保存済みの記録からタスクを作るときの指定 */
+export interface NoteTaskInput {
+  /** each = 次のアクションごと / single = まとめて 1 件 / custom = 自分で書いた題名で 1 件 */
+  mode: 'each' | 'single' | 'custom';
+  /** each・single のとき、タスクにする「次のアクション」の番号（省略すると未タスク化のものすべて） */
+  indexes?: number[];
+  /** custom のときの題名 */
+  title?: string | null;
+  /** 期限（YYYY-MM-DD。省略するとアクションの期限、それも無ければ既定の日数後） */
+  due?: string | null;
+  status?: TaskStatus;
+  note?: string | null;
+  syncToChatwork?: boolean;
+}
+
+/** その記録の見出し（題名の既定値に使う） */
+function noteHeadline(row: typeof schema.caseNotes.$inferSelect): string {
+  const src = row.gist ?? row.rawText ?? '';
+  const first = src.split('\n').map((l) => l.trim()).find(Boolean) ?? '記録';
+  return first.slice(0, 80);
+}
+
+/** 期限は「2026-09-20」の形で持つが、古い記録には ISO が入っていることがある */
+const dueDate = (due?: string | null) => (due ? due.slice(0, 10) : null);
+const dueToIso = (due?: string | null) => {
+  const d = dueDate(due);
+  return d ? new Date(`${d}T09:00:00+09:00`).toISOString() : null;
+};
+
+/**
+ * 保存済みの記録をタスクにする。
+ * 「次のアクション」からでも、その場で書いた題名からでも作れる。
+ * 作ったタスクは記録の「次のアクション」に控えるので、同じものを二重にタスク化しない。
+ */
+export async function createTasksFromNote(noteId: number, input: NoteTaskInput) {
+  const d = db();
+  const row = d.select().from(schema.caseNotes).where(eq(schema.caseNotes.id, noteId)).get();
+  if (!row) throw new Error('記録が見つかりません');
+  const kase = d.select().from(schema.cases).where(eq(schema.cases.id, row.caseId)).get();
+  if (!kase) throw new Error('事件が見つかりません');
+  const status: TaskStatus = input.status ?? (row.waitingFor === 'client' ? 'waiting_client' : row.waitingFor && row.waitingFor !== 'none' ? 'waiting_other' : 'open');
+  const base = { clientId: kase.clientId, caseId: kase.id, conversationId: null, status, syncToChatwork: input.syncToChatwork ?? false };
+  const actions = row.nextActions.map((a) => ({ ...a }));
+  const created: { id: number; title: string }[] = [];
+
+  if (input.mode === 'custom') {
+    const title = (input.title ?? '').trim() || noteHeadline(row);
+    const t = await createTask({ ...base, title, followUpAt: dueToIso(input.due), note: input.note ?? row.gist ?? null });
+    created.push({ id: t.id, title: t.title });
+    // 記録にも「タスクにしたもの」として残す
+    actions.push({ title, due: dueDate(input.due), taskId: t.id });
+  } else {
+    // 指定が無ければ、まだタスクにしていないアクションを全部
+    const chosen = actions.map((a, i) => ({ a, i })).filter(({ a, i }) => (input.indexes ? input.indexes.includes(i) : !a.taskId) && !a.taskId);
+    if (chosen.length === 0) throw new Error('タスクにする「次のアクション」がありません。題名を書いてタスクにしてください');
+    if (input.mode === 'single') {
+      const first = chosen[0]!.a;
+      const title = (input.title ?? '').trim() || (chosen.length === 1 ? first.title : `${first.title} ほか ${chosen.length - 1} 件`);
+      const dues = chosen.map(({ a }) => a.due).filter((x): x is string => !!x).sort();
+      const note = input.note ?? [chosen.map(({ a }) => `・${a.title}${a.due ? `（期限 ${dueDate(a.due)}）` : ''}`).join('\n'), row.gist ? `\n${row.gist}` : ''].join('\n').trim();
+      const t = await createTask({ ...base, title, followUpAt: dueToIso(input.due ?? dues[0] ?? null), note });
+      created.push({ id: t.id, title: t.title });
+      for (const { i } of chosen) actions[i] = { ...actions[i]!, taskId: t.id };
+    } else {
+      for (const { a, i } of chosen) {
+        const t = await createTask({ ...base, title: a.title, followUpAt: dueToIso(input.due ?? a.due), note: input.note ?? row.gist ?? null });
+        created.push({ id: t.id, title: t.title });
+        actions[i] = { ...actions[i]!, taskId: t.id };
+      }
+    }
+  }
+  d.update(schema.caseNotes).set({ nextActions: actions }).where(eq(schema.caseNotes.id, noteId)).run();
+  d.update(schema.cases).set({ updatedAt: new Date().toISOString() }).where(eq(schema.cases.id, kase.id)).run();
+  logger.info({ noteId, mode: input.mode, tasks: created.length }, '記録からタスクを作りました');
+  return { tasks: created, note: d.select().from(schema.caseNotes).where(eq(schema.caseNotes.id, noteId)).get()! };
 }
 
 /** 記録の編集（本文・整理結果・日時などを差し替える。タスク化済みの次のアクションは taskId を引き継ぐ） */
