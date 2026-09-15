@@ -1,6 +1,6 @@
 import { eq, isNull, and } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { getLineFollowerIds, getLineProfile } from '../channels/line.js';
+import { getLineFollowerIds, getLineProfile, lineProfileStatus, lineGroupStatus, isLineGroupThread } from '../channels/line.js';
 import { linkConversationToClient, cleanDisplayName } from './identity.js';
 import { upsertAlert, resolveAlertsByKeyPrefix } from './alerts.js';
 import { isConfigured } from '../config.js';
@@ -92,6 +92,47 @@ export function listLineFriends(opts: { unlinkedOnly?: boolean } = {}): LineFrie
   });
   const out = opts.unlinkedOnly ? rows.filter((r) => !r.client) : rows;
   return out.sort((a, b) => (b.lastSeenAt ?? '').localeCompare(a.lastSeenAt ?? ''));
+}
+
+/**
+ * LINE に送る前に「その相手に届くか」を確かめる。
+ * LINE はブロック・友だち解除・退会した相手に送っても 200 を返すため、
+ * 確かめずに送るとアプリだけ「送信済み」になって相手には届かない。
+ * 判断できないとき（通信エラーなど）は送信を止めない。
+ */
+export async function assertLineDeliverable(to: string): Promise<void> {
+  if (isLineGroupThread(to)) {
+    // グループ・複数人トーク: 退出させられていると届かない
+    if ((await lineGroupStatus(to)) === 'left') {
+      throw new Error('この LINE グループから退出しているため送れません。グループに招待し直してもらってください');
+    }
+    return;
+  }
+  if (!to.startsWith('U')) return;
+  const status = await lineProfileStatus(to);
+  const friend = db().select().from(schema.lineFriends).where(eq(schema.lineFriends.userId, to)).get();
+  const name = friend?.displayName ?? db().select({ name: schema.clients.name }).from(schema.clients).where(eq(schema.clients.lineUserId, to)).get()?.name ?? 'この相手';
+  if (status === 'blocked') {
+    markLineUnfollowed(to);
+    upsertAlert({
+      type: 'line_blocked',
+      dedupeKey: `line_blocked:${to}`,
+      title: `LINE が届きません: ${name}`,
+      body: `${name}さんは LINE公式アカウントをブロック（または友だち解除・退会）しているため、LINE では送れません。Gmail や電話など別の方法で連絡してください。相手が友だちに追加し直すと、また送れるようになります。`,
+      payload: { lineUserId: to },
+    });
+    throw new Error(`${name}さんは LINE公式アカウントをブロック（または友だち解除）しているため、LINE では届きません。別の方法で連絡してください`);
+  }
+  if (status === 'ok') {
+    // ブロックを解除して友だちに戻っていたら、こちらの記録も直す
+    if (friend?.unfollowedAt) {
+      db().update(schema.lineFriends).set({ unfollowedAt: null, updatedAt: new Date().toISOString() }).where(eq(schema.lineFriends.userId, to)).run();
+    }
+    resolveAlertsByKeyPrefix(`line_blocked:${to}`);
+    return;
+  }
+  // status === 'unknown': 判断できないので、そのまま送る（誤検知で送れなくならないように）
+  logger.warn({ userId: to }, 'LINE の到達確認ができませんでした。そのまま送信します');
 }
 
 /** その LINE がほかの依頼者に付いていないことを確かめる */

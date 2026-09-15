@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import { createHmac } from 'node:crypto';
 
 process.env.LINE_CHANNEL_SECRET = 'line-secret';
@@ -7,7 +7,7 @@ process.env.CHATWORK_WEBHOOK_TOKEN = Buffer.from('chatwork-webhook-secret').toSt
 process.env.CHATWORK_API_TOKEN = 'cw-token';
 process.env.SESSION_SECRET = 'test-session-secret';
 
-const { verifyLineSignature, normalizeLineEvent, splitLineText } = await import('../channels/line.js');
+const { verifyLineSignature, normalizeLineEvent, splitLineText, splitLineMessages, pushLineMessages, lineProfileStatus, isLineGroupThread } = await import('../channels/line.js');
 const { verifyChatworkSignature, stripChatworkMarkup, extractDownloadIds, normalizeChatworkMessage } = await import('../channels/chatwork.js');
 const { normalizeGmailMessage, buildMime, parseAddress } = await import('../channels/gmail.js');
 
@@ -102,5 +102,97 @@ describe('Gmail', () => {
     expect(mime).toContain('=?UTF-8?B?');
     expect(mime).toContain('multipart/mixed');
     expect(mime).toContain('Content-Disposition: attachment');
+  });
+});
+
+describe('LINE の送信', () => {
+  const orig = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = orig;
+  });
+
+  it('1 回に送れる上限を超えた分は、落とした文字数を返す', () => {
+    const r = splitLineMessages('a'.repeat(30000), 5000);
+    expect(r.chunks).toHaveLength(5);
+    expect(r.chunks.every((c) => c.length <= 5000)).toBe(true);
+    expect(r.dropped).toBe(5000);
+    expect(splitLineMessages('短い本文').dropped).toBe(0);
+  });
+
+  it('通信が切れたときは同じ再試行キーで送り直す（LINE 側で重複排除される）', async () => {
+    const keys: string[] = [];
+    let n = 0;
+    globalThis.fetch = (async (_url: string, init: { headers: Record<string, string> }) => {
+      keys.push(init.headers['X-Line-Retry-Key']!);
+      if (++n === 1) throw new Error('socket hang up');
+      return new Response(JSON.stringify({ sentMessages: [{ id: 'm-1' }] }), { status: 200, headers: { 'x-line-request-id': 'req-1' } });
+    }) as unknown as typeof fetch;
+    const r = await pushLineMessages('U1', [{ type: 'text', text: 'こんにちは' }], 2);
+    expect(r).toEqual({ id: 'm-1', requestId: 'req-1' });
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toBe(keys[1]);
+  });
+
+  it('すでに受理済み（409）は送信できたものとして扱う', async () => {
+    globalThis.fetch = (async () => new Response('', { status: 409, headers: { 'x-line-request-id': 'req-2' } })) as unknown as typeof fetch;
+    const r = await pushLineMessages('U1', [{ type: 'text', text: 'やあ' }], 2);
+    expect(r.requestId).toBe('req-2');
+  });
+
+  it('月間上限（429）は送り直さずエラーにする', async () => {
+    let n = 0;
+    globalThis.fetch = (async () => {
+      n++;
+      return new Response(JSON.stringify({ message: 'You have reached your monthly limit.' }), { status: 429 });
+    }) as unknown as typeof fetch;
+    await expect(pushLineMessages('U1', [{ type: 'text', text: 'やあ' }], 3)).rejects.toThrow(/月間メッセージ上限/);
+    expect(n).toBe(1);
+  });
+
+  it('プロフィールが 404 ならブロック（届かない相手）と判断する', async () => {
+    globalThis.fetch = (async () => new Response('', { status: 404 })) as unknown as typeof fetch;
+    expect(await lineProfileStatus('U1')).toBe('blocked');
+    globalThis.fetch = (async () => new Response(JSON.stringify({ displayName: '山田' }), { status: 200 })) as unknown as typeof fetch;
+    expect(await lineProfileStatus('U1')).toBe('ok');
+    globalThis.fetch = (async () => new Response('', { status: 500 })) as unknown as typeof fetch;
+    expect(await lineProfileStatus('U1')).toBe('unknown');
+  });
+});
+
+describe('LINE のグループ', () => {
+  it('グループの発言は、発言者ではなくグループの会話として取り込む', () => {
+    const ev = {
+      type: 'message',
+      timestamp: 1700000000000,
+      source: { type: 'group', groupId: 'C-group-1', userId: 'U-member-1' },
+      message: { id: 'm-g1', type: 'text', text: 'よろしくお願いします' },
+    } as const;
+    const norm = normalizeLineEvent(ev as never);
+    // 会話はグループ、発言者は個人として残す（返信先がグループになる）
+    expect(norm?.externalThreadId).toBe('C-group-1');
+    expect(norm?.senderAddress).toBe('U-member-1');
+    expect(isLineGroupThread('C-group-1')).toBe(true);
+    expect(isLineGroupThread('R-room-1')).toBe(true);
+    expect(isLineGroupThread('U-user-1')).toBe(false);
+  });
+
+  it('複数人トークも同じくトークルームの会話にする', () => {
+    const norm = normalizeLineEvent({
+      type: 'message',
+      timestamp: 1700000000000,
+      source: { type: 'room', roomId: 'R-room-1', userId: 'U-member-2' },
+      message: { id: 'm-r1', type: 'text', text: 'こんばんは' },
+    } as never);
+    expect(norm?.externalThreadId).toBe('R-room-1');
+  });
+
+  it('1 対 1 はこれまでどおり個人の会話', () => {
+    const norm = normalizeLineEvent({
+      type: 'message',
+      timestamp: 1700000000000,
+      source: { type: 'user', userId: 'U-alone' },
+      message: { id: 'm-u1', type: 'text', text: 'こんにちは' },
+    } as never);
+    expect(norm?.externalThreadId).toBe('U-alone');
   });
 });

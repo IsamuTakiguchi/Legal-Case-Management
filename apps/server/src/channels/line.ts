@@ -40,10 +40,68 @@ async function authHeaders(): Promise<Record<string, string>> {
   return { Authorization: `Bearer ${await lineAccessToken()}` };
 }
 
+/**
+ * その発言が属するトーク（会話）の ID。
+ * グループ・複数人トークの発言には「グループ ID」と「発言した人の ID」の両方が入っているので、
+ * かならずグループ（トークルーム）を優先する。個人を優先すると、グループの発言が
+ * 個人トークに混ざり、返信もグループではなくその人ひとりに送られてしまう。
+ */
 export function lineThreadId(ev: LineEvent): string | null {
   const s = ev.source;
   if (!s) return null;
-  return s.userId ?? s.groupId ?? s.roomId ?? null;
+  return s.groupId ?? s.roomId ?? s.userId ?? null;
+}
+
+/** グループ（C…）・複数人トーク（R…）の ID か。個人は U… */
+export function isLineGroupThread(threadId: string): boolean {
+  return threadId.startsWith('C') || threadId.startsWith('R');
+}
+
+/** グループの名前（会話の表示名に使う）。取れなければ null */
+export async function getLineGroupSummary(groupId: string): Promise<{ groupName: string; pictureUrl?: string } | null> {
+  if (!groupId.startsWith('C')) return null; // 複数人トーク（R…）には名前が無い
+  try {
+    const res = await fetch(`${API}/group/${encodeURIComponent(groupId)}/summary`, { headers: await authHeaders(), signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) {
+      logger.warn({ status: res.status, groupId }, 'LINE グループ情報の取得に失敗');
+      return null;
+    }
+    return (await res.json()) as { groupName: string; pictureUrl?: string };
+  } catch (err) {
+    logger.warn({ err, groupId }, 'LINE グループ情報の取得に失敗');
+    return null;
+  }
+}
+
+/** グループ内の発言者の表示名（友だちでなくても取れる） */
+export async function getLineGroupMemberProfile(threadId: string, userId: string): Promise<{ displayName: string; pictureUrl?: string } | null> {
+  const kind = threadId.startsWith('C') ? 'group' : 'room';
+  const path = kind === 'group' ? `${API}/group/${encodeURIComponent(threadId)}/member/${encodeURIComponent(userId)}` : `${API}/room/${encodeURIComponent(threadId)}/member/${encodeURIComponent(userId)}`;
+  try {
+    const res = await fetch(path, { headers: await authHeaders(), signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return null;
+    return (await res.json()) as { displayName: string; pictureUrl?: string };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * そのグループにまだ入っているか。退出（強制退出）させられていると push しても届かない。
+ * 判断できないときは 'unknown'（送信は止めない）
+ */
+export async function lineGroupStatus(threadId: string): Promise<'ok' | 'left' | 'unknown'> {
+  const path = threadId.startsWith('C')
+    ? `${API}/group/${encodeURIComponent(threadId)}/summary`
+    : `${API}/room/${encodeURIComponent(threadId)}/members/count`;
+  try {
+    const res = await fetch(path, { headers: await authHeaders(), signal: AbortSignal.timeout(10_000) });
+    if (res.ok) return 'ok';
+    if (res.status === 404) return 'left';
+    return 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }
 
 const MIME_BY_TYPE: Record<string, string> = { image: 'image/jpeg', video: 'video/mp4', audio: 'audio/m4a' };
@@ -122,6 +180,25 @@ export async function getLineFollowerIds(): Promise<{ ok: true; userIds: string[
     start = j.next;
   }
   return { ok: true, userIds };
+}
+
+/**
+ * その相手に push が届くかの目安。
+ * LINE はブロック・友だち解除・退会した相手に push しても 200 を返して実際には届かないので、
+ * プロフィールが引けるか（404 ならブロック等）で判断する。
+ * 通信エラーなど判断できないときは 'unknown'（送信は止めない）
+ */
+export async function lineProfileStatus(userId: string): Promise<'ok' | 'blocked' | 'unknown'> {
+  try {
+    const res = await fetch(`${API}/profile/${encodeURIComponent(userId)}`, { headers: await authHeaders(), signal: AbortSignal.timeout(10_000) });
+    if (res.ok) return 'ok';
+    if (res.status === 404) return 'blocked';
+    logger.warn({ status: res.status, userId }, 'LINE プロフィール確認が不明な応答');
+    return 'unknown';
+  } catch (err) {
+    logger.warn({ err, userId }, 'LINE プロフィール確認に失敗');
+    return 'unknown';
+  }
 }
 
 export async function getLineProfile(userId: string): Promise<{ displayName: string; pictureUrl?: string } | null> {
@@ -206,27 +283,72 @@ export const lineAdapter: ChannelAdapter = {
     if (opts.fileLinks?.length) {
       text += '\n\n' + opts.fileLinks.map((f) => `▼${f.name}\n${f.url}`).join('\n');
     }
-    const chunks = splitLineText(text);
+    const { chunks, dropped } = splitLineMessages(text);
     const messages = chunks.map((t) => ({ type: 'text', text: t }));
-    const res = await fetch(`${API}/message/push`, {
-      method: 'POST',
-      headers: { ...(await authHeaders()), 'Content-Type': 'application/json', 'X-Line-Retry-Key': crypto.randomUUID() },
-      body: JSON.stringify({ to: opts.externalThreadId, messages }),
-    });
-    if (!res.ok) {
-      const t = await res.text();
-      if (res.status === 429) throw new Error('LINE の月間メッセージ上限に達したため送信できません');
-      throw new Error(`LINE 送信失敗 ${res.status}: ${t}`);
-    }
-    const j = (await res.json().catch(() => ({}))) as { sentMessages?: { id: string }[] };
-    const id = j.sentMessages?.[0]?.id ?? `out_${Date.now()}`;
-    const note = (opts.files?.length ?? 0) > 0 ? `LINE ではファイルを直接送信できないため ${opts.files!.length} 件は送信していません` : undefined;
-    return { externalId: id, externalThreadId: opts.externalThreadId, sentAt: new Date().toISOString(), note };
+    const { id, requestId } = await pushLineMessages(opts.externalThreadId, messages);
+    const notes: string[] = [];
+    if ((opts.files?.length ?? 0) > 0) notes.push(`LINE ではファイルを直接送信できないため ${opts.files!.length} 件は送信していません`);
+    if (dropped > 0) notes.push(`LINE の 1 回の送信上限を超えたため、末尾 ${dropped} 文字は送っていません`);
+    return { externalId: id, externalThreadId: opts.externalThreadId, sentAt: new Date().toISOString(), note: notes.join('。') || undefined, requestId };
   },
 };
 
-/** LINE のテキストは 5000 文字まで。超える場合は分割（最大 5 通） */
-export function splitLineText(text: string, limit = 5000): string[] {
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * push を送る。ネットワークの一時的な不調・タイムアウト・LINE 側の 5xx は、
+ * 同じ X-Line-Retry-Key で送り直す（LINE 側で重複排除されるので二重に届かない）。
+ * すでに受理済みのときは 409 が返るので、それは成功として扱う。
+ */
+export async function pushLineMessages(to: string, messages: { type: string; text: string }[], attempts = 3): Promise<{ id: string; requestId: string | null }> {
+  const retryKey = crypto.randomUUID();
+  let lastErr: Error | null = null;
+  for (let i = 0; i < attempts; i++) {
+    if (i > 0) await sleep(1000 * i);
+    let res: Response;
+    try {
+      res = await fetch(`${API}/message/push`, {
+        method: 'POST',
+        headers: { ...(await authHeaders()), 'Content-Type': 'application/json', 'X-Line-Retry-Key': retryKey },
+        body: JSON.stringify({ to, messages }),
+        signal: AbortSignal.timeout(20_000),
+      });
+    } catch (err) {
+      // 応答が返らなかった場合、実際には届いていることがある。同じキーで送り直せば二重送信にならない
+      lastErr = err instanceof Error ? err : new Error(String(err));
+      logger.warn({ err, attempt: i + 1 }, 'LINE 送信の通信に失敗。送り直します');
+      continue;
+    }
+    const requestId = res.headers.get('x-line-request-id');
+    // 409 = 同じキーの送信をすでに受理済み（前回の試行が実は通っていた）
+    if (res.status === 409) {
+      logger.info({ requestId }, 'LINE 送信はすでに受理済みでした（再試行の重複排除）');
+      return { id: `out_${Date.now()}`, requestId };
+    }
+    if (res.ok) {
+      const j = (await res.json().catch(() => ({}))) as { sentMessages?: { id: string }[] };
+      logger.info({ requestId, messages: messages.length }, 'LINE に送信しました');
+      return { id: j.sentMessages?.[0]?.id ?? `out_${Date.now()}`, requestId };
+    }
+    const body = await res.text().catch(() => '');
+    if (res.status === 429 && /monthly limit/i.test(body)) throw new Error('LINE の月間メッセージ上限に達したため送信できません');
+    if (res.status === 429 || res.status >= 500) {
+      lastErr = new Error(`LINE 送信失敗 ${res.status}: ${body}`);
+      const wait = Number(res.headers.get('retry-after') ?? 0);
+      logger.warn({ status: res.status, requestId, attempt: i + 1 }, 'LINE 送信が一時的に失敗。送り直します');
+      if (wait > 0 && wait <= 30) await sleep(wait * 1000);
+      continue;
+    }
+    throw new Error(`LINE 送信失敗 ${res.status}: ${body}`);
+  }
+  throw lastErr ?? new Error('LINE 送信に失敗しました');
+}
+
+/**
+ * LINE のテキストは 5000 文字まで、1 回の送信は 5 通まで。
+ * 入りきらない分は送れないので、その文字数も返す（送信後の注意書きに使う）
+ */
+export function splitLineMessages(text: string, limit = 5000): { chunks: string[]; dropped: number } {
   const out: string[] = [];
   let rest = text;
   while (rest.length > limit && out.length < 4) {
@@ -236,7 +358,12 @@ export function splitLineText(text: string, limit = 5000): string[] {
     rest = rest.slice(cut).replace(/^\n/, '');
   }
   out.push(rest.slice(0, limit));
-  return out;
+  return { chunks: out, dropped: Math.max(0, rest.length - limit) };
+}
+
+/** LINE のテキストは 5000 文字まで。超える場合は分割（最大 5 通） */
+export function splitLineText(text: string, limit = 5000): string[] {
+  return splitLineMessages(text, limit).chunks;
 }
 
 export function lineFilesUnsupported(files?: OutboundFile[]): boolean {

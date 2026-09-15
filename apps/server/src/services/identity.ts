@@ -1,5 +1,6 @@
 import { and, desc, eq, or, like } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
+import { isLineGroupThread } from '../channels/line.js';
 import type { IdentityHint } from '../channels/types.js';
 import { upsertAlert } from './alerts.js';
 
@@ -129,7 +130,7 @@ export function refreshUnlinkedAlerts(): number {
     const identity: IdentityHint = p.identity ?? {
       channel: conv.channel as IdentityHint['channel'],
       email: conv.channel === 'gmail' ? conv.counterpartAddress : null,
-      lineUserId: conv.channel === 'line' ? conv.externalThreadId : null,
+      lineUserId: conv.channel === 'line' && !isLineGroupThread(conv.externalThreadId) ? conv.externalThreadId : null,
       chatworkRoomId: conv.channel === 'chatwork' ? Number(conv.externalThreadId) || null : null,
     };
     const last = d
@@ -165,7 +166,8 @@ export function linkConversationToClient(conversationId: number, clientId: numbe
   if (conv.channel === 'gmail' && conv.counterpartAddress && !client.emails.includes(conv.counterpartAddress)) {
     patch.emails = [...client.emails, conv.counterpartAddress];
   }
-  if (conv.channel === 'line' && !client.lineUserId) patch.lineUserId = conv.externalThreadId;
+  // グループの ID は依頼者本人の LINE ID ではないので、個人トークのときだけ覚える
+  if (conv.channel === 'line' && !client.lineUserId && !isLineGroupThread(conv.externalThreadId)) patch.lineUserId = conv.externalThreadId;
   if (conv.channel === 'chatwork' && !client.chatworkRoomId) patch.chatworkRoomId = Number(conv.externalThreadId);
   if (conv.channel === 'chatwork' && !client.chatworkAccountId && conv.counterpartAddress) patch.chatworkAccountId = Number(conv.counterpartAddress);
   if (!client.preferredChannel) patch.preferredChannel = conv.channel;

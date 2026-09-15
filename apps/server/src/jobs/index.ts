@@ -25,6 +25,7 @@ import { runDueScheduled, recoverStuckScheduled } from '../services/scheduledSen
 import { refreshUnlinkedAlerts } from '../services/identity.js';
 import { repairConversationTimes } from '../services/inbox.js';
 import { backfillLineFriends } from '../services/lineFriends.js';
+import { repairLineGroupConversations } from '../services/lineGroups.js';
 
 export interface JobDef {
   name: string;
@@ -140,6 +141,15 @@ export function startJobs() {
     } catch (err) {
       logger.warn({ err }, 'LINE の友だち一覧の作成に失敗');
     }
+  }
+  // 一度だけの後始末: グループの発言が個人トークに混ざっていたものを、グループの会話へ移す
+  if (!getSyncState('cleanup:line_group_threads')) {
+    void repairLineGroupConversations()
+      .then((r) => {
+        setSyncState('cleanup:line_group_threads', new Date().toISOString());
+        if (r.moved) logger.info(r, 'LINE グループの発言を会話ごとに分け直しました');
+      })
+      .catch((err) => logger.warn({ err }, 'LINE グループの分け直しに失敗'));
   }
   // 一度だけの後始末: 過去分の取り込みで巻き戻っていた会話の最終日時を直す
   if (!getSyncState('cleanup:conversation_times')) {

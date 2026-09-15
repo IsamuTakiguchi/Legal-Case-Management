@@ -9,6 +9,8 @@ export interface InboundMessage {
   sentAt: string; // ISO
   senderName?: string | null;
   senderAddress?: string | null; // email / line userId / chatwork account id
+  /** 会話（スレッド）そのものの名前。LINE のグループ名など、発言者名とは別のとき用 */
+  threadName?: string | null;
   subject?: string | null;
   body: string;
   attachments: InboundAttachment[];
@@ -47,6 +49,8 @@ export interface SendResult {
   sentAt: string;
   /** LINE などファイル送信不可のチャネルで、リンク化して送った／手動送付案内したファイル */
   note?: string;
+  /** チャネル側の受付 ID（LINE の x-line-request-id など。問い合わせ時の手がかりに残す） */
+  requestId?: string | null;
 }
 
 export interface ChannelAdapter {

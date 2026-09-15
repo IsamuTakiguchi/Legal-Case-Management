@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { verifyLineSignature, normalizeLineEvent, getLineProfile, type LineEvent } from '../channels/line.js';
+import { verifyLineSignature, normalizeLineEvent, getLineProfile, getLineGroupSummary, getLineGroupMemberProfile, isLineGroupThread, type LineEvent } from '../channels/line.js';
 import { verifyChatworkSignature, type ChatworkWebhookBody } from '../channels/chatwork.js';
 import { ingestChatworkWebhook } from '../jobs/chatworkPoll.js';
 import { ingestMessage } from '../services/inbox.js';
@@ -49,12 +49,26 @@ webhookRoutes.post('/line', async (c) => {
           const norm = normalizeLineEvent(ev);
           if (!norm) continue;
           const userId = ev.source?.userId;
-          if (userId) {
-            const conv = db()
-              .select()
-              .from(schema.conversations)
-              .where(and(eq(schema.conversations.channel, 'line'), eq(schema.conversations.externalThreadId, norm.externalThreadId)))
-              .get();
+          const group = isLineGroupThread(norm.externalThreadId);
+          const conv = db()
+            .select()
+            .from(schema.conversations)
+            .where(and(eq(schema.conversations.channel, 'line'), eq(schema.conversations.externalThreadId, norm.externalThreadId)))
+            .get();
+          if (group) {
+            // グループは「会話の名前＝グループ名」「発言者＝メンバー名」に分ける
+            if (userId) {
+              const p = await getLineGroupMemberProfile(norm.externalThreadId, userId).catch(() => null);
+              norm.senderName = cleanDisplayName(p?.displayName);
+            }
+            const known = cleanDisplayName(conv?.counterpartName);
+            const groupName = known ?? cleanDisplayName((await getLineGroupSummary(norm.externalThreadId).catch(() => null))?.groupName) ?? 'LINE グループ';
+            // 会話の名前＝グループ名、発言者＝メンバー名（取れなければ空のまま）
+            norm.threadName = groupName;
+            norm.identity.displayName = groupName;
+            // 会話は「グループ」として扱うので、依頼者の紐付けに個人 ID は使わない
+            norm.identity.lineUserId = null;
+          } else if (userId) {
             const known = cleanDisplayName(conv?.counterpartName);
             if (!known) {
               const p = await getLineProfile(userId).catch(() => null);
@@ -64,8 +78,8 @@ webhookRoutes.post('/line', async (c) => {
               norm.senderName = known;
               norm.identity.displayName = known;
             }
-            upsertLineFriend({ userId, displayName: norm.senderName, source: 'message' });
           }
+          if (userId && !group) upsertLineFriend({ userId, displayName: norm.senderName, source: 'message' });
           await ingestMessage(norm);
         } catch (err) {
           logger.error({ err, type: ev.type, messageId: ev.message?.id }, 'LINE イベント処理に失敗');
