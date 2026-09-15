@@ -284,10 +284,77 @@ export async function addCaseNote(input: CaseNoteInput, opts: AddNoteOptions = {
   return row;
 }
 
+const noteTaskSuggestionSchema = z.object({
+  tasks: z
+    .array(
+      z.object({
+        title: z.string().describe('タスク名。弁護士が見て何をするか分かる言い方で、40 字以内'),
+        due: z.string().nullable().describe('期限 YYYY-MM-DD。記録から読み取れなければ null'),
+        status: z.enum(['open', 'waiting_client', 'waiting_other']).describe('こちらが動くなら open、依頼者の返事待ちなら waiting_client、相手方・裁判所・保険会社などの待ちなら waiting_other'),
+        note: z.string().describe('そのタスクのメモ（背景・決まったこと）。1〜2 文'),
+      }),
+    )
+    .describe('追いかける価値のあるものだけ。多くても 4 件。何も無ければ空'),
+  comment: z.string().describe('タスクにしなかったこと・注意点があれば 1 文。無ければ空'),
+});
+
+export type NoteTaskSuggestion = z.infer<typeof noteTaskSuggestionSchema>;
+
+/**
+ * 記録の内容から、登録するタスクの案を作る。
+ * そのまま登録するのではなく、画面で直してから登録する前提の「たたき台」
+ */
+export async function suggestNoteTasks(noteId: number): Promise<NoteTaskSuggestion> {
+  const d = db();
+  const row = d.select().from(schema.caseNotes).where(eq(schema.caseNotes.id, noteId)).get();
+  if (!row) throw new Error('記録が見つかりません');
+  const kase = d.select().from(schema.cases).where(eq(schema.cases.id, row.caseId)).get();
+  if (!kase) throw new Error('事件が見つかりません');
+  const client = d.select().from(schema.clients).where(eq(schema.clients.id, kase.clientId)).get();
+  // すでにあるタスクと同じものを出さないように渡す
+  const open = d
+    .select({ title: schema.tasks.title, status: schema.tasks.status })
+    .from(schema.tasks)
+    .where(and(eq(schema.tasks.caseId, kase.id), inArray(schema.tasks.status, ['open', 'waiting_client', 'waiting_other'])))
+    .all();
+  const lines = [
+    `今日: ${formatJaDateTime(new Date()).replace(/\d+時.*$/, '')}`,
+    `事件: ${kase.title}（${kase.caseType}）`,
+    `依頼者: ${client?.name ?? '不明'}`,
+    `記録の種別: ${CASE_NOTE_KIND_LABEL[row.kind as CaseNoteKind] ?? row.kind}`,
+    `記録の日時: ${formatJaDateTime(new Date(row.occurredAt))}`,
+    row.counterpart ? `相手: ${row.counterpart}` : '',
+    row.gist ? `要旨: ${row.gist}` : '',
+    row.theirSaid.length ? `相手が言ったこと:\n${row.theirSaid.map((x) => `・${x}`).join('\n')}` : '',
+    row.ourSaid.length ? `こちらが言ったこと:\n${row.ourSaid.map((x) => `・${x}`).join('\n')}` : '',
+    row.decisions.length ? `決定事項:\n${row.decisions.map((x) => `・${x}`).join('\n')}` : '',
+    row.nextActions.length ? `記録にある次のアクション:\n${row.nextActions.map((a) => `・${a.title}${a.due ? `（期限 ${dueDate(a.due)}）` : ''}${a.taskId ? '（タスク化済み）' : ''}`).join('\n')}` : '',
+    row.waitingFor && row.waitingFor !== 'none' ? `待ち: ${row.waitingFor}` : '',
+    `元メモ:\n${row.rawText ?? ''}`,
+    open.length ? `この事件の未了タスク（重複させない）:\n${open.map((t) => `・${t.title}`).join('\n')}` : '',
+  ].filter(Boolean);
+  return generateStructured({
+    purpose: '記録からのタスク案',
+    system: [
+      '法律事務所の事務補助者として、弁護士の記録（電話・打合せ・期日メモ）から、これから追いかけるタスクの案を作ります。記録に無いことは作りません。',
+      'タスクは「弁護士や事務局が実際に手を動かす単位」で挙げます。細かい手順に分けず、ひとまとまりの仕事は 1 件にします。多くても 4 件。',
+      'すでに終わったこと、決定事項の言い換え、「記録を残す」のような当然の作業、事件の未了タスクと同じ内容は挙げません。挙げるものが無ければ tasks は空にします。',
+      '期限は記録から読み取れるときだけ入れます（「来週金曜まで」なども今日を基準に日付にします）。読み取れなければ null にします。',
+      'タスク化済みと書かれている次のアクションは、もう一度挙げません。',
+    ].join('\n'),
+    user: lines.join('\n\n'),
+    schema: noteTaskSuggestionSchema,
+    effort: 'low',
+    maxTokens: 2000,
+  });
+}
+
 /** 保存済みの記録からタスクを作るときの指定 */
 export interface NoteTaskInput {
-  /** each = 次のアクションごと / single = まとめて 1 件 / custom = 自分で書いた題名で 1 件 */
-  mode: 'each' | 'single' | 'custom';
+  /** each = 次のアクションごと / single = まとめて 1 件 / custom = 題名で 1 件 / list = 画面で直した案をそのまま登録 */
+  mode: 'each' | 'single' | 'custom' | 'list';
+  /** list のとき登録するタスク（AI の案を直したもの） */
+  tasks?: { title: string; due?: string | null; status?: TaskStatus; note?: string | null }[];
   /** each・single のとき、タスクにする「次のアクション」の番号（省略すると未タスク化のものすべて） */
   indexes?: number[];
   /** custom のときの題名 */
@@ -329,7 +396,15 @@ export async function createTasksFromNote(noteId: number, input: NoteTaskInput) 
   const actions = row.nextActions.map((a) => ({ ...a }));
   const created: { id: number; title: string }[] = [];
 
-  if (input.mode === 'custom') {
+  if (input.mode === 'list') {
+    const list = (input.tasks ?? []).map((t) => ({ ...t, title: t.title.trim() })).filter((t) => t.title);
+    if (list.length === 0) throw new Error('登録するタスクがありません');
+    for (const t of list) {
+      const created0 = await createTask({ ...base, status: t.status ?? status, title: t.title, followUpAt: dueToIso(t.due ?? input.due), note: t.note ?? row.gist ?? null });
+      created.push({ id: created0.id, title: created0.title });
+      actions.push({ title: t.title, due: dueDate(t.due ?? input.due), taskId: created0.id });
+    }
+  } else if (input.mode === 'custom') {
     const title = (input.title ?? '').trim() || noteHeadline(row);
     const t = await createTask({ ...base, title, followUpAt: dueToIso(input.due), note: input.note ?? row.gist ?? null });
     created.push({ id: t.id, title: t.title });
