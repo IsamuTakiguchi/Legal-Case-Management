@@ -1,6 +1,6 @@
 /* 最小限のサービスワーカー。画面の骨格だけをキャッシュし、API は常にネットワークへ */
-const VERSION = 'lcm-shell-v5';
-const SHELL = ['/', '/manifest.json', '/icon.svg', '/icon-192.png'];
+const VERSION = 'lcm-shell-v6';
+const SHELL = ['/', '/manifest.json', '/icon-192.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).catch(() => undefined));

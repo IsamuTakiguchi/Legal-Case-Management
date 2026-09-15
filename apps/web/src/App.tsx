@@ -69,7 +69,7 @@ export default function App() {
     <div className="flex min-h-screen">
       <aside className="sticky top-0 hidden h-screen w-[232px] shrink-0 flex-col border-r border-[var(--hairline)] bg-white/60 backdrop-blur-2xl md:flex">
         <div className="flex items-center gap-3 px-4 pb-3 pt-5">
-          <img src="/icon.svg?v=3" alt="" className="h-9 w-9 rounded-[10px] shadow-[0_2px_6px_rgba(0,0,0,0.12)]" />
+          <img src="/icon-192.png?v=4" alt="" className="h-9 w-9 rounded-[10px] shadow-[0_2px_6px_rgba(0,0,0,0.12)]" />
           <div className="min-w-0">
             <div className="truncate text-[15px] font-semibold tracking-[-0.02em]">T-Lex</div>
             <div className="truncate whitespace-nowrap text-[11px] text-slate-500">連絡・事件・期日をひとつに</div>
