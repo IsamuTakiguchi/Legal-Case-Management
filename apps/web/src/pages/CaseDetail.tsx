@@ -4,7 +4,7 @@ import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useDraftRecord, useDraftGroup, useDraft, DraftHint } from '../lib/draft';
 import { RoomPicker } from '../lib/RoomPicker';
-import { HoldForm } from '../lib/HoldForm';
+import { HoldForm, fmtEventRange, type RescheduleTarget } from '../lib/HoldForm';
 import { fmtDateTime, fmtDate, fmtYen, toLocalInput, fromLocalInput } from '../lib/format';
 import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR_LABEL, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
@@ -43,7 +43,7 @@ interface CaseData {
   staff: { id: number; name: string } | null;
   notes: Note[];
   tasks: { id: number; title: string; status: string }[];
-  events: { id: number; title: string; startAt: string; kind: string }[];
+  events: { id: number; title: string; startAt: string; endAt: string; kind: string; location: string | null; status: string | null }[];
 }
 interface TimelineItem {
   at: string;
@@ -60,6 +60,9 @@ export default function CaseDetail() {
   const d = useQuery({ queryKey: ['case', id], queryFn: () => api.get<CaseData>(`/cases/${id}`) });
   // 期日の記録を保存した直後（または記録の「依頼者に期日連絡」）に開く連絡パネル
   const [noticeNoteId, setNoticeNoteId] = useState<number | null>(null);
+  // 「予定」から選んだ、日程変更（リスケ）する予定
+  const [rescheduling, setRescheduling] = useState<RescheduleTarget | null>(null);
+  const holds = useCaseHolds(id ? Number(id) : null);
   const types = useQuery({ queryKey: ['case-types'], queryFn: () => api.get<{ key: string; label: string }[]>('/case-types') });
   const c = d.data;
   const [form, setForm] = useState({ title: '', caseType: '', courtName: '', caseNumber: '', stage: '', policy: '', status: 'active', staffId: '', chatworkRoomId: '' });
@@ -127,7 +130,14 @@ export default function CaseDetail() {
                 }}
               />
             )}
-            <CaseHolds caseId={c.id} clientId={c.client?.id ?? null} clientName={c.client?.name ?? null} caseTitle={c.title} />
+            <CaseHolds
+              caseId={c.id}
+              clientId={c.client?.id ?? null}
+              clientName={c.client?.name ?? null}
+              caseTitle={c.title}
+              reschedule={rescheduling}
+              onRescheduleClose={() => setRescheduling(null)}
+            />
             <section className="card">
               <h2 className="mb-2 font-semibold">記録（電話・打合せ・メモ）</h2>
               <ul className="space-y-3">
@@ -219,13 +229,38 @@ export default function CaseDetail() {
                 </Link>
               </div>
               <ul className="space-y-1">
-                {c.events.slice(0, 8).map((e) => (
-                  <li key={e.id} className="flex gap-2">
-                    <span className="w-28 text-slate-500">{fmtDateTime(e.startAt)}</span>
-                    <span className="badge badge-gray">{EVENT_KIND_LABEL[e.kind as EventKind]}</span>
-                    <span>{e.title}</span>
-                  </li>
-                ))}
+                {c.events.slice(0, 8).map((e) => {
+                  const resch = holds.data?.find((h) => h.rescheduleOf?.eventId === e.id);
+                  const future = new Date(e.startAt).getTime() > Date.now();
+                  return (
+                    <li key={e.id} className="flex flex-wrap items-center gap-2">
+                      <span className="w-28 text-slate-500">{fmtDateTime(e.startAt)}</span>
+                      <span className="badge badge-gray">{EVENT_KIND_LABEL[e.kind as EventKind]}</span>
+                      <span className="min-w-0 flex-1">{e.title}</span>
+                      {resch ? (
+                        <span className="badge badge-blue" title="変更後の候補を仮押さえ中です">
+                          日程変更の調整中
+                        </span>
+                      ) : (
+                        future &&
+                        e.kind !== 'hold' && (
+                          <button
+                            className="btn btn-sm"
+                            onClick={() => {
+                              setRescheduling({ eventId: e.id, title: e.title, startAt: e.startAt, endAt: e.endAt, clientName: c.client?.name ?? null, caseTitle: c.title, location: e.location });
+                              // 入力欄は左側の「日程調整」にあるので、そこまで動かす
+                              setTimeout(() => document.getElementById('case-holds')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+                            }}
+                            title="この予定を別の日時に変更するため、候補をまとめて仮押さえします"
+                          >
+                            リスケ
+                          </button>
+                        )
+                      )}
+                    </li>
+                  );
+                })}
+                {c.events.length === 0 && <li className="text-slate-500">なし</li>}
               </ul>
             </section>
           </aside>
@@ -249,6 +284,8 @@ interface HoldSet {
   sessionId: number;
   kind: string;
   proposedAt: string | null;
+  /** 日程変更（リスケ）なら、元の予定 */
+  rescheduleOf: { eventId: number; title: string; startAt: string; endAt: string } | null;
   clientId: number | null;
   clientName: string | null;
   conversationId: number | null;
@@ -261,13 +298,33 @@ function fmtSlot(startAt: string, endAt: string): string {
   return `${fmtDate(startAt)} ${t(startAt)}〜${t(endAt)}`;
 }
 
+/** この事件の調整中の仮押さえ（「日程調整」欄と「予定」欄で共有する） */
+function useCaseHolds(caseId: number | null) {
+  return useQuery({ queryKey: ['case-holds', caseId ?? 0], queryFn: () => api.get<HoldSet[]>(`/cases/${caseId}/holds`), enabled: !!caseId });
+}
+
 /**
  * 調整中の仮押さえを事件ページから扱う。
  * 相手が選んだ候補で確定（ほかの候補は自動で削除）、まとめて取消、この事件への紐付け、新しい仮押さえの追加ができる。
  */
-function CaseHolds({ caseId, clientId, clientName, caseTitle }: { caseId: number; clientId: number | null; clientName: string | null; caseTitle: string }) {
+function CaseHolds({
+  caseId,
+  clientId,
+  clientName,
+  caseTitle,
+  reschedule,
+  onRescheduleClose,
+}: {
+  caseId: number;
+  clientId: number | null;
+  clientName: string | null;
+  caseTitle: string;
+  /** 「予定」欄の「リスケ」で選んだ、日程変更する予定 */
+  reschedule: RescheduleTarget | null;
+  onRescheduleClose: () => void;
+}) {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ['case-holds', caseId], queryFn: () => api.get<HoldSet[]>(`/cases/${caseId}/holds`) });
+  const q = useCaseHolds(caseId);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [adding, setAdding] = useState(false);
   const refresh = () => {
@@ -303,7 +360,7 @@ function CaseHolds({ caseId, clientId, clientName, caseTitle }: { caseId: number
   });
   const sets = q.data ?? [];
   return (
-    <section className="card space-y-2">
+    <section className="card space-y-2" id="case-holds">
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="font-semibold">日程調整（仮押さえ中）</h2>
         {sets.length > 0 && <span className="badge badge-orange">{sets.length} 件</span>}
@@ -317,6 +374,19 @@ function CaseHolds({ caseId, clientId, clientName, caseTitle }: { caseId: number
         </Link>
       </div>
       {msg && <div className={`fade-in rounded-md px-3 py-2 text-sm ${msg.kind === 'ok' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700'}`}>{msg.text}</div>}
+      {reschedule && (
+        <HoldForm
+          defaultDay={new Date(new Date(reschedule.startAt).getTime() + 9 * 3600_000).toISOString().slice(0, 10)}
+          reschedule={reschedule}
+          onClose={onRescheduleClose}
+          onSaved={(text) => {
+            onRescheduleClose();
+            refresh();
+            setMsg({ kind: 'ok', text });
+          }}
+          onError={(text) => setMsg({ kind: 'err', text })}
+        />
+      )}
       {adding && (
         <HoldForm
           defaultDay={new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10)}
@@ -336,7 +406,7 @@ function CaseHolds({ caseId, clientId, clientName, caseTitle }: { caseId: number
         {sets.map((s) => (
           <li key={s.sessionId} className="rounded border border-slate-200 p-2 text-sm">
             <div className="mb-1 flex flex-wrap items-center gap-2">
-              <span className="badge badge-gray">{s.kind}</span>
+              <span className={`badge ${s.rescheduleOf ? 'badge-blue' : 'badge-gray'}`}>{s.rescheduleOf ? '日程変更' : s.kind}</span>
               <span className="font-medium">{s.candidates[0]?.title?.replace(/\s*仮$/, '') ?? '日程調整'}</span>
               <span className="text-xs text-slate-500">候補 {s.candidates.length} 件</span>
               {s.proposedAt && <span className="text-xs text-slate-400">{fmtDate(s.proposedAt)} 提案</span>}
@@ -357,6 +427,11 @@ function CaseHolds({ caseId, clientId, clientName, caseTitle }: { caseId: number
                 全候補を取消
               </button>
             </div>
+            {s.rescheduleOf && (
+              <div className="mb-1 rounded bg-blue-50 px-2 py-1 text-xs text-blue-900">
+                いまの予定は <b>{fmtEventRange(s.rescheduleOf.startAt, s.rescheduleOf.endAt)}</b>。候補を確定すると、この予定は消えて新しい日時に置き換わります。
+              </div>
+            )}
             {!s.linkedToCase && (
               <div className="mb-1 flex flex-wrap items-center gap-2 rounded bg-orange-50 px-2 py-1 text-xs text-orange-800">
                 <span>会話から始めた日程調整です。紐付けると、確定した予定がこの事件の「予定」に入ります。</span>
@@ -375,7 +450,9 @@ function CaseHolds({ caseId, clientId, clientName, caseTitle }: { caseId: number
                       className="btn btn-sm btn-primary ml-auto"
                       disabled={confirmHold.isPending}
                       onClick={() => {
-                        if (window.confirm(`${fmtSlot(v.startAt, v.endAt)} で確定しますか？\nほかの候補（${Math.max(s.candidates.length - 1, 0)} 件）の仮押さえは削除されます。`)) confirmHold.mutate({ sessionId: s.sessionId, eventId: v.eventId! });
+                        const extra = s.rescheduleOf ? `\n元の予定（${fmtEventRange(s.rescheduleOf.startAt, s.rescheduleOf.endAt)}）も削除されます。` : '';
+                        if (window.confirm(`${fmtSlot(v.startAt, v.endAt)} で確定しますか？\nほかの候補（${Math.max(s.candidates.length - 1, 0)} 件）の仮押さえは削除されます。${extra}`))
+                          confirmHold.mutate({ sessionId: s.sessionId, eventId: v.eventId! });
                       }}
                     >
                       この候補で確定

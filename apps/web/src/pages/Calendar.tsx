@@ -5,7 +5,7 @@ import { EVENT_KINDS, EVENT_KIND_LABEL, type EventKind } from '@lcm/shared';
 import { api } from '../lib/api';
 import { useDraftGroup, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
-import { HoldForm } from '../lib/HoldForm';
+import { HoldForm, type RescheduleTarget } from '../lib/HoldForm';
 import { toLocalInput, fromLocalInput } from '../lib/format';
 
 interface Ev {
@@ -26,6 +26,8 @@ interface Ev {
   /** 日程調整中の仮押さえなら、そのセッション ID と候補数 */
   sessionId: number | null;
   sessionCandidates: number;
+  /** この予定の日程変更を調整中なら、そのセッション ID */
+  rescheduleSessionId: number | null;
 }
 
 interface EvInput {
@@ -111,6 +113,7 @@ export default function Calendar() {
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [editing, setEditing] = useState<Ev | 'new' | null>(null);
   const [holdOpen, setHoldOpen] = useState(false);
+  const [rescheduling, setRescheduling] = useState<RescheduleTarget | null>(null);
   const range = useMemo(() => rangeFor(view, anchor), [view, anchor]);
   const list = useQuery({
     queryKey: ['calendar', range.from, range.to],
@@ -234,6 +237,20 @@ export default function Calendar() {
         />
       )}
 
+      {rescheduling && (
+        <HoldForm
+          defaultDay={dayKey(rescheduling.startAt)}
+          reschedule={rescheduling}
+          onClose={() => setRescheduling(null)}
+          onSaved={(text) => {
+            setRescheduling(null);
+            invalidate();
+            setMsg({ kind: 'ok', text });
+          }}
+          onError={(text) => setMsg({ kind: 'err', text })}
+        />
+      )}
+
       {editing && (
         <EventForm
           initial={editing === 'new' ? null : editing}
@@ -302,6 +319,23 @@ export default function Calendar() {
                           </button>
                         </>
                       )}
+                      {!e.sessionId &&
+                        e.kind !== 'hold' &&
+                        (e.rescheduleSessionId ? (
+                          <span className="badge badge-orange self-center" title="変更後の候補を仮押さえ中です">
+                            日程変更の調整中
+                          </span>
+                        ) : (
+                          <button
+                            className="btn btn-sm"
+                            onClick={() =>
+                              setRescheduling({ eventId: e.id, title: e.title, startAt: e.startAt, endAt: e.endAt, clientName: e.clientName, caseTitle: e.caseTitle, location: e.location })
+                            }
+                            title="この予定を別の日時に変更するため、候補をまとめて仮押さえします"
+                          >
+                            リスケ
+                          </button>
+                        ))}
                       <button className="btn btn-sm" onClick={() => setEditing(e)}>
                         編集
                       </button>
@@ -364,6 +398,7 @@ function emptyEv(day: string): Ev {
     local: false,
     sessionId: null,
     sessionCandidates: 0,
+    rescheduleSessionId: null,
   };
 }
 
