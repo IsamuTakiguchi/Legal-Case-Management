@@ -93,3 +93,32 @@ describe('記録をタスクにする', () => {
     expect(r.tasks[0]!.title).toBe('保険会社に資料を請求する');
   });
 });
+
+describe('AI の案を直して登録する', () => {
+  it('画面で直した案をそのまま登録し、記録にも控える', async () => {
+    const { note, kase } = seedNote({ nextActions: [], gist: '相手方代理人と電話。和解案の提示あり' });
+    const r = await createTasksFromNote(note.id, {
+      mode: 'list',
+      tasks: [
+        { title: '依頼者に和解案を説明して意向を確認', due: '2027-08-06', status: 'open', note: '相手方は 300 万円を提示' },
+        { title: '相手方代理人へ回答', due: '2027-08-09', status: 'waiting_other', note: null },
+      ],
+    });
+    expect(r.tasks).toHaveLength(2);
+    const tasks = db().select().from(schema.tasks).where(eq(schema.tasks.caseId, kase.id)).all();
+    expect(tasks.map((t) => [t.title, t.status, (t.followUpAt ?? '').slice(0, 10)])).toEqual([
+      ['依頼者に和解案を説明して意向を確認', 'open', new Date('2027-08-06T09:00:00+09:00').toISOString().slice(0, 10)],
+      ['相手方代理人へ回答', 'waiting_other', new Date('2027-08-09T09:00:00+09:00').toISOString().slice(0, 10)],
+    ]);
+    // メモを空にした案は記録の要旨を使う
+    expect(tasks[1]!.note).toBe('相手方代理人と電話。和解案の提示あり');
+    // 記録にはタスク化済みとして残る
+    expect(r.note.nextActions.map((a) => a.title)).toEqual(['依頼者に和解案を説明して意向を確認', '相手方代理人へ回答']);
+    expect(r.note.nextActions.every((a) => a.taskId)).toBe(true);
+  });
+
+  it('題名が空の案だけなら登録しない', async () => {
+    const { note } = seedNote({ nextActions: [] });
+    await expect(createTasksFromNote(note.id, { mode: 'list', tasks: [{ title: '  ' }] })).rejects.toThrow(/登録するタスクがありません/);
+  });
+});

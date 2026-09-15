@@ -1014,7 +1014,16 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
   );
 }
 
-/** 記録をタスクにする。次のアクションから選ぶか、その場で題名を書いて 1 件作る */
+/** AI が出したタスクの案（画面で直してから登録する） */
+interface DraftTask {
+  title: string;
+  due: string;
+  status: string;
+  note: string;
+  use: boolean;
+}
+
+/** 記録をタスクにする。AI の案を直して登録するほか、次のアクションや題名からも作れる */
 function NoteTaskPanel({ n, onDone, onClose }: { n: Note; onDone: () => void; onClose: () => void }) {
   const qc = useQueryClient();
   const pending = n.nextActions.map((a, i) => ({ ...a, i })).filter((a) => !a.taskId);
@@ -1026,11 +1035,30 @@ function NoteTaskPanel({ n, onDone, onClose }: { n: Note; onDone: () => void; on
   const [status, setStatus] = useState<string>(n.waitingFor === 'client' ? 'waiting_client' : n.waitingFor && n.waitingFor !== 'none' ? 'waiting_other' : 'open');
   const [sync, setSync] = useState(false);
   const [msg, setMsg] = useState('');
+  // AI の案。null なら「まだ作っていない」
+  const [drafts, setDrafts] = useState<DraftTask[] | null>(null);
+  const [comment, setComment] = useState('');
+  const suggest = useMutation({
+    mutationFn: () => api.post<{ tasks: { title: string; due: string | null; status: string; note: string }[]; comment: string }>(`/case-notes/${n.id}/task-suggestions`),
+    onSuccess: (r) => {
+      setDrafts(r.tasks.map((t) => ({ title: t.title, due: t.due ?? '', status: t.status, note: t.note ?? '', use: true })));
+      setComment(r.comment ?? '');
+      setMsg(r.tasks.length ? '' : 'タスクにするものは見当たりませんでした。必要なら題名を書いて作れます');
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
+  const setDraft = (i: number, patch: Partial<DraftTask>) => setDrafts((prev) => (prev ?? []).map((d, j) => (j === i ? { ...d, ...patch } : d)));
+  // 開いたらまず案を出す（そのあと直して登録する）
+  useEffect(() => {
+    suggest.mutate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const create = useMutation({
     mutationFn: (body: Record<string, unknown>) => api.post<{ tasks: { id: number; title: string }[] }>(`/case-notes/${n.id}/tasks`, { due: due || null, status, syncToChatwork: sync, ...body }),
     onSuccess: (r) => {
       setMsg(`${r.tasks.map((t) => t.title).join('、')} をタスクにしました`);
       setTitle('');
+      setDrafts(null);
       qc.invalidateQueries({ queryKey: ['tasks'] });
       onDone();
       setTimeout(onClose, 1200);
@@ -1044,6 +1072,57 @@ function NoteTaskPanel({ n, onDone, onClose }: { n: Note; onDone: () => void; on
         <button className="btn btn-sm ml-auto" onClick={onClose}>
           閉じる
         </button>
+      </div>
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button className="btn btn-sm" onClick={() => suggest.mutate()} disabled={suggest.isPending}>
+            {suggest.isPending ? '整理中…' : drafts ? 'AI で作り直す' : 'AI で案を作る'}
+          </button>
+          <span className="text-xs text-slate-500">
+            {suggest.isPending ? '記録の内容からタスクの案を作っています…' : '記録の内容から作った案です。題名・期限・状態を直してから登録できます'}
+          </span>
+        </div>
+        {drafts && drafts.length > 0 && (
+          <div className="space-y-2 rounded border border-slate-200 bg-white p-2">
+            {drafts.map((dft, i) => (
+              <div key={i} className={`space-y-1 rounded border p-2 ${dft.use ? 'border-blue-200' : 'border-slate-100 opacity-60'}`}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input type="checkbox" checked={dft.use} onChange={(e) => setDraft(i, { use: e.target.checked })} aria-label="このタスクを登録する" />
+                  <input className="input min-w-0 flex-1" value={dft.title} onChange={(e) => setDraft(i, { title: e.target.value })} placeholder="タスク名" />
+                </div>
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <label className="flex items-center gap-1">
+                    期限 <input type="date" className="input w-auto py-0.5" value={dft.due} onChange={(e) => setDraft(i, { due: e.target.value })} />
+                  </label>
+                  <select className="input w-auto py-0.5" value={dft.status} onChange={(e) => setDraft(i, { status: e.target.value })} aria-label="状態">
+                    {(['open', 'waiting_client', 'waiting_other'] as const).map((st) => (
+                      <option key={st} value={st}>
+                        {TASK_STATUS_LABEL[st]}
+                      </option>
+                    ))}
+                  </select>
+                  <button className="text-slate-400 hover:text-red-600" onClick={() => setDrafts((prev) => (prev ?? []).filter((_, j) => j !== i))}>
+                    この案を消す
+                  </button>
+                </div>
+                <input className="input text-xs" value={dft.note} onChange={(e) => setDraft(i, { note: e.target.value })} placeholder="メモ（背景・決まったこと）" />
+              </div>
+            ))}
+            {comment && <div className="text-xs text-slate-500">{comment}</div>}
+            <button
+              className="btn btn-primary btn-sm"
+              disabled={create.isPending || drafts.every((dft) => !dft.use || !dft.title.trim())}
+              onClick={() =>
+                create.mutate({
+                  mode: 'list',
+                  tasks: drafts.filter((dft) => dft.use && dft.title.trim()).map((dft) => ({ title: dft.title, due: dft.due || null, status: dft.status, note: dft.note || null })),
+                })
+              }
+            >
+              この内容でタスクにする
+            </button>
+          </div>
+        )}
       </div>
       {pending.length > 0 && (
         <div className="space-y-1">

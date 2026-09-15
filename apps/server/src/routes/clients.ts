@@ -9,7 +9,7 @@ import { clientInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputS
 import { searchClients } from '../services/identity.js';
 import { storage, FolderNotFoundError } from '../integrations/storage.js';
 import { clientFolder } from '../services/attachments.js';
-import { listCaseTypes, upsertCaseType, createCase, updateCase, listCases, getCase, caseTimeline, addCaseNote, updateCaseNote, deleteCaseNote, generateCaseSummary, structureNote, createTasksFromNote } from '../services/cases.js';
+import { listCaseTypes, upsertCaseType, createCase, updateCase, listCases, getCase, caseTimeline, addCaseNote, updateCaseNote, deleteCaseNote, generateCaseSummary, structureNote, createTasksFromNote, suggestNoteTasks } from '../services/cases.js';
 import * as creditors from '../services/creditors.js';
 import { onedriveCandidates, chatworkCandidates, applyImport, deleteClient } from '../services/clientImport.js';
 import { findDuplicateClients, mergeClients } from '../services/clientMerge.js';
@@ -301,11 +301,17 @@ clientRoutes.post('/cases/:id/notes', async (c) => {
   return c.json(row);
 });
 
-/** 保存済みの記録をタスクにする（次のアクションから、または題名を書いて 1 件） */
+/** 記録の内容から、登録するタスクの案を作る（画面で直してから登録する） */
+clientRoutes.post('/case-notes/:id/task-suggestions', async (c) => c.json(await suggestNoteTasks(Number(c.req.param('id')))));
+
+/** 保存済みの記録をタスクにする（AI の案・次のアクション・題名から） */
 clientRoutes.post('/case-notes/:id/tasks', async (c) => {
   const body = z
     .object({
-      mode: z.enum(['each', 'single', 'custom']).default('custom'),
+      mode: z.enum(['each', 'single', 'custom', 'list']).default('custom'),
+      tasks: z
+        .array(z.object({ title: z.string(), due: z.string().nullable().optional(), status: z.enum(TASK_STATUSES).optional(), note: z.string().nullable().optional() }))
+        .optional(),
       indexes: z.array(z.number().int().nonnegative()).optional(),
       title: z.string().nullable().optional(),
       due: z.string().nullable().optional(),
