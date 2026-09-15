@@ -20,6 +20,7 @@ import { listCaseHolds, attachHoldSetToCase } from '../services/court.js';
 import { joinPath, getItemByPath } from '../integrations/onedrive.js';
 
 import { listLineFriends, syncLineFollowers, linkLineFriendToClient, assertLineFriendFree } from '../services/lineFriends.js';
+import { repairLineGroupConversations } from '../services/lineGroups.js';
 import { classifyClientMessages, classifyMessageCase } from '../services/caseClassify.js';
 
 export const clientRoutes = new Hono();
@@ -77,6 +78,8 @@ clientRoutes.get('/line/friends', (c) => c.json(listLineFriends({ unlinkedOnly: 
 
 /** 友だち一覧 API から取り込む（認証済／プレミアムアカウントのみ） */
 clientRoutes.post('/line/friends/sync', async (c) => c.json(await syncLineFollowers()));
+/** グループの発言が個人トークに混ざっていたものを、グループの会話へ分け直す */
+clientRoutes.post('/line/repair-groups', async (c) => c.json(await repairLineGroupConversations()));
 
 /** 友だちを依頼者に紐付ける */
 clientRoutes.post('/line/friends/:userId/link', async (c) => {

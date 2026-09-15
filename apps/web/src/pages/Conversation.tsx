@@ -44,6 +44,10 @@ interface Conv {
   archived: boolean;
   unread?: number;
   staff?: boolean;
+  /** LINE のグループ・複数人トーク（送信するとグループ全員に届く） */
+  lineGroup?: boolean;
+  /** LINE でブロック・友だち解除されていて、送っても届かない相手 */
+  lineBlocked?: boolean;
   client: { id: number; name: string; onedriveFolderPath: string | null; preferredChannel: string | null } | null;
   contact?: { id: number; name: string; role: string; roleLabel: string; organization: string | null; caseId: number; caseTitle: string } | null;
   cases: { id: number; title: string; summary: string | null }[];
@@ -263,6 +267,11 @@ export default function Conversation() {
             ← 受信箱
           </Link>
           <span className={channelBadge(c.channel)}>{channelLabel(c.channel)}</span>
+          {c.lineGroup && (
+            <span className="badge badge-gray" title="このやり取りは LINE のグループです。送信するとグループ全員に届きます">
+              グループ
+            </span>
+          )}
           <h1 className="text-lg font-bold">{name}</h1>
           {c.contact && (
             <span className="badge badge-orange" title={c.contact.organization ?? undefined}>
@@ -483,6 +492,16 @@ export default function Conversation() {
               {draft.isPending ? '生成中…' : '自分らしい下書きを作成'}
             </button>
           </div>
+          {c.channel === 'line' && (
+            <div className="text-xs text-slate-500">
+              送り先: {c.lineGroup ? 'この LINE グループ（参加者全員に届きます）' : `${name}（1 対 1 のトーク。グループには届きません）`}
+            </div>
+          )}
+          {c.lineBlocked && (
+            <div className="rounded-md bg-orange-50 px-3 py-2 text-sm text-orange-800">
+              この相手は LINE公式アカウントをブロック（または友だち解除・退会）しています。LINE で送っても届きません。Gmail や電話など別の方法で連絡してください。
+            </div>
+          )}
           <textarea className="input min-h-40 font-mono text-sm" value={text} onChange={(e) => setText(e.target.value)} placeholder="返信本文（AI 下書きを編集して送信）" />
           <DraftHint handle={textDraft} />
           {(selectedAtt.length > 0 || driveFiles.length > 0) && (
@@ -528,7 +547,7 @@ export default function Conversation() {
             {createWaiting && <WaitDeadlineSelect value={waitUntil} onChange={setWaitUntil} />}
             <div className="ml-auto flex items-center gap-1">
               <button className="btn btn-primary" onClick={() => send.mutate(undefined)} disabled={!text.trim() || send.isPending}>
-                {send.isPending ? '送信中…' : `${channelLabel(c.channel)} で送信`}
+                {send.isPending ? '送信中…' : c.lineGroup ? 'LINE グループに送信' : `${channelLabel(c.channel)} で送信`}
               </button>
               <button className={`btn ${showTimer ? 'text-[var(--accent)]' : ''}`} onClick={() => setShowTimer(!showTimer)} disabled={send.isPending} title="時刻を指定して、その時刻に自動で送ります" aria-expanded={showTimer}>
                 <Icon name="clock" className="h-4 w-4" />

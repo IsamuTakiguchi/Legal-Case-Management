@@ -8,6 +8,8 @@ import { learnFromSent } from './style.js';
 import { ingestMessage } from './inbox.js';
 import { getSetting, getSettingInt } from './settings.js';
 import { assertLineQuota, recordLinePush } from './lineQuota.js';
+import { assertLineDeliverable } from './lineFriends.js';
+import { isLineGroupThread } from '../channels/line.js';
 import { createTask } from './tasks.js';
 import type { Channel, SendMessageInput } from '@lcm/shared';
 import type { OutboundFile } from '../channels/types.js';
@@ -90,7 +92,11 @@ export async function sendToConversation(conversationId: number, input: SendMess
     text = `${quoteTarget.body.split('\n').map((l) => `> ${l}`).join('\n')}\n\n${text}`;
   }
 
-  if (channel === 'line') assertLineQuota();
+  if (channel === 'line') {
+    assertLineQuota();
+    // ブロック・友だち解除の相手には LINE が届かない（API は成功を返す）ので、送る前に確かめる
+    await assertLineDeliverable(conv.externalThreadId);
+  }
 
   const reply = (() => {
     const lastIn = d.select().from(schema.messages).where(eq(schema.messages.conversationId, conversationId)).orderBy(schema.messages.sentAt).all().at(-1);
@@ -124,8 +130,13 @@ export async function sendToConversation(conversationId: number, input: SendMess
       subject: conv.subject,
       body: channel === 'chatwork' ? stripChatworkMarkup(text) : text,
       attachments: [],
-      raw: { replyToMessageId: replyTarget?.id ?? null, quoteMessageId: quoteTarget?.id ?? null },
-      identity: { channel, email: conv.counterpartAddress, lineUserId: channel === 'line' ? conv.externalThreadId : null, chatworkRoomId: channel === 'chatwork' ? Number(conv.externalThreadId) : null },
+      raw: { replyToMessageId: replyTarget?.id ?? null, quoteMessageId: quoteTarget?.id ?? null, providerRequestId: result.requestId ?? null },
+      identity: {
+        channel,
+        email: conv.counterpartAddress,
+        lineUserId: channel === 'line' && !isLineGroupThread(conv.externalThreadId) ? conv.externalThreadId : null,
+        chatworkRoomId: channel === 'chatwork' ? Number(conv.externalThreadId) : null,
+      },
     },
     { processAttachments: false },
   );
@@ -157,7 +168,7 @@ export async function sendToConversation(conversationId: number, input: SendMess
       syncToChatwork: false,
     });
   }
-  logger.info({ conversationId, channel, files: direct.length, links: links.length }, '送信しました');
+  logger.info({ conversationId, channel, files: direct.length, links: links.length, requestId: result.requestId ?? null }, '送信しました');
   return { messageId: message.id, note: result.note, links, manualFiles };
 }
 

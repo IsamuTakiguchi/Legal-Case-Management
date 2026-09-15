@@ -2,6 +2,7 @@ import { and, eq, desc, sql, inArray, isNull, isNotNull } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import type { InboundMessage } from '../channels/types.js';
 import { findClientByIdentity, raiseUnlinkedContact, cleanDisplayName } from './identity.js';
+import { isLineGroupThread } from '../channels/line.js';
 import { processAttachment } from './attachments.js';
 import { logger } from '../logger.js';
 import { onInboundForTasks } from './tasks.js';
@@ -26,7 +27,9 @@ export async function ingestMessage(
     .from(schema.conversations)
     .where(and(eq(schema.conversations.channel, m.channel), eq(schema.conversations.externalThreadId, m.externalThreadId)))
     .get();
-  const counterpartName = cleanDisplayName(m.direction === 'in' ? (m.senderName ?? m.identity.displayName ?? null) : (m.identity.displayName ?? null));
+  const senderName = cleanDisplayName(m.direction === 'in' ? (m.senderName ?? m.identity.displayName ?? null) : (m.identity.displayName ?? null));
+  // 会話の名前は、グループ名などスレッド自体の名前があればそれを使う（発言者名にしない）
+  const counterpartName = cleanDisplayName(m.threadName) ?? senderName;
   const unlinkedInfo = { body: m.body, sentAt: m.sentAt, subject: m.subject ?? null };
   const counterpartAddress = m.identity.email ?? m.identity.lineUserId ?? (m.identity.chatworkAccountId ? String(m.identity.chatworkAccountId) : null);
   // Chatwork: 事務局メンバーからの伝言か／事件専用ルームか
@@ -284,6 +287,8 @@ export function listConversations(filter: {
       contact: r.contactId ? (contacts.get(r.contactId) ?? null) : null,
       ...r,
       staff: !!(r.meta as { staff?: boolean }).staff,
+      // LINE のグループ・複数人トーク（送り先がグループになる会話）
+      lineGroup: r.channel === 'line' && isLineGroupThread(r.externalThreadId),
       client: r.clientId ? (byId.get(r.clientId) ?? null) : null,
       lastMessage: last ? { body: last.body.slice(0, 600), truncated: last.body.length > 600, direction: last.direction, sentAt: last.sentAt, senderName: last.senderName } : null,
     };
@@ -323,9 +328,16 @@ export function getConversation(id: number) {
   const msgCaseIds = [...new Set(messages.map((m) => m.caseId).filter((x): x is number => !!x))];
   const msgClients = msgClientIds.length ? d.select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients).where(inArray(schema.clients.id, msgClientIds)).all() : [];
   const msgCases = msgCaseIds.length ? d.select({ id: schema.cases.id, title: schema.cases.title }).from(schema.cases).where(inArray(schema.cases.id, msgCaseIds)).all() : [];
+  // LINE でブロック・友だち解除されている相手は、送っても届かない（会話画面で先に知らせる）
+  const lineBlocked =
+    conv.channel === 'line' && conv.externalThreadId.startsWith('U')
+      ? !!d.select().from(schema.lineFriends).where(eq(schema.lineFriends.userId, conv.externalThreadId)).get()?.unfollowedAt
+      : false;
   return {
     ...conv,
     staff: !!(conv.meta as { staff?: boolean }).staff,
+    lineGroup: conv.channel === 'line' && isLineGroupThread(conv.externalThreadId),
+    lineBlocked,
     client: client ?? null,
     contact,
     cases,

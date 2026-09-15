@@ -286,6 +286,7 @@ export default function Settings() {
                   {s.line.lastError && <div className="text-red-600">直近のエラー: {s.line.lastError}</div>}
                 </div>
               )}
+              {s.line.configured && <LineGroupRepair />}
             </Conn>
             <Conn ok={s.chatwork.configured} label="Chatwork" detail={s.chatwork.configured ? (s.chatwork.webhookTokenSet ? 'API・Webhook 設定済' : 'Webhook トークン未設定（ポーリングのみ）') : '.env に CHATWORK_API_TOKEN を設定'}>
               <div className="text-xs text-slate-500">Webhook URL: {s.chatwork.webhookUrl}</div>
@@ -920,5 +921,26 @@ function StaffSection() {
       {accountsQ.data?.partial && !accountsQ.data.error && <div className="mt-1 text-xs text-slate-500">ルームが多いため、直近に動きのあったルームのメンバーだけを候補にしています。見つからない人は「アカウント ID を直接入力」で登録できます（Chatwork のプロフィール画面で確認できます）</div>}
       {msg && <div className="fade-in mt-2 text-xs text-red-600">{msg}</div>}
     </section>
+  );
+}
+
+/** グループの発言が個人トークに混ざっていたときの分け直し（古い取り込み分の後始末） */
+function LineGroupRepair() {
+  const [msg, setMsg] = useState('');
+  const run = useMutation({
+    mutationFn: () => api.post<{ moved: number; created: number }>('/line/repair-groups'),
+    onSuccess: (r) =>
+      setMsg(r.moved ? `${r.moved} 件の発言をグループの会話に移しました（新しく作ったグループ: ${r.created} 件）` : '分け直しが必要な発言はありませんでした'),
+    onError: (e) => setMsg((e as Error).message),
+  });
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+      <button className="btn btn-sm" onClick={() => run.mutate()} disabled={run.isPending}>
+        {run.isPending ? '確認中…' : 'グループの発言を分け直す'}
+      </button>
+      <span className="text-slate-500">
+        {msg || '以前の取り込みでグループの発言が個人トークに混ざっている場合に、グループの会話へ移します'}
+      </span>
+    </div>
   );
 }
