@@ -147,7 +147,14 @@ export function caseTimeline(id: number, limit = 200) {
   const pushMsg = (m: typeof schema.messages.$inferSelect, tag = '') => {
     if (seen.has(m.id)) return;
     seen.add(m.id);
-    items.push({ at: m.sentAt, type: `message:${m.direction}`, title: `${m.direction === 'in' ? '受信' : '送信'}（${m.channel}）${m.senderName ? ` ${m.senderName}` : ''}${tag}`, body: m.body.slice(0, 200), ref: { conversationId: m.conversationId, messageId: m.id, caseId: m.caseId ?? null, unassignedCase: multiCase && !m.caseId } });
+    // 本文は長くなりがちなので一覧では 2000 字まで。超える分は「全文を表示」で /messages/:id/body から読む
+    items.push({
+      at: m.sentAt,
+      type: `message:${m.direction}`,
+      title: `${m.direction === 'in' ? '受信' : '送信'}（${m.channel}）${m.senderName ? ` ${m.senderName}` : ''}${tag}`,
+      body: m.body.slice(0, 2000),
+      ref: { conversationId: m.conversationId, messageId: m.id, caseId: m.caseId ?? null, unassignedCase: multiCase && !m.caseId, truncated: m.body.length > 2000 },
+    });
   };
   if (convIds.length) {
     const msgs = db().select().from(schema.messages).where(inArray(schema.messages.conversationId, convIds)).orderBy(desc(schema.messages.sentAt)).limit(limit * 2).all();

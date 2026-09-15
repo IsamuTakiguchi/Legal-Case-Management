@@ -45,6 +45,13 @@ inboxRoutes.put('/messages/:id/direction', async (c) => {
   return r.ok ? c.json(r) : c.json({ error: 'not found' }, 404);
 });
 
+/** メッセージの本文（タイムラインの「全文を表示」用。一覧では長文を切って返しているため） */
+inboxRoutes.get('/messages/:id/body', (c) => {
+  const m = db().select().from(schema.messages).where(eq(schema.messages.id, Number(c.req.param('id')))).get();
+  if (!m) return c.json({ error: 'not found' }, 404);
+  return c.json({ id: m.id, body: m.body, conversationId: m.conversationId });
+});
+
 inboxRoutes.put('/messages/:id/link', async (c) => {
   const body = z.object({ clientId: z.number().int().nullable().optional(), caseId: z.number().int().nullable().optional() }).parse(await c.req.json());
   return c.json(linkMessage(Number(c.req.param('id')), body));

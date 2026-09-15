@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
+import { LongText } from '../lib/LongText';
 import { channelBadge, channelLabel, fmtRelative } from '../lib/format';
 
 interface ConversationListItem {
@@ -214,29 +215,11 @@ export default function Inbox() {
 
 /** 最新メッセージの本文。短ければ全文、長文（目安 300 字 or 8 行超）は 4 行で折りたたみ「続きを表示」で開く */
 function MessagePreview({ body, truncated, mine, sender }: { body: string; truncated: boolean; mine: boolean; sender?: string | null }) {
-  const [open, setOpen] = useState(false);
-  const long = body.length > 300 || body.split('\n').length > 8;
   return (
-    <div className="text-sm text-slate-600">
-      <div className={`whitespace-pre-wrap break-words ${long && !open ? 'line-clamp-4' : ''}`}>
-        {mine && <span className="text-slate-400">自分: </span>}
-        {!mine && sender && <span className="text-slate-400">{sender}: </span>}
-        {body}
-        {open && truncated && <span className="text-slate-400">…（続きは会話を開いて確認）</span>}
-      </div>
-      {long && (
-        <button
-          type="button"
-          className="mt-0.5 text-xs text-blue-700 hover:underline"
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            setOpen(!open);
-          }}
-        >
-          {open ? '折りたたむ' : '続きを表示'}
-        </button>
-      )}
-    </div>
+    <LongText text={body} className="text-sm text-slate-600" stopPropagation footer={truncated ? <div className="text-xs text-slate-400">…（続きは会話を開いて確認）</div> : null}>
+      {mine && <span className="text-slate-400">自分: </span>}
+      {!mine && sender && <span className="text-slate-400">{sender}: </span>}
+      {body}
+    </LongText>
   );
 }

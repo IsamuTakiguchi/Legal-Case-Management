@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import { useDraftRecord, useDraftGroup, useDraft, DraftHint } from '../lib/draft';
 import { RoomPicker } from '../lib/RoomPicker';
 import { HoldForm, fmtEventRange, type RescheduleTarget } from '../lib/HoldForm';
+import { LongText } from '../lib/LongText';
 import { fmtDateTime, fmtDate, fmtYen, toLocalInput, fromLocalInput } from '../lib/format';
 import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR_LABEL, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
@@ -1094,6 +1095,33 @@ function NoteView({ n, onDeleted, onNotice }: { n: Note; onDeleted: () => void; 
   );
 }
 
+/**
+ * タイムラインの本文。長いものは途中で省略し「続きを表示」で全文を出す。
+ * メッセージは一覧では 2000 字までしか来ないので、そのときだけ全文を読みに行く。
+ */
+function TimelineBody({ body, messageId, truncated }: { body: string; messageId: number | null; truncated: boolean }) {
+  const [full, setFull] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const loadFull = () => {
+    if (!truncated || !messageId || full || loading) return;
+    setLoading(true);
+    api
+      .get<{ body: string }>(`/messages/${messageId}/body`)
+      .then((r) => setFull(r.body))
+      .catch(() => setFull(null))
+      .finally(() => setLoading(false));
+  };
+  const text = full ?? body;
+  return (
+    <LongText
+      text={text}
+      className="text-slate-600"
+      onExpand={loadFull}
+      footer={truncated && !full ? <div className="text-xs text-slate-400">{loading ? '全文を読み込み中…' : 'この先はまだ読み込んでいません'}</div> : null}
+    />
+  );
+}
+
 function Timeline({ caseId }: { caseId: number }) {
   const t = useQuery({ queryKey: ['timeline', caseId], queryFn: () => api.get<TimelineItem[]>(`/cases/${caseId}/timeline`) });
   return (
@@ -1111,7 +1139,7 @@ function Timeline({ caseId }: { caseId: number }) {
               ) : (
                 <div className="font-medium">{i.title}</div>
               )}
-              {i.body && <div className="line-clamp-2 text-slate-600">{i.body}</div>}
+              {i.body && <TimelineBody body={i.body} messageId={typeof i.ref?.messageId === 'number' ? i.ref.messageId : null} truncated={i.ref?.truncated === true} />}
             </div>
           </li>
         ))}

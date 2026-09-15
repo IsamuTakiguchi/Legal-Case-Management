@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
+import { LongText } from '../lib/LongText';
 import { useDraft, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
 import { fmtDate, fmtRelative } from '../lib/format';
@@ -383,16 +384,5 @@ function TaskLinks({ task, onSave }: { task: Task; onSave: (patch: { clientId: n
 
 /** タスクのメモ。短ければ全文、長文（目安 300 字 or 8 行超）は折りたたんで「続きを表示」で開く */
 function TaskNote({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
-  const long = text.length > 300 || text.split('\n').length > 8;
-  return (
-    <div className="text-xs text-slate-500">
-      <div className={`whitespace-pre-wrap ${long && !open ? 'line-clamp-4' : ''}`}>{text}</div>
-      {long && (
-        <button type="button" className="mt-0.5 text-blue-700 hover:underline" onClick={() => setOpen(!open)}>
-          {open ? '折りたたむ' : '続きを表示'}
-        </button>
-      )}
-    </div>
-  );
+  return <LongText text={text} className="text-xs text-slate-500" buttonClassName="" />;
 }
