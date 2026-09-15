@@ -46,6 +46,13 @@ interface CaseData {
   tasks: { id: number; title: string; status: string }[];
   events: { id: number; title: string; startAt: string; endAt: string; kind: string; location: string | null; status: string | null }[];
 }
+/** 次のアクションの期限。YYYY-MM-DD でも ISO でも「9/20(日)」の形にする */
+function fmtDue(due?: string | null): string {
+  if (!due) return '';
+  const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(due) ? `${due}T00:00:00+09:00` : due);
+  return Number.isNaN(d.getTime()) ? due : fmtDate(d.toISOString());
+}
+
 interface TimelineItem {
   at: string;
   type: string;
@@ -1007,10 +1014,113 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
   );
 }
 
+/** 記録をタスクにする。次のアクションから選ぶか、その場で題名を書いて 1 件作る */
+function NoteTaskPanel({ n, onDone, onClose }: { n: Note; onDone: () => void; onClose: () => void }) {
+  const qc = useQueryClient();
+  const pending = n.nextActions.map((a, i) => ({ ...a, i })).filter((a) => !a.taskId);
+  const headline = (n.gist ?? n.rawText ?? '').split('\n').map((l) => l.trim()).find(Boolean) ?? '';
+  const [pick, setPick] = useState<Set<number>>(new Set(pending.map((a) => a.i)));
+  const [mode, setMode] = useState<'each' | 'single'>('single');
+  const [title, setTitle] = useState(pending.length ? '' : headline.slice(0, 80));
+  const [due, setDue] = useState(pending.find((a) => a.due)?.due?.slice(0, 10) ?? '');
+  const [status, setStatus] = useState<string>(n.waitingFor === 'client' ? 'waiting_client' : n.waitingFor && n.waitingFor !== 'none' ? 'waiting_other' : 'open');
+  const [sync, setSync] = useState(false);
+  const [msg, setMsg] = useState('');
+  const create = useMutation({
+    mutationFn: (body: Record<string, unknown>) => api.post<{ tasks: { id: number; title: string }[] }>(`/case-notes/${n.id}/tasks`, { due: due || null, status, syncToChatwork: sync, ...body }),
+    onSuccess: (r) => {
+      setMsg(`${r.tasks.map((t) => t.title).join('、')} をタスクにしました`);
+      setTitle('');
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+      onDone();
+      setTimeout(onClose, 1200);
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
+  return (
+    <div className="mt-2 space-y-2 rounded border border-blue-200 bg-blue-50/40 p-2 text-sm">
+      <div className="flex items-center gap-2">
+        <span className="font-semibold">この記録をタスクにする</span>
+        <button className="btn btn-sm ml-auto" onClick={onClose}>
+          閉じる
+        </button>
+      </div>
+      {pending.length > 0 && (
+        <div className="space-y-1">
+          <div className="text-xs text-slate-500">次のアクションから選ぶ</div>
+          <ul className="space-y-0.5">
+            {pending.map((a) => (
+              <li key={a.i} className="flex items-start gap-1.5">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={pick.has(a.i)}
+                  onChange={(e) =>
+                    setPick((prev) => {
+                      const next = new Set(prev);
+                      if (e.target.checked) next.add(a.i);
+                      else next.delete(a.i);
+                      return next;
+                    })
+                  }
+                  aria-label={`${a.title} をタスクにする`}
+                />
+                <span>
+                  {a.title}
+                  {a.due ? <span className="text-slate-500">（期限 {fmtDue(a.due)}）</span> : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <div className="flex flex-wrap items-center gap-2">
+            <select className="input w-auto text-sm" value={mode} onChange={(e) => setMode(e.target.value as typeof mode)}>
+              <option value="single">選んだ分を 1 つのタスクにまとめる</option>
+              <option value="each">選んだアクションごとにタスクを作る</option>
+            </select>
+            <button className="btn btn-primary btn-sm" disabled={pick.size === 0 || create.isPending} onClick={() => create.mutate({ mode, indexes: [...pick] })}>
+              選んだ分をタスクにする
+            </button>
+          </div>
+        </div>
+      )}
+      <div className="space-y-1">
+        <div className="text-xs text-slate-500">{pending.length > 0 ? 'または、題名を書いてタスクにする' : '題名を書いてタスクにする'}</div>
+        <div className="flex flex-wrap items-center gap-2">
+          <input className="input min-w-0 flex-1" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={headline.slice(0, 40) || 'タスク名'} />
+          <button className="btn btn-primary btn-sm" disabled={create.isPending} onClick={() => create.mutate({ mode: 'custom', title: title.trim() || headline })}>
+            この題名でタスクにする
+          </button>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-3 text-xs">
+        <label className="flex items-center gap-1">
+          期限 <input type="date" className="input w-auto py-0.5" value={due} onChange={(e) => setDue(e.target.value)} />
+        </label>
+        <label className="flex items-center gap-1">
+          状態
+          <select className="input w-auto py-0.5" value={status} onChange={(e) => setStatus(e.target.value)}>
+            {(['open', 'waiting_client', 'waiting_other'] as const).map((st) => (
+              <option key={st} value={st}>
+                {TASK_STATUS_LABEL[st]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-1">
+          <input type="checkbox" checked={sync} onChange={(e) => setSync(e.target.checked)} /> 担当事務局の Chatwork タスクにも登録
+        </label>
+      </div>
+      {msg && <div className="fade-in text-xs text-slate-700">{msg}</div>}
+      <div className="text-xs text-slate-400">作ったタスクは、この事件・依頼者に紐付きます。記録には「タスク化済」として残ります。</div>
+    </div>
+  );
+}
+
 function NoteView({ n, onDeleted, onNotice }: { n: Note; onDeleted: () => void; onNotice?: () => void }) {
   const del = useMutation({ mutationFn: () => api.del(`/case-notes/${n.id}`), onSuccess: onDeleted });
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [taskOpen, setTaskOpen] = useState(false);
   if (editing) {
     return (
       <li className="rounded border border-blue-200 bg-blue-50/30 p-3 text-sm">
@@ -1038,7 +1148,14 @@ function NoteView({ n, onDeleted, onNotice }: { n: Note; onDeleted: () => void; 
             依頼者に期日連絡
           </button>
         )}
-        <button className={`${onNotice ? '' : 'ml-auto '}text-xs text-blue-700 hover:underline`} onClick={() => setEditing(true)}>
+        <button
+          className={`${onNotice ? '' : 'ml-auto '}text-xs text-blue-700 hover:underline`}
+          onClick={() => setTaskOpen(!taskOpen)}
+          title="この記録をタスクにします（次のアクションからでも、題名を書いてでも作れます）"
+        >
+          タスクにする
+        </button>
+        <button className="text-xs text-blue-700 hover:underline" onClick={() => setEditing(true)}>
           編集
         </button>
         <button className="text-xs text-slate-400 hover:text-red-600" onClick={() => confirm('削除しますか？') && del.mutate()}>
@@ -1079,12 +1196,13 @@ function NoteView({ n, onDeleted, onNotice }: { n: Note; onDeleted: () => void; 
           {n.nextActions.map((a, i) => (
             <li key={i}>
               {a.title}
-              {a.due ? `（${a.due}）` : ''}
+              {a.due ? `（${fmtDue(a.due)}）` : ''}
               {a.taskId ? <span className="badge badge-blue ml-1">タスク化済</span> : null}
             </li>
           ))}
         </ul>
       )}
+      {taskOpen && <NoteTaskPanel n={n} onDone={onDeleted} onClose={() => setTaskOpen(false)} />}
       {n.gist && n.rawText && (
         <button className="mt-1 text-xs text-slate-400 hover:underline" onClick={() => setOpen(!open)}>
           {open ? '元メモを隠す' : '元メモを表示'}

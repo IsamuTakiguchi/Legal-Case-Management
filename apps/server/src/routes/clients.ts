@@ -5,11 +5,11 @@ import { isConfigured } from '../config.js';
 import { z } from 'zod';
 import { eq, desc } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { clientInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputSchema, creditorEventInputSchema, CREDITOR_IMPORT_FIELDS, caseContactInputSchema } from '@lcm/shared';
+import { clientInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputSchema, creditorEventInputSchema, CREDITOR_IMPORT_FIELDS, caseContactInputSchema, TASK_STATUSES } from '@lcm/shared';
 import { searchClients } from '../services/identity.js';
 import { storage, FolderNotFoundError } from '../integrations/storage.js';
 import { clientFolder } from '../services/attachments.js';
-import { listCaseTypes, upsertCaseType, createCase, updateCase, listCases, getCase, caseTimeline, addCaseNote, updateCaseNote, deleteCaseNote, generateCaseSummary, structureNote } from '../services/cases.js';
+import { listCaseTypes, upsertCaseType, createCase, updateCase, listCases, getCase, caseTimeline, addCaseNote, updateCaseNote, deleteCaseNote, generateCaseSummary, structureNote, createTasksFromNote } from '../services/cases.js';
 import * as creditors from '../services/creditors.js';
 import { onedriveCandidates, chatworkCandidates, applyImport, deleteClient } from '../services/clientImport.js';
 import { findDuplicateClients, mergeClients } from '../services/clientMerge.js';
@@ -299,6 +299,22 @@ clientRoutes.post('/cases/:id/notes', async (c) => {
   const taskIndexes = Array.isArray(raw.taskIndexes) ? (raw.taskIndexes as unknown[]).map(Number).filter((n) => Number.isInteger(n) && n >= 0) : undefined;
   const row = await addCaseNote(input, { structure: raw.structure === true, createTasks: mode, taskIndexes });
   return c.json(row);
+});
+
+/** 保存済みの記録をタスクにする（次のアクションから、または題名を書いて 1 件） */
+clientRoutes.post('/case-notes/:id/tasks', async (c) => {
+  const body = z
+    .object({
+      mode: z.enum(['each', 'single', 'custom']).default('custom'),
+      indexes: z.array(z.number().int().nonnegative()).optional(),
+      title: z.string().nullable().optional(),
+      due: z.string().nullable().optional(),
+      status: z.enum(TASK_STATUSES).optional(),
+      note: z.string().nullable().optional(),
+      syncToChatwork: z.boolean().optional(),
+    })
+    .parse(await c.req.json());
+  return c.json(await createTasksFromNote(Number(c.req.param('id')), body));
 });
 
 /** 期日の記録から、依頼者への期日連絡の下書きを用意する（送信は /conversations/:id/send） */
