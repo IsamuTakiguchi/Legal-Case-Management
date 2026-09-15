@@ -83,3 +83,68 @@ describe('事件ページから見た仮押さえ', () => {
     expect(() => attachHoldSetToCase(s.id, b.id)).toThrow(/別の事件/);
   });
 });
+
+describe('予定の日程変更（リスケ）', () => {
+  it('候補を確定すると、元の予定は消えて新しい日時に置き換わる', async () => {
+    const { startReschedule, confirmHold } = await import('../services/court.js');
+    const client = db().insert(schema.clients).values({ name: '高橋 三郎' }).returning().get();
+    const kase = db().insert(schema.cases).values({ clientId: client.id, title: '高橋 貸金返還' }).returning().get();
+    const original = db()
+      .insert(schema.calendarEvents)
+      .values({ googleEventId: 'local-orig-1', clientId: client.id, caseId: kase.id, kind: 'meeting', title: '高橋 打合せ', startAt: '2027-01-12T01:00:00.000Z', endAt: '2027-01-12T02:00:00.000Z', location: '事務所', status: 'confirmed' })
+      .returning()
+      .get();
+
+    const r = await startReschedule(original.id, { slots: [{ startAt: '2027-01-19T01:00:00.000Z', endAt: '2027-01-19T02:00:00.000Z' }, { startAt: '2027-01-20T05:00:00.000Z', endAt: '2027-01-20T06:00:00.000Z' }], note: '依頼者の都合' });
+    // 元の予定は確定するまで残る
+    expect(db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, original.id)).get()).toBeTruthy();
+    // 件名は元の予定のまま「〜 仮」。姓が二重にならない
+    const holds = db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.kind, 'hold')).all().filter((e) => e.caseId === kase.id);
+    expect(holds).toHaveLength(2);
+    expect(holds[0]!.title).toBe('高橋 打合せ 仮');
+    expect(holds[0]!.location).toBe('事務所');
+
+    // 事件ページには「日程変更」として出る
+    const sets = listCaseHolds(kase.id);
+    expect(sets).toHaveLength(1);
+    expect(sets[0]!.rescheduleOf).toMatchObject({ eventId: original.id, title: '高橋 打合せ', startAt: '2027-01-12T01:00:00.000Z' });
+
+    // 2 つ目の候補で確定すると、元の予定ともう一方の候補が消える
+    const chosen = sets[0]!.candidates[1]!.eventId!;
+    const updated = await confirmHold(r.sessionId, chosen);
+    expect(updated).toMatchObject({ title: '高橋 打合せ', kind: 'meeting', status: 'confirmed', startAt: '2027-01-20T05:00:00.000Z' });
+    expect(db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, original.id)).get()).toBeUndefined();
+    expect(db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.caseId, kase.id)).all().map((e) => e.kind)).toEqual(['meeting']);
+    expect(listCaseHolds(kase.id)).toHaveLength(0);
+  });
+
+  it('同じ予定の日程変更は二重に始められない。仮押さえ自体はリスケできない', async () => {
+    const { startReschedule } = await import('../services/court.js');
+    const kase = db().insert(schema.cases).values({ clientId: db().insert(schema.clients).values({ name: '伊藤 四郎' }).returning().get().id, title: '伊藤 遺産分割' }).returning().get();
+    const ev = db()
+      .insert(schema.calendarEvents)
+      .values({ googleEventId: 'local-orig-2', caseId: kase.id, kind: 'hearing', title: '伊藤 第1回期日', startAt: '2027-02-10T01:00:00.000Z', endAt: '2027-02-10T02:00:00.000Z', status: 'confirmed' })
+      .returning()
+      .get();
+    await startReschedule(ev.id, { slots: [{ startAt: '2027-02-17T01:00:00.000Z', endAt: '2027-02-17T02:00:00.000Z' }] });
+    await expect(startReschedule(ev.id, { slots: [{ startAt: '2027-02-18T01:00:00.000Z', endAt: '2027-02-18T02:00:00.000Z' }] })).rejects.toThrow(/すでに日程変更/);
+
+    const hold = db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.googleEventId, listCaseHolds(kase.id)[0]!.candidates[0]!.googleEventId)).get()!;
+    await expect(startReschedule(hold.id, { slots: [{ startAt: '2027-02-19T01:00:00.000Z', endAt: '2027-02-19T02:00:00.000Z' }] })).rejects.toThrow(/仮押さえ自体/);
+  });
+});
+
+describe('日程変更の件名', () => {
+  it('依頼者名と予定の件名がそろっていなくても、姓を二重に付けない', async () => {
+    const { startReschedule } = await import('../services/court.js');
+    const client = db().insert(schema.clients).values({ name: '【デモ】佐藤 太郎' }).returning().get();
+    const kase = db().insert(schema.cases).values({ clientId: client.id, title: '佐藤 交通事故' }).returning().get();
+    const ev = db()
+      .insert(schema.calendarEvents)
+      .values({ googleEventId: 'local-orig-3', clientId: client.id, caseId: kase.id, kind: 'meeting', title: '佐藤 打合せ', startAt: '2027-03-02T06:00:00.000Z', endAt: '2027-03-02T07:00:00.000Z', status: 'confirmed' })
+      .returning()
+      .get();
+    await startReschedule(ev.id, { slots: [{ startAt: '2027-03-09T06:00:00.000Z', endAt: '2027-03-09T07:00:00.000Z' }] });
+    expect(listCaseHolds(kase.id)[0]!.candidates[0]!.title).toBe('佐藤 打合せ 仮');
+  });
+});

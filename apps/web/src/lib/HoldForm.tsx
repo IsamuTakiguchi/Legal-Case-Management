@@ -14,22 +14,57 @@ export interface HoldFormFixed {
   caseTitle: string;
 }
 
+/** 「9/21(月) 10:00〜11:00」の形にする */
+export function fmtEventRange(startAt: string, endAt: string): string {
+  const d = new Date(startAt);
+  const day = d.toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric', weekday: 'short' });
+  const t = (iso: string) => new Date(iso).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' });
+  return `${day} ${t(startAt)}〜${t(endAt)}`;
+}
+
+/** 日程変更（リスケ）のとき、変更する元の予定 */
+export interface RescheduleTarget {
+  eventId: number;
+  title: string;
+  startAt: string;
+  endAt: string;
+  clientName?: string | null;
+  caseTitle?: string | null;
+  location?: string | null;
+}
+
+/** 元の予定の 1 週間後・8 日後の同じ時刻を、日程変更の既定の候補にする */
+function rescheduleSlots(t: RescheduleTarget): { start: string; end: string }[] {
+  const s0 = new Date(t.startAt).getTime();
+  const dur = Math.max(15 * 60_000, new Date(t.endAt).getTime() - s0);
+  return [7, 8].map((d) => {
+    const start = new Date(s0 + d * 86400_000).toISOString();
+    return { start: toLocalInput(start), end: toLocalInput(new Date(new Date(start).getTime() + dur).toISOString()) };
+  });
+}
+
 /**
  * 複数候補の仮押さえ。予定ページと事件ページの両方から使う。
  * fixed を渡すと依頼者・事件は選ばず、その事件の仮押さえとして登録する。
+ * reschedule を渡すと決まっている予定の日程変更になり、件名・種別・依頼者・事件は元の予定から引き継ぐ。
  */
-export function HoldForm({ defaultDay, fixed = null, onClose, onSaved, onError }: { defaultDay: string; fixed?: HoldFormFixed | null; onClose: () => void; onSaved: (msg: string) => void; onError: (msg: string) => void }) {
+export function HoldForm({ defaultDay, fixed = null, reschedule = null, onClose, onSaved, onError }: { defaultDay: string; fixed?: HoldFormFixed | null; reschedule?: RescheduleTarget | null; onClose: () => void; onSaved: (msg: string) => void; onError: (msg: string) => void }) {
   const [title, setTitle] = useState('打合せ');
   const [kind, setKind] = useState<EventKind>('meeting');
   const [clientId, setClientId] = useState(fixed?.clientId ? String(fixed.clientId) : '');
   const [caseId, setCaseId] = useState(fixed ? String(fixed.caseId) : '');
   const [counterpartName, setCounterpartName] = useState('');
-  const [location, setLocation] = useState('');
-  const [duration, setDuration] = useState('60');
-  const [slots, setSlots] = useState<{ start: string; end: string }[]>([
-    { start: `${defaultDay}T10:00`, end: `${defaultDay}T11:00` },
-    { start: `${defaultDay}T14:00`, end: `${defaultDay}T15:00` },
-  ]);
+  const [location, setLocation] = useState(reschedule?.location ?? '');
+  const [note, setNote] = useState('');
+  const [duration, setDuration] = useState(reschedule ? String(Math.max(15, Math.round((new Date(reschedule.endAt).getTime() - new Date(reschedule.startAt).getTime()) / 60_000))) : '60');
+  const [slots, setSlots] = useState<{ start: string; end: string }[]>(
+    reschedule
+      ? rescheduleSlots(reschedule)
+      : [
+          { start: `${defaultDay}T10:00`, end: `${defaultDay}T11:00` },
+          { start: `${defaultDay}T14:00`, end: `${defaultDay}T15:00` },
+        ],
+  );
   const [text, setText] = useState('');
   const [textErr, setTextErr] = useState<string[]>([]);
   const mins = () => Math.max(15, Number(duration) || 60);
@@ -41,22 +76,23 @@ export function HoldForm({ defaultDay, fixed = null, onClose, onSaved, onError }
     if (r.slots.length) {
       const parsed = r.slots.map((x) => ({ start: toLocalInput(x.startAt), end: toLocalInput(x.endAt) }));
       // 既定の空行（未編集の初期値）は置き換え、入力済みなら追加
-      const untouched = slots.every((x) => x.start.endsWith('T10:00') || x.start.endsWith('T14:00')) && slots.length <= 2;
+      const untouched = (reschedule ? true : slots.every((x) => x.start.endsWith('T10:00') || x.start.endsWith('T14:00'))) && slots.length <= 2;
       setSlots((untouched ? parsed : [...slots, ...parsed]).slice(0, 10));
       setText('');
     }
   };
-  const clients = useQuery({ queryKey: ['clients'], queryFn: () => api.get<{ id: number; name: string }[]>('/clients'), enabled: !fixed });
-  const cases = useQuery({ queryKey: ['cases', 'open'], queryFn: () => api.get<{ id: number; title: string; clientId: number; clientName: string }[]>('/cases?status=open'), enabled: !fixed });
+  const clients = useQuery({ queryKey: ['clients'], queryFn: () => api.get<{ id: number; name: string }[]>('/clients'), enabled: !fixed && !reschedule });
+  const cases = useQuery({ queryKey: ['cases', 'open'], queryFn: () => api.get<{ id: number; title: string; clientId: number; clientName: string }[]>('/cases?status=open'), enabled: !fixed && !reschedule });
   const caseOptions = (cases.data ?? []).filter((c) => !clientId || c.clientId === Number(clientId));
   const clientName = fixed ? (fixed.clientName ?? '') : (clients.data?.find((c) => c.id === Number(clientId))?.name ?? '');
   const preview = `${clientName ? clientName.split(/[\s　]/)[0] : counterpartName || '（相手）'} ${title || '（内容）'} 仮`;
 
   // 仮押さえの入力途中も自動保存する
-  const holdDraft = useDraftGroup(fixed ? `case:${fixed.caseId}:hold` : `calendar:hold:${defaultDay}`, {
+  const holdDraft = useDraftGroup(reschedule ? `reschedule:${reschedule.eventId}` : fixed ? `case:${fixed.caseId}:hold` : `calendar:hold:${defaultDay}`, {
     title: { value: title, set: setTitle, base: '打合せ' },
     counterpartName: { value: counterpartName, set: setCounterpartName },
-    location: { value: location, set: setLocation },
+    location: { value: location, set: setLocation, base: reschedule?.location ?? '' },
+    note: { value: note, set: setNote },
     text: { value: text, set: setText },
   });
 
@@ -67,26 +103,33 @@ export function HoldForm({ defaultDay, fixed = null, onClose, onSaved, onError }
   };
   const save = useMutation({
     mutationFn: () => {
-      const body = {
+      const picked = slots
+        .filter((v) => v.start)
+        .map((v) => {
+          const start = new Date(fromLocalInput(v.start));
+          const end = v.end ? new Date(fromLocalInput(v.end)) : new Date(start.getTime() + mins() * 60_000);
+          return { startAt: start.toISOString(), endAt: (end > start ? end : new Date(start.getTime() + mins() * 60_000)).toISOString() };
+        });
+      if (reschedule) {
+        return api.post<{ sessionId: number; events: unknown[] }>(`/calendar/events/${reschedule.eventId}/reschedule`, { slots: picked, location: location || null, note: note || null });
+      }
+      return api.post<{ sessionId: number; events: unknown[] }>('/calendar/holds', {
         title,
         kind,
         clientId: clientId ? Number(clientId) : null,
         caseId: caseId ? Number(caseId) : null,
         counterpartName: clientId ? null : counterpartName || null,
         location: location || null,
-        slots: slots
-          .filter((v) => v.start)
-          .map((v) => {
-            const start = new Date(fromLocalInput(v.start));
-            const end = v.end ? new Date(fromLocalInput(v.end)) : new Date(start.getTime() + mins() * 60_000);
-            return { startAt: start.toISOString(), endAt: (end > start ? end : new Date(start.getTime() + mins() * 60_000)).toISOString() };
-          }),
-      };
-      return api.post<{ sessionId: number; events: unknown[] }>('/calendar/holds', body);
+        slots: picked,
+      });
     },
     onSuccess: (r) => {
       holdDraft.clear();
-      onSaved(`仮押さえを ${r.events.length} 件登録しました。相手の返事が来たら、その候補の「この候補で確定」を押してください`);
+      onSaved(
+        reschedule
+          ? `日程変更の候補を ${r.events.length} 件仮押さえしました。相手が選んだ候補で「この候補で確定」を押すと、元の予定は自動で消えます`
+          : `仮押さえを ${r.events.length} 件登録しました。相手の返事が来たら、その候補の「この候補で確定」を押してください`,
+      );
     },
     onError: (e) => onError((e as Error).message),
   });
@@ -100,14 +143,31 @@ export function HoldForm({ defaultDay, fixed = null, onClose, onSaved, onError }
       }}
     >
       <div className="flex items-center gap-2">
-        <h2 className="font-semibold">仮押さえ（複数候補）</h2>
+        <h2 className="font-semibold">{reschedule ? '日程変更（リスケ）' : '仮押さえ（複数候補）'}</h2>
         <button type="button" className="btn btn-sm ml-auto" onClick={onClose}>
           閉じる
         </button>
       </div>
-      <p className="text-xs text-slate-500">候補の日時をすべて「{'{姓} {内容} 仮'}」として登録します。相手が選んだ候補で「この候補で確定」を押すと、ほかの候補は自動で削除されます。</p>
+      {reschedule ? (
+        <p className="text-xs text-slate-500">
+          いまの予定はそのまま残し、変更後の候補を仮押さえします。相手が選んだ候補で「この候補で確定」を押すと、その日時に置き換わり、元の予定とほかの候補は自動で削除されます。
+        </p>
+      ) : (
+        <p className="text-xs text-slate-500">候補の日時をすべて「{'{姓} {内容} 仮'}」として登録します。相手が選んだ候補で「この候補で確定」を押すと、ほかの候補は自動で削除されます。</p>
+      )}
       <div className="grid gap-3 md:grid-cols-2">
-        {fixed ? (
+        {reschedule && (
+          <div className="md:col-span-2 rounded bg-slate-50 p-2 text-sm">
+            <div className="text-xs text-slate-500">変更する予定</div>
+            <div className="font-medium">
+              {fmtEventRange(reschedule.startAt, reschedule.endAt)} {reschedule.title}
+            </div>
+            {(reschedule.clientName || reschedule.caseTitle) && (
+              <div className="text-xs text-slate-500">{[reschedule.clientName, reschedule.caseTitle].filter(Boolean).join('／')}</div>
+            )}
+          </div>
+        )}
+        {reschedule ? null : fixed ? (
           <div className="md:col-span-2 text-sm text-slate-600">
             <span className="label">この事件の仮押さえ</span>
             {fixed.clientName ? `${fixed.clientName}／` : ''}
@@ -147,20 +207,24 @@ export function HoldForm({ defaultDay, fixed = null, onClose, onSaved, onError }
             )}
           </>
         )}
-        <div>
-          <label className="label">内容</label>
-          <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例: 打合せ / 新規相談 / WEB相談" required />
-        </div>
-        <div>
-          <label className="label">確定したときの種別</label>
-          <select className="input" value={kind} onChange={(e) => setKind(e.target.value as EventKind)}>
-            {EVENT_KINDS.filter((k) => k !== 'hold').map((k) => (
-              <option key={k} value={k}>
-                {EVENT_KIND_LABEL[k]}
-              </option>
-            ))}
-          </select>
-        </div>
+        {!reschedule && (
+          <>
+            <div>
+              <label className="label">内容</label>
+              <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例: 打合せ / 新規相談 / WEB相談" required />
+            </div>
+            <div>
+              <label className="label">確定したときの種別</label>
+              <select className="input" value={kind} onChange={(e) => setKind(e.target.value as EventKind)}>
+                {EVENT_KINDS.filter((k) => k !== 'hold').map((k) => (
+                  <option key={k} value={k}>
+                    {EVENT_KIND_LABEL[k]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </>
+        )}
         <div>
           <label className="label">所要時間（分）</label>
           <input type="number" className="input" min={15} step={15} value={duration} onChange={(e) => setDuration(e.target.value)} />
@@ -169,6 +233,12 @@ export function HoldForm({ defaultDay, fixed = null, onClose, onSaved, onError }
           <label className="label">場所</label>
           <input className="input" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="例: 事務所 / Zoom" />
         </div>
+        {reschedule && (
+          <div className="md:col-span-2">
+            <label className="label">変更の理由・メモ（任意。予定の説明欄に残ります）</label>
+            <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="例: 期日が入ったため／依頼者の都合で" />
+          </div>
+        )}
         <div className="md:col-span-2">
           <label className="label">候補をまとめて入力（1 行に日付と時間帯。例: 12/21（月）10～11：30　13～15）</label>
           <div className="flex flex-wrap items-start gap-2">
@@ -215,7 +285,7 @@ export function HoldForm({ defaultDay, fixed = null, onClose, onSaved, onError }
         <button className="btn btn-primary" disabled={save.isPending}>
           {save.isPending ? '登録中…' : `${slots.filter((v) => v.start).length} 件を仮押さえ`}
         </button>
-        <span className="text-xs text-slate-500">件名: {preview}</span>
+        <span className="text-xs text-slate-500">{reschedule ? `件名: ${reschedule.title} 仮（元の予定のまま）` : `件名: ${preview}`}</span>
       </div>
     </form>
   );

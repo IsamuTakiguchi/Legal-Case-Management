@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { proposeSlotsSchema, confirmSlotSchema, nextHearingInputSchema, EVENT_KINDS, schedulePreferencesSchema } from '@lcm/shared';
 import { proposeSlots, confirmSlot, cancelSession, listSessions, findFreeSlots, extractChosenSlot } from '../services/scheduling.js';
-import { syncCalendar, checkPostEvents, resolveNextHearing, listCourtDocs, upcomingEvents, relinkEvent, listCalendarEvents, createCalendarEvent, editCalendarEvent, removeCalendarEvent, createHoldSet, confirmHold, cancelHoldSet } from '../services/court.js';
+import { syncCalendar, checkPostEvents, resolveNextHearing, listCourtDocs, upcomingEvents, relinkEvent, listCalendarEvents, createCalendarEvent, editCalendarEvent, removeCalendarEvent, createHoldSet, confirmHold, cancelHoldSet, startReschedule } from '../services/court.js';
 import { createZoomMeeting } from '../integrations/zoom.js';
 import { extractScheduleFromConversation, registerScheduleFromConversation, extractSchedulePreferences } from '../services/scheduleExtract.js';
 import { db, schema } from '../db/index.js';
@@ -141,6 +141,18 @@ schedulingRoutes.post('/calendar/holds', async (c) => {
     })
     .parse(await c.req.json());
   return c.json(await createHoldSet(body));
+});
+
+/** 決まっている予定の日程変更（リスケ）を始める。候補を確定した時点で元の予定は消える */
+schedulingRoutes.post('/calendar/events/:id/reschedule', async (c) => {
+  const body = z
+    .object({
+      slots: z.array(z.object({ startAt: z.string(), endAt: z.string() })).min(1).max(10),
+      location: z.string().nullable().optional(),
+      note: z.string().nullable().optional(),
+    })
+    .parse(await c.req.json());
+  return c.json(await startReschedule(Number(c.req.param('id')), body));
 });
 
 schedulingRoutes.post('/calendar/holds/:sessionId/confirm', async (c) => {

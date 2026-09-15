@@ -287,6 +287,8 @@ export const schedulingSessions = sqliteTable('scheduling_sessions', {
   candidates: text('candidates', { mode: 'json' }).$type<{ startAt: string; endAt: string; eventId?: string }[]>().notNull().default([]),
   confirmedEventId: text('confirmed_event_id'),
   confirmedStartAt: text('confirmed_start_at'),
+  /** 日程変更（リスケ）のとき、元の予定の calendar_events.id。確定するとその予定は削除する */
+  rescheduleEventId: integer('reschedule_event_id'),
   zoom: text('zoom', { mode: 'json' }).$type<{ id: string; joinUrl: string; password: string } | null>(),
   proposedAt: text('proposed_at'),
   createdAt: text('created_at').notNull().default(now()),
