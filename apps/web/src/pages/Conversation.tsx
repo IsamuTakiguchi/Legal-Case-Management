@@ -55,6 +55,8 @@ interface Conv {
   drafts: { id: number; generatedText: string; instruction: string | null; createdAt: string; status: string }[];
   suggestions: { id: number; name: string }[];
   scheduled: Scheduled[];
+  /** Chatwork のリアクション（ワンタップ返信）のボタン。Chatwork 以外では空 */
+  reactions?: { label: string; text: string; emoji: string }[];
 }
 interface Scheduled {
   id: number;
@@ -102,6 +104,8 @@ export default function Conversation() {
   const [waitUntil, setWaitUntil] = useState<string | null>(null);
   // 返信・引用の対象（会話のメッセージから選ぶ）
   const [replyTo, setReplyTo] = useState<Message | null>(null);
+  // リアクション欄を開いているメッセージ
+  const [reactFor, setReactFor] = useState<number | null>(null);
   const [quoteOf, setQuoteOf] = useState<Message | null>(null);
   const [showTimer, setShowTimer] = useState(false);
   const [sendAt, setSendAt] = useState('');
@@ -400,6 +404,16 @@ export default function Conversation() {
                       ↩ 返信
                     </button>
                   )}
+                  {c.channel === 'chatwork' && m.direction === 'in' && (c.reactions?.length ?? 0) > 0 && (
+                    <button
+                      type="button"
+                      className="hover:underline"
+                      onClick={() => setReactFor(reactFor === m.id ? null : m.id)}
+                      title="「了解しました」などの短い一言を、このメッセージへの返信としてワンタップで送ります"
+                    >
+                      😊 リアクション
+                    </button>
+                  )}
                   <button type="button" className="hover:underline" onClick={() => setQuoteOf(m)} title={c.channel === 'chatwork' ? 'Chatwork の引用として本文に付けます' : '「> 」付きの引用文として本文に付けます'}>
                     ❝ 引用
                   </button>
@@ -413,6 +427,17 @@ export default function Conversation() {
                     {m.direction === 'out' ? '↩ 受信に戻す' : '✓ 自分の送信に直す'}
                   </button>
                 </div>
+                {reactFor === m.id && c.reactions && (
+                  <ReactionBar
+                    conversationId={c.id}
+                    messageId={m.id}
+                    reactions={c.reactions}
+                    onSent={() => {
+                      setReactFor(null);
+                      invalidate();
+                    }}
+                  />
+                )}
                 {c.cases.length >= 2 && !c.contact && <CaseTag m={m} cases={c.cases} out={m.direction === 'out'} onChanged={invalidate} />}
                 {c.channel === 'chatwork' && m.direction === 'in' && <MessageTools m={m} onChanged={invalidate} />}
                 {m.attachments.length > 0 && (
@@ -776,6 +801,51 @@ function parseTimeRanges(text: string): { from: string; to: string }[] {
     out.push({ from: `${m[1].padStart(2, '0')}:${m[2]}`, to: `${m[3].padStart(2, '0')}:${m[4]}` });
   }
   return out;
+}
+
+/**
+ * リアクション（ワンタップ返信）。
+ * Chatwork のリアクションそのものは公開 API に無いので、そのメッセージへの短い返信として送る。
+ */
+function ReactionBar({
+  conversationId,
+  messageId,
+  reactions,
+  onSent,
+}: {
+  conversationId: number;
+  messageId: number;
+  reactions: { label: string; text: string; emoji: string }[];
+  onSent: () => void;
+}) {
+  const [err, setErr] = useState<string | null>(null);
+  const send = useMutation({
+    mutationFn: (text: string) => api.post(`/conversations/${conversationId}/messages/${messageId}/reaction`, { text }),
+    onSuccess: onSent,
+    onError: (e) => setErr((e as Error).message),
+  });
+  return (
+    <div className="fade-in mt-1">
+      <div className="flex flex-wrap gap-1">
+        {reactions.map((r) => (
+          <button
+            key={r.text}
+            type="button"
+            className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            disabled={send.isPending}
+            title={`「${r.text}」と返信します`}
+            onClick={() => {
+              setErr(null);
+              send.mutate(r.text);
+            }}
+          >
+            {r.emoji} {r.label}
+          </button>
+        ))}
+      </div>
+      {err && <div className="mt-0.5 text-xs text-red-600">{err}</div>}
+    </div>
+  );
 }
 
 interface StaffAskCtx {

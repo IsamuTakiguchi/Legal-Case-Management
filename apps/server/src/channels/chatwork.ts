@@ -189,6 +189,9 @@ export function stripChatworkMarkup(body: string): string {
   return body
     .replace(/\[To:\d+\]\s*[^\n]*?(さん)?/g, (m) => m.replace(/\[To:\d+\]/, '@'))
     .replace(/\[rp aid=\d+ to=\d+-\d+\]/g, '')
+    // 返信タグに続く「[pname:ID]さん」は、アプリ側では返信先を別に表示するので落とす
+    .replace(/\[pname:\d+\]さん\n?/g, '')
+    .replace(/\[pname:\d+\]/g, '')
     .replace(/\[qt\]\[qtmeta[^\]]*\]/g, '＞ ')
     .replace(/\[\/qt\]/g, '')
     .replace(/\[info\]\[title\]/g, '')

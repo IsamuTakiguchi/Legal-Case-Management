@@ -24,12 +24,17 @@ export interface SendOutcome {
   manualFiles: string[];
 }
 
+export interface SendOptions {
+  /** 文体サンプルとして学習するか。定型の一言（リアクション）は文体が偏るので学習しない */
+  learn?: boolean;
+}
+
 /**
  * 会話へ返信を送信する共通処理。
  * - ファイルはチャネル制約に応じて添付／共有リンク／手動送付案内に振り分ける
  * - 送信文を会話に保存し、文体サンプルとして学習する
  */
-export async function sendToConversation(conversationId: number, input: SendMessageInput): Promise<SendOutcome> {
+export async function sendToConversation(conversationId: number, input: SendMessageInput, opts: SendOptions = {}): Promise<SendOutcome> {
   const d = db();
   const conv = d.select().from(schema.conversations).where(eq(schema.conversations.id, conversationId)).get();
   if (!conv) throw new Error('会話が見つかりません');
@@ -150,8 +155,10 @@ export async function sendToConversation(conversationId: number, input: SendMess
       d.update(schema.drafts).set({ finalText: input.text, status: 'sent' }).where(eq(schema.drafts.id, draft.id)).run();
     }
   }
-  const lastInbound = d.select().from(schema.messages).where(eq(schema.messages.conversationId, conversationId)).orderBy(schema.messages.sentAt).all().filter((m) => m.direction === 'in').at(-1);
-  learnFromSent(channel, input.text, generated, { externalId: result.externalId, clientId: conv.clientId, contextText: lastInbound?.body.slice(0, 500) ?? null });
+  if (opts.learn !== false) {
+    const lastInbound = d.select().from(schema.messages).where(eq(schema.messages.conversationId, conversationId)).orderBy(schema.messages.sentAt).all().filter((m) => m.direction === 'in').at(-1);
+    learnFromSent(channel, input.text, generated, { externalId: result.externalId, clientId: conv.clientId, contextText: lastInbound?.body.slice(0, 500) ?? null });
+  }
 
   d.update(schema.messages).set({ draftId: input.draftId ?? null }).where(eq(schema.messages.id, message.id)).run();
 
