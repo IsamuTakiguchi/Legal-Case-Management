@@ -5,6 +5,7 @@ import { proposeSlots, confirmSlot, cancelSession, listSessions, findFreeSlots, 
 import { syncCalendar, checkPostEvents, resolveNextHearing, listCourtDocs, upcomingEvents, relinkEvent, listCalendarEvents, createCalendarEvent, editCalendarEvent, removeCalendarEvent, createHoldSet, confirmHold, cancelHoldSet, startReschedule } from '../services/court.js';
 import { createZoomMeeting } from '../integrations/zoom.js';
 import { extractScheduleFromConversation, registerScheduleFromConversation, extractSchedulePreferences } from '../services/scheduleExtract.js';
+import { holdProposalContext, draftHoldProposal, sendHoldProposal } from '../services/holdProposal.js';
 import { db, schema } from '../db/index.js';
 import { eq } from 'drizzle-orm';
 
@@ -141,6 +142,26 @@ schedulingRoutes.post('/calendar/holds', async (c) => {
     })
     .parse(await c.req.json());
   return c.json(await createHoldSet(body));
+});
+
+/** 仮押さえた候補日を依頼者に打診する（下ごしらえ・文体で下書き・送信） */
+schedulingRoutes.get('/calendar/holds/:sessionId/proposal', (c) => c.json(holdProposalContext(Number(c.req.param('sessionId')))));
+
+schedulingRoutes.post('/calendar/holds/:sessionId/proposal/draft', async (c) => {
+  const body = z.object({ conversationId: z.number().int().nullable().optional(), instruction: z.string().nullable().optional() }).parse(await c.req.json().catch(() => ({})));
+  return c.json(await draftHoldProposal(Number(c.req.param('sessionId')), body));
+});
+
+schedulingRoutes.post('/calendar/holds/:sessionId/proposal', async (c) => {
+  const body = z
+    .object({
+      conversationId: z.number().int(),
+      text: z.string().min(1),
+      createWaitingTask: z.boolean().optional(),
+      followUpAt: z.string().datetime({ offset: true }).nullable().optional(),
+    })
+    .parse(await c.req.json());
+  return c.json(await sendHoldProposal(Number(c.req.param('sessionId')), body));
 });
 
 /** 決まっている予定の日程変更（リスケ）を始める。候補を確定した時点で元の予定は消える */
