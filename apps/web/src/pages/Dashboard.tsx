@@ -40,8 +40,8 @@ export default function Dashboard() {
   const todayLabel = `${today.getUTCMonth() + 1}月${today.getUTCDate()}日（${WD[today.getUTCDay()]}）`;
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-end gap-3">
-        <h1 className="text-xl font-bold">ダッシュボード</h1>
+      <div className="flex flex-wrap items-baseline gap-3">
+        <h1>ダッシュボード</h1>
         <span className="text-sm text-slate-500">{todayLabel}</span>
       </div>
       {d.demo && (
@@ -196,12 +196,12 @@ function ScheduledSection() {
   );
 }
 
-// iOS のアプリアイコン風の色付き角丸に線画アイコンを載せる
+/** 数字タイルの色み。0 件のときは灰にして、目が行かないようにする */
 const STAT_TONE: Record<string, { value: string; icon: string }> = {
-  blue: { value: 'text-[var(--accent)]', icon: 'bg-[var(--accent)] text-white' },
-  orange: { value: 'text-[#ff9500]', icon: 'bg-[#ff9500] text-white' },
-  green: { value: 'text-[#248a3d]', icon: 'bg-[#34c759] text-white' },
-  gray: { value: 'text-[var(--text-2)]', icon: 'bg-black/[0.08] text-[var(--text-2)]' },
+  blue: { value: 'text-[var(--accent)]', icon: 'bg-[var(--accent-soft)] text-[var(--accent)]' },
+  orange: { value: 'text-[var(--warn)]', icon: 'bg-[var(--warn-soft)] text-[var(--warn)]' },
+  green: { value: 'text-[var(--ok)]', icon: 'bg-[var(--ok-soft)] text-[var(--ok)]' },
+  gray: { value: 'text-[var(--text-2)]', icon: 'bg-[var(--surface-3)] text-[var(--text-3)]' },
 };
 
 function Stat({ label, value, to, icon, tone = 'blue' }: { label: string; value: number | string; to?: string; icon?: IconName; tone?: 'blue' | 'orange' | 'gray' | 'green' }) {
@@ -209,13 +209,13 @@ function Stat({ label, value, to, icon, tone = 'blue' }: { label: string; value:
   const inner = (
     <div className={`card flex items-center gap-3.5 ${to ? 'card-press' : ''}`}>
       {icon && (
-        <span className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-[12px] shadow-[inset_0_-1px_0_rgba(0,0,0,0.08)] ${t.icon}`}>
+        <span className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px] ${t.icon}`}>
           <Icon name={icon} className="h-[22px] w-[22px]" strokeWidth={1.9} />
         </span>
       )}
       <div className="min-w-0">
-        <div className="text-[12px] font-medium text-slate-500">{label}</div>
-        <div className={`mt-0.5 text-[26px] font-semibold leading-none tabular-nums tracking-[-0.02em] ${t.value}`}>{value}</div>
+        <div className="eyebrow">{label}</div>
+        <div className={`mt-1 text-[30px] font-semibold leading-none tabular-nums tracking-[-0.03em] ${t.value}`}>{value}</div>
       </div>
     </div>
   );
