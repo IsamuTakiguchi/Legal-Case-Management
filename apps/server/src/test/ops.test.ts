@@ -587,6 +587,36 @@ describe('仮押さえの文字入力の読み取り', () => {
     expect(r3.slots).toEqual([]);
     expect(r3.errors.length).toBe(2);
   });
+
+  it('「10/5 10:00-」のように終了を書かない開始だけの指定も読める', async () => {
+    const { parseHoldText } = await import('@lcm/shared');
+    const now = new Date('2026-09-07T01:00:00+09:00');
+    // 実際に入力された形
+    const r = parseHoldText('10/5 10:00-\n10/6 10:00-', { now, defaultMinutes: 60 });
+    expect(r.errors).toEqual([]);
+    expect(r.slots.map((s) => s.label)).toEqual(['10/5(月) 10:00〜11:00', '10/6(火) 10:00〜11:00']);
+    expect(r.slots.map((s) => s.endAssumed)).toEqual([true, true]);
+    expect(r.slots[0].startAt).toBe(new Date('2026-10-05T10:00:00+09:00').toISOString());
+
+    // 全角の波ダッシュ、「時」表記、所要時間の指定
+    const r2 = parseHoldText('10/5 10:00～\n10/6 14時〜', { now, defaultMinutes: 90 });
+    expect(r2.errors).toEqual([]);
+    expect(r2.slots.map((s) => s.label)).toEqual(['10/5(月) 10:00〜11:30', '10/6(火) 14:00〜15:30']);
+
+    // 時刻のうしろに注記が付いていても読める
+    const r3 = parseHoldText('10/5 10:00（WEB）', { now, defaultMinutes: 60 });
+    expect(r3.errors).toEqual([]);
+    expect(r3.slots.map((s) => s.label)).toEqual(['10/5(月) 10:00〜11:00']);
+
+    // 「〜12:00」は終了しか書かれておらず候補にできないので、そう伝える
+    const r4 = parseHoldText('10/5 ～12:00', { now });
+    expect(r4.slots).toEqual([]);
+    expect(r4.errors[0]).toContain('開始の時刻がありません');
+
+    // これまでどおり、開始と終了が揃っていれば補わない
+    const r5 = parseHoldText('10/5 10:00-12:00', { now, defaultMinutes: 60 });
+    expect(r5.slots.map((s) => [s.label, s.endAssumed])).toEqual([['10/5(月) 10:00〜12:00', false]]);
+  });
 });
 
 describe('事務局メンバー（Chatwork）', () => {
