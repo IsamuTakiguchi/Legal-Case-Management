@@ -5,11 +5,12 @@ import { isConfigured } from '../config.js';
 import { z } from 'zod';
 import { eq, desc } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { clientInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputSchema, creditorEventInputSchema, CREDITOR_IMPORT_FIELDS, caseContactInputSchema, TASK_STATUSES } from '@lcm/shared';
+import { clientInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputSchema, creditorEventInputSchema, CREDITOR_IMPORT_FIELDS, caseContactInputSchema, staffAskDraftSchema, staffAskSendSchema, TASK_STATUSES } from '@lcm/shared';
 import { searchClients } from '../services/identity.js';
 import { storage, FolderNotFoundError } from '../integrations/storage.js';
 import { clientFolder } from '../services/attachments.js';
 import { proposeScheduleFromNote } from '../services/noteSchedule.js';
+import { staffAskContext, draftStaffAsk, sendStaffAsk, type StaffAskSource } from '../services/staffAsk.js';
 import { listCaseTypes, upsertCaseType, createCase, updateCase, listCases, getCase, caseTimeline, addCaseNote, updateCaseNote, deleteCaseNote, generateCaseSummary, structureNote, createTasksFromNote, suggestNoteTasks } from '../services/cases.js';
 import * as creditors from '../services/creditors.js';
 import { onedriveCandidates, chatworkCandidates, applyImport, deleteClient } from '../services/clientImport.js';
@@ -304,6 +305,18 @@ clientRoutes.post('/cases/:id/notes', async (c) => {
 
 /** 記録の内容から、登録するタスクの案を作る（画面で直してから登録する） */
 clientRoutes.post('/case-notes/:id/task-suggestions', async (c) => c.json(await suggestNoteTasks(Number(c.req.param('id')))));
+
+/** 記録の内容を、Chatwork で担当事務局に確認する（下ごしらえ・下書き・送信） */
+const noteSource = (c: { req: { param: (k: string) => string } }): StaffAskSource => ({ kind: 'note', noteId: Number(c.req.param('id')) });
+
+clientRoutes.get('/case-notes/:id/staff-ask', async (c) => c.json(await staffAskContext(noteSource(c))));
+
+clientRoutes.post('/case-notes/:id/staff-ask/draft', async (c) => {
+  const body = staffAskDraftSchema.parse(await c.req.json().catch(() => ({})));
+  return c.json(await draftStaffAsk(noteSource(c), { instruction: body.instruction }));
+});
+
+clientRoutes.post('/case-notes/:id/staff-ask', async (c) => c.json(await sendStaffAsk(noteSource(c), staffAskSendSchema.parse(await c.req.json()))));
 
 /** 記録の内容から、次に決めるべき予定と候補日時を出す（画面で直してから仮押さえする） */
 clientRoutes.post('/case-notes/:id/schedule', async (c) => {

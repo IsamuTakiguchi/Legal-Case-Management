@@ -6,6 +6,7 @@ import { useDraftRecord, useDraftGroup, useDraft, DraftHint } from '../lib/draft
 import { RoomPicker } from '../lib/RoomPicker';
 import { HoldForm, fmtEventRange, type RescheduleTarget } from '../lib/HoldForm';
 import { LongText } from '../lib/LongText';
+import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { fmtDateTime, fmtDate, fmtYen, toLocalInput, fromLocalInput } from '../lib/format';
 import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
@@ -1380,6 +1381,7 @@ function NoteView({ n, onDeleted, onNotice }: { n: Note; onDeleted: () => void; 
   const [editing, setEditing] = useState(false);
   const [taskOpen, setTaskOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [askOpen, setAskOpen] = useState(false);
   if (editing) {
     return (
       <li id={`note-${n.id}`} className="scroll-mt-20 rounded border border-blue-200 bg-blue-50/30 p-3 text-sm">
@@ -1396,23 +1398,33 @@ function NoteView({ n, onDeleted, onNotice }: { n: Note; onDeleted: () => void; 
   }
   return (
     <li id={`note-${n.id}`} className="scroll-mt-20 rounded border border-slate-100 p-3 text-sm target:border-blue-300 target:bg-blue-50/40">
-      <div className="flex items-center gap-2">
+      {/* 見出しは「いつ・誰と」の行と、操作の行に分ける（操作が増えても相手の名前が潰れないように） */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className="badge badge-gray">{CASE_NOTE_KIND_LABEL[n.kind as CaseNoteKind] ?? n.kind}</span>
-        <span className="text-slate-500">{fmtDateTime(n.occurredAt)}</span>
+        <span className="whitespace-nowrap text-slate-500">{fmtDateTime(n.occurredAt)}</span>
         {n.counterpart && <span className="text-slate-600">{n.counterpart}</span>}
         {n.waitingFor && n.waitingFor !== 'none' && <span className="badge badge-orange">{WAITING_FOR_LABEL[n.waitingFor as WaitingFor]}待ち</span>}
-        {n.createdBy === 'ai' && <span className="text-xs text-slate-400">AI 整理</span>}
+        {n.createdBy === 'ai' && <span className="whitespace-nowrap text-xs text-slate-400">AI 整理</span>}
+      </div>
+      <div className="mt-1 flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
         {onNotice && (
-          <button className="ml-auto btn btn-sm btn-primary whitespace-nowrap" onClick={onNotice} title="この期日の結果と次回期日を、本人の文体で依頼者に連絡します">
+          <button className="mr-auto btn btn-sm btn-primary whitespace-nowrap" onClick={onNotice} title="この期日の結果と次回期日を、本人の文体で依頼者に連絡します">
             依頼者に期日連絡
           </button>
         )}
         <button
-          className={`${onNotice ? '' : 'ml-auto '}whitespace-nowrap text-xs text-blue-700 hover:underline`}
+          className="whitespace-nowrap text-xs text-blue-700 hover:underline"
           onClick={() => setTaskOpen(!taskOpen)}
           title="この記録をタスクにします（次のアクションからでも、題名を書いてでも作れます）"
         >
           タスクにする
+        </button>
+        <button
+          className="whitespace-nowrap text-xs text-blue-700 hover:underline"
+          onClick={() => setAskOpen(!askOpen)}
+          title="この記録を引用して、Chatwork で担当事務局に確認します"
+        >
+          事務局に確認
         </button>
         <button
           className="whitespace-nowrap text-xs text-blue-700 hover:underline"
@@ -1470,6 +1482,11 @@ function NoteView({ n, onDeleted, onNotice }: { n: Note; onDeleted: () => void; 
       )}
       {taskOpen && <NoteTaskPanel n={n} onDone={onDeleted} onClose={() => setTaskOpen(false)} />}
       {scheduleOpen && <NoteSchedulePanel n={n} onDone={onDeleted} onClose={() => setScheduleOpen(false)} />}
+      {askOpen && (
+        <div className="mt-2">
+          <StaffAskPanel base={`/case-notes/${n.id}`} draftKey={`note:${n.id}`} onClose={() => setAskOpen(false)} onSent={onDeleted} />
+        </div>
+      )}
       {n.gist && n.rawText && (
         <button className="mt-1 text-xs text-slate-400 hover:underline" onClick={() => setOpen(!open)}>
           {open ? '元メモを隠す' : '元メモを表示'}
