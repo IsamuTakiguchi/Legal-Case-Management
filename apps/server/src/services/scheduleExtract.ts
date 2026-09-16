@@ -173,7 +173,11 @@ export async function extractSchedulePreferences(conversationId: number, opts: {
   });
   const isoOk = (v: string) => !Number.isNaN(new Date(v).getTime());
   const dateOk = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
-  const timeRanges = r.timeRanges.filter((t) => HM_RE.test(t.from) && HM_RE.test(t.to) && t.from < t.to).map((t) => ({ from: t.from.padStart(5, '0'), to: t.to.padStart(5, '0') }));
+  // 「9:30」のように 1 桁で来ることがあるので、0 埋めしてから前後を比べる（"9:30" < "11:30" は文字列だと偽になる）
+  const timeRanges = r.timeRanges
+    .filter((t) => HM_RE.test(t.from) && HM_RE.test(t.to))
+    .map((t) => ({ from: t.from.padStart(5, '0'), to: t.to.padStart(5, '0') }))
+    .filter((t) => t.from < t.to);
   const avoid = r.avoid.filter((a) => isoOk(a.from) && isoOk(a.to)).map((a) => ({ from: new Date(a.from).toISOString(), to: new Date(a.to).toISOString(), quote: a.quote }));
   const requested = r.requested.filter((x) => isoOk(x.startAt)).map((x) => ({ startAt: new Date(x.startAt).toISOString(), quote: x.quote }));
   const weekdays = [...new Set(r.weekdays)].sort();
