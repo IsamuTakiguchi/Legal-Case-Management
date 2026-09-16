@@ -9,6 +9,7 @@ import { clientInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputS
 import { searchClients } from '../services/identity.js';
 import { storage, FolderNotFoundError } from '../integrations/storage.js';
 import { clientFolder } from '../services/attachments.js';
+import { proposeScheduleFromNote } from '../services/noteSchedule.js';
 import { listCaseTypes, upsertCaseType, createCase, updateCase, listCases, getCase, caseTimeline, addCaseNote, updateCaseNote, deleteCaseNote, generateCaseSummary, structureNote, createTasksFromNote, suggestNoteTasks } from '../services/cases.js';
 import * as creditors from '../services/creditors.js';
 import { onedriveCandidates, chatworkCandidates, applyImport, deleteClient } from '../services/clientImport.js';
@@ -303,6 +304,19 @@ clientRoutes.post('/cases/:id/notes', async (c) => {
 
 /** 記録の内容から、登録するタスクの案を作る（画面で直してから登録する） */
 clientRoutes.post('/case-notes/:id/task-suggestions', async (c) => c.json(await suggestNoteTasks(Number(c.req.param('id')))));
+
+/** 記録の内容から、次に決めるべき予定と候補日時を出す（画面で直してから仮押さえする） */
+clientRoutes.post('/case-notes/:id/schedule', async (c) => {
+  const body = z
+    .object({
+      durationMinutes: z.number().int().min(15).max(480).nullable().optional(),
+      maxCandidates: z.number().int().min(1).max(10).optional(),
+      from: z.string().nullable().optional(),
+      to: z.string().nullable().optional(),
+    })
+    .parse(await c.req.json().catch(() => ({})));
+  return c.json(await proposeScheduleFromNote(Number(c.req.param('id')), body));
+});
 
 /** 保存済みの記録をタスクにする（AI の案・次のアクション・題名から） */
 clientRoutes.post('/case-notes/:id/tasks', async (c) => {

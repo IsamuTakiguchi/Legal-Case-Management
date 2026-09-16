@@ -7,7 +7,7 @@ import { RoomPicker } from '../lib/RoomPicker';
 import { HoldForm, fmtEventRange, type RescheduleTarget } from '../lib/HoldForm';
 import { LongText } from '../lib/LongText';
 import { fmtDateTime, fmtDate, fmtYen, toLocalInput, fromLocalInput } from '../lib/format';
-import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR_LABEL, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
+import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
 
 interface Note {
@@ -1032,6 +1032,177 @@ interface DraftTask {
 }
 
 /** 記録をタスクにする。AI の案を直して登録するほか、次のアクションや題名からも作れる */
+interface NoteScheduleProposal {
+  caseId: number;
+  caseTitle: string | null;
+  clientId: number | null;
+  clientName: string | null;
+  found: boolean;
+  content: string;
+  kind: EventKind;
+  web: boolean | null;
+  durationMinutes: number;
+  summary: string;
+  quote: string;
+  note: string;
+  window: { from: string; to: string };
+  slots: { startAt: string; endAt: string; score?: number }[];
+  blocked: string | null;
+}
+
+/**
+ * 記録から日程調整。
+ * 記録の内容から「次に決める予定」と希望条件を読み取り、カレンダーの空きに当てて候補を出し、
+ * 直してから仮押さえとして登録する。
+ */
+function NoteSchedulePanel({ n, onDone, onClose }: { n: Note; onDone: () => void; onClose: () => void }) {
+  const [p, setP] = useState<NoteScheduleProposal | null>(null);
+  const [title, setTitle] = useState('');
+  const [kind, setKind] = useState<EventKind>('meeting');
+  const [duration, setDuration] = useState('60');
+  // 終了は「開始 + 所要」で決めるので、候補は開始だけ持つ（所要を変えるとすべての候補に効く）
+  const [slots, setSlots] = useState<{ start: string; use: boolean }[]>([]);
+  const [msg, setMsg] = useState<{ kind: 'ok' | 'err' | 'info'; text: string } | null>(null);
+  const mins = () => Math.max(15, Number(duration) || 60);
+
+  const read = useMutation({
+    mutationFn: (body: Record<string, unknown>) => api.post<NoteScheduleProposal>(`/case-notes/${n.id}/schedule`, body),
+    onSuccess: (r) => {
+      setP(r);
+      setTitle(r.content);
+      setKind(r.kind);
+      setDuration(String(r.durationMinutes));
+      setSlots(r.slots.map((s) => ({ start: toLocalInput(s.startAt), use: true })));
+      setMsg(
+        r.blocked
+          ? { kind: 'info', text: r.blocked }
+          : !r.found
+            ? { kind: 'info', text: 'この記録からは、これから決める予定を読み取れませんでした。候補を手で入れて仮押さえできます' }
+            : null,
+      );
+    },
+    onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
+  });
+  // 開いたらまず読み取る（そのあと直して仮押さえする）
+  useEffect(() => {
+    read.mutate({});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const hold = useMutation({
+    mutationFn: () =>
+      api.post<{ events: { id: number }[] }>('/calendar/holds', {
+        title: title.trim() || '打合せ',
+        kind,
+        clientId: p?.clientId ?? null,
+        caseId: p?.caseId ?? null,
+        description: `記録から日程調整${p?.note ? `: ${p.note}` : ''}`,
+        slots: slots.filter((s) => s.use).map((s) => ({ startAt: fromLocalInput(s.start), endAt: endOf(s.start) })),
+      }),
+    onSuccess: (r) => {
+      setMsg({ kind: 'ok', text: `仮押さえを ${r.events.length} 件登録しました。相手の返事が来たら「この候補で確定」を押してください` });
+      onDone();
+    },
+    onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
+  });
+
+  const setSlot = (i: number, patch: Partial<{ start: string; use: boolean }>) => setSlots((prev) => prev.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+  /** 開始から、所要の分だけ後ろの終了時刻 */
+  const endOf = (start: string) => new Date(new Date(fromLocalInput(start)).getTime() + mins() * 60_000).toISOString();
+  const picked = slots.filter((s) => s.use).length;
+
+  return (
+    <div className="fade-in mt-2 space-y-2 rounded border border-blue-200 bg-blue-50/30 p-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-semibold">記録から日程調整</span>
+        {read.isPending && <span className="loading-text text-xs text-slate-500">記録を読んで空きを探しています…</span>}
+        <button className="ml-auto text-xs text-slate-500 hover:underline" onClick={onClose}>
+          閉じる
+        </button>
+      </div>
+
+      {p && (p.quote || p.summary || p.note) && (
+        <div className="rounded bg-white/70 p-2 text-xs text-slate-600">
+          {p.quote && <div className="mb-0.5">記録から: 「{p.quote}」</div>}
+          {p.summary && <div>読み取った条件: {p.summary}</div>}
+          {p.note && <div className="text-slate-500">{p.note}</div>}
+        </div>
+      )}
+
+      {p && (
+        <>
+          <label className="block">
+            <span className="label">件名</span>
+            <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="打合せ" />
+            <span className="mt-0.5 block text-xs text-slate-500">
+              「{p.clientName ? `${p.clientName.split(/[\s　]/)[0]} ` : ''}
+              {title.trim() || '◯◯'} 仮」として登録されます
+            </span>
+          </label>
+          <div className="flex flex-wrap items-end gap-2">
+            <label>
+              <span className="label">種別</span>
+              <select className="input w-auto" value={kind} onChange={(e) => setKind(e.target.value as EventKind)}>
+                {EVENT_KINDS.filter((k) => k !== 'hold').map((k) => (
+                  <option key={k} value={k}>
+                    {EVENT_KIND_LABEL[k]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span className="label">所要（分・終了はこの長さ）</span>
+              <input className="input w-20" type="number" min={15} step={15} value={duration} onChange={(e) => setDuration(e.target.value)} />
+            </label>
+            <button className="btn btn-sm" onClick={() => read.mutate({ durationMinutes: mins() })} disabled={read.isPending}>
+              この長さで探し直す
+            </button>
+          </div>
+
+          <div>
+            <div className="label">候補日時（使うものだけチェック）</div>
+            <ul className="space-y-1">
+              {slots.map((s, i) => (
+                <li key={i} className="flex items-center gap-1.5 text-xs">
+                  <input type="checkbox" checked={s.use} onChange={(e) => setSlot(i, { use: e.target.checked })} />
+                  <input className="input min-w-0 flex-1 py-0.5" type="datetime-local" value={s.start} onChange={(e) => setSlot(i, { start: e.target.value })} />
+                  <span className="whitespace-nowrap tabular-nums text-slate-500">
+                    〜{new Date(endOf(s.start)).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                  <button className="text-slate-400 hover:text-red-600" onClick={() => setSlots(slots.filter((_, j) => j !== i))} aria-label="この候補を外す">
+                    ✕
+                  </button>
+                </li>
+              ))}
+              {slots.length === 0 && <li className="text-xs text-slate-500">候補がありません。「＋ 候補を追加」から手で入れられます</li>}
+            </ul>
+            <button
+              className="mt-1 text-xs text-blue-700 hover:underline"
+              onClick={() => {
+                const base = slots.at(-1)?.start ?? toLocalInput(new Date(Date.now() + 86400_000).toISOString());
+                const start = toLocalInput(new Date(new Date(fromLocalInput(base)).getTime() + 86400_000).toISOString());
+                setSlots([...slots, { start, use: true }].slice(0, 10));
+              }}
+              disabled={slots.length >= 10}
+            >
+              ＋ 候補を追加
+            </button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button className="btn btn-primary btn-sm" onClick={() => hold.mutate()} disabled={picked === 0 || hold.isPending}>
+              {hold.isPending ? '登録中…' : `${picked} 件を仮押さえ`}
+            </button>
+            <span className="text-xs text-slate-500">仮押さえは Google カレンダーに「仮」として入ります。相手の返事で 1 つ確定すると、ほかは自動で消えます</span>
+          </div>
+        </>
+      )}
+
+      {msg && <div className={`text-xs ${msg.kind === 'ok' ? 'text-green-700' : msg.kind === 'err' ? 'text-red-600' : 'text-slate-500'}`}>{msg.text}</div>}
+    </div>
+  );
+}
+
 function NoteTaskPanel({ n, onDone, onClose }: { n: Note; onDone: () => void; onClose: () => void }) {
   const qc = useQueryClient();
   const pending = n.nextActions.map((a, i) => ({ ...a, i })).filter((a) => !a.taskId);
@@ -1208,6 +1379,7 @@ function NoteView({ n, onDeleted, onNotice }: { n: Note; onDeleted: () => void; 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [taskOpen, setTaskOpen] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
   if (editing) {
     return (
       <li id={`note-${n.id}`} className="scroll-mt-20 rounded border border-blue-200 bg-blue-50/30 p-3 text-sm">
@@ -1231,21 +1403,28 @@ function NoteView({ n, onDeleted, onNotice }: { n: Note; onDeleted: () => void; 
         {n.waitingFor && n.waitingFor !== 'none' && <span className="badge badge-orange">{WAITING_FOR_LABEL[n.waitingFor as WaitingFor]}待ち</span>}
         {n.createdBy === 'ai' && <span className="text-xs text-slate-400">AI 整理</span>}
         {onNotice && (
-          <button className="ml-auto btn btn-sm btn-primary" onClick={onNotice} title="この期日の結果と次回期日を、本人の文体で依頼者に連絡します">
+          <button className="ml-auto btn btn-sm btn-primary whitespace-nowrap" onClick={onNotice} title="この期日の結果と次回期日を、本人の文体で依頼者に連絡します">
             依頼者に期日連絡
           </button>
         )}
         <button
-          className={`${onNotice ? '' : 'ml-auto '}text-xs text-blue-700 hover:underline`}
+          className={`${onNotice ? '' : 'ml-auto '}whitespace-nowrap text-xs text-blue-700 hover:underline`}
           onClick={() => setTaskOpen(!taskOpen)}
           title="この記録をタスクにします（次のアクションからでも、題名を書いてでも作れます）"
         >
           タスクにする
         </button>
-        <button className="text-xs text-blue-700 hover:underline" onClick={() => setEditing(true)}>
+        <button
+          className="whitespace-nowrap text-xs text-blue-700 hover:underline"
+          onClick={() => setScheduleOpen(!scheduleOpen)}
+          title="この記録から、次に決める予定と候補日時を読み取って仮押さえします"
+        >
+          日程調整
+        </button>
+        <button className="whitespace-nowrap text-xs text-blue-700 hover:underline" onClick={() => setEditing(true)}>
           編集
         </button>
-        <button className="text-xs text-slate-400 hover:text-red-600" onClick={() => confirm('削除しますか？') && del.mutate()}>
+        <button className="whitespace-nowrap text-xs text-slate-400 hover:text-red-600" onClick={() => confirm('削除しますか？') && del.mutate()}>
           削除
         </button>
       </div>
@@ -1290,6 +1469,7 @@ function NoteView({ n, onDeleted, onNotice }: { n: Note; onDeleted: () => void; 
         </ul>
       )}
       {taskOpen && <NoteTaskPanel n={n} onDone={onDeleted} onClose={() => setTaskOpen(false)} />}
+      {scheduleOpen && <NoteSchedulePanel n={n} onDone={onDeleted} onClose={() => setScheduleOpen(false)} />}
       {n.gist && n.rawText && (
         <button className="mt-1 text-xs text-slate-400 hover:underline" onClick={() => setOpen(!open)}>
           {open ? '元メモを隠す' : '元メモを表示'}
