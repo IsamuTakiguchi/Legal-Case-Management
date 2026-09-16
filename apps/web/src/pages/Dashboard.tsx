@@ -16,9 +16,32 @@ interface DashboardData {
   /** 対応中のタスクだけ（返信待ちは別のタイルで数えるので重複させない） */
   openTasks: number;
   todaysEvents: { id: number; title: string; startAt: string; kind: string; clientName: string | null; location: string | null }[];
+  /** 直前の行動（記録・送受信・タスク）。新しい順 */
+  recent: RecentItem[];
   lineQuota: { used: number; limit: number } | null;
   demo?: boolean;
 }
+
+interface RecentItem {
+  at: string;
+  kind: 'note' | 'sent' | 'received' | 'task' | 'task_done';
+  label: string;
+  title: string;
+  clientId: number | null;
+  clientName: string | null;
+  caseId: number | null;
+  caseTitle: string | null;
+  to: string;
+}
+
+/** 行動の種類ごとの目印。記録だけ色を付けて、事件記録を見つけやすくする */
+const RECENT_MARK: Record<RecentItem['kind'], { icon: string; badge: string }> = {
+  note: { icon: '📝', badge: 'badge badge-blue' },
+  sent: { icon: '↗', badge: 'badge badge-gray' },
+  received: { icon: '↘', badge: 'badge badge-gray' },
+  task: { icon: '☑', badge: 'badge badge-gray' },
+  task_done: { icon: '✓', badge: 'badge badge-gray' },
+};
 
 export default function Dashboard() {
   const q = useQuery({ queryKey: ['dashboard'], queryFn: () => api.get<DashboardData>('/dashboard'), refetchInterval: 60_000 });
@@ -151,6 +174,35 @@ export default function Dashboard() {
               })}
             </tbody>
           </table>
+        </section>
+        <section className="card md:col-span-2">
+          <h2 className="mb-2 flex items-center gap-1.5 font-semibold">
+            <Icon name="clock" className="h-4 w-4 text-[var(--accent)]" />
+            最近の動き
+            <Link to="/cases" className="ml-auto text-xs font-normal text-blue-700 hover:underline">
+              事件の一覧 →
+            </Link>
+          </h2>
+          {d.recent.length === 0 && <div className="text-sm text-slate-500">まだ記録・やり取りがありません</div>}
+          <ul className="divide-y divide-slate-100 text-sm">
+            {d.recent.map((r) => (
+              <li key={`${r.kind}-${r.at}-${r.to}`}>
+                <Link to={r.to} className="flex flex-wrap items-center gap-2 py-1.5 hover:text-[var(--accent)]">
+                  <span className="w-16 shrink-0 text-xs tabular-nums text-slate-500">{fmtRelative(r.at)}</span>
+                  <span className={RECENT_MARK[r.kind].badge}>
+                    {RECENT_MARK[r.kind].icon} {r.label}
+                  </span>
+                  {(r.clientName || r.caseTitle) && (
+                    <span className="font-medium">
+                      {r.clientName ?? ''}
+                      {r.caseTitle && <span className="ml-1 text-xs font-normal text-slate-500">{r.caseTitle}</span>}
+                    </span>
+                  )}
+                  <span className="min-w-0 flex-1 truncate text-slate-500">{r.title}</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
         </section>
       </div>
     </div>

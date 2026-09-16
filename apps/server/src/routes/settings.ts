@@ -5,6 +5,7 @@ import { listTemplates, saveTemplates } from '../services/templates.js';
 import { isConfigured, env } from '../config.js';
 import { isGoogleConnected, googleAccount } from '../integrations/google.js';
 import { isMsConnected, msAccount } from '../integrations/onedrive.js';
+import { recentActivity } from '../services/activity.js';
 import { lineQuotaStatus } from '../services/lineQuota.js';
 import { JOBS, runJob, jobStatus } from '../jobs/index.js';
 import { usageSummary } from '../services/apiCost.js';
@@ -188,7 +189,18 @@ settingsRoutes.get('/dashboard', (c) => {
   const active = listTasks({ status: 'active' });
   const activeTasks = active.length;
   const openTasks = active.filter((t) => t.status === 'open').length;
-  return c.json({ alerts: alerts.slice(0, 20), alertCounts: byType, waiting, needsReply, activeTasks, openTasks, todaysEvents: todaysEvents(), lineQuota: isConfigured('line') ? lineQuotaStatus() : null, demo: demoStatus().seeded });
+  return c.json({
+    alerts: alerts.slice(0, 20),
+    alertCounts: byType,
+    waiting,
+    needsReply,
+    activeTasks,
+    openTasks,
+    todaysEvents: todaysEvents(),
+    recent: recentActivity(12),
+    lineQuota: isConfigured('line') ? lineQuotaStatus() : null,
+    demo: demoStatus().seeded,
+  });
 });
 
 /** API 利用料（概算）。month=YYYY-MM で月を指定 */
