@@ -7,7 +7,7 @@ import { RoomPicker } from '../lib/RoomPicker';
 import { HoldForm, fmtEventRange, type RescheduleTarget } from '../lib/HoldForm';
 import { LongText } from '../lib/LongText';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
-import { fmtDateTime, fmtDate, fmtYen, toLocalInput, fromLocalInput } from '../lib/format';
+import { fmtDateTime, fmtDate, fmtYen, toLocalInput, fromLocalInput, channelLabel } from '../lib/format';
 import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
 
@@ -324,6 +324,113 @@ function useCaseHolds(caseId: number | null) {
  * 調整中の仮押さえを事件ページから扱う。
  * 相手が選んだ候補で確定（ほかの候補は自動で削除）、まとめて取消、この事件への紐付け、新しい仮押さえの追加ができる。
  */
+interface ProposalCtx {
+  sessionId: number;
+  kind: string;
+  clientName: string | null;
+  candidates: { startAt: string; endAt: string }[];
+  conversations: { id: number; channel: string; counterpartName: string | null; lastMessageAt: string | null; preferred: boolean }[];
+  defaultConversationId: number | null;
+  text: string;
+  defaultFollowUpAt: string;
+  blocked: string | null;
+}
+
+/**
+ * 仮押さえた候補日を依頼者に打診する。
+ * 既定はテンプレートどおりの文（AI を使わないので待ち時間も利用料もない）。
+ * 「自分の文体で整える」を押すと、いつもの言い回しに書き直す。
+ */
+function HoldProposalPanel({ sessionId, onClose, onSent }: { sessionId: number; onClose: () => void; onSent: (msg: string) => void }) {
+  const ctx = useQuery({ queryKey: ['hold-proposal', sessionId], queryFn: () => api.get<ProposalCtx>(`/calendar/holds/${sessionId}/proposal`) });
+  const [conversationId, setConversationId] = useState('');
+  const [text, setText] = useState('');
+  const [instruction, setInstruction] = useState('');
+  const [waiting, setWaiting] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const d = ctx.data;
+  useEffect(() => {
+    if (!d) return;
+    setConversationId(d.defaultConversationId ? String(d.defaultConversationId) : '');
+    // 画面で直した本文は残す（読み込み直しで消さない）
+    setText((prev) => prev || d.text);
+  }, [d]);
+  // 書きかけの打診文はこの端末に自動保存する
+  const draft = useDraft(`hold:${sessionId}:proposal`, text, setText, '');
+
+  const restyle = useMutation({
+    mutationFn: () => api.post<{ text: string }>(`/calendar/holds/${sessionId}/proposal/draft`, { conversationId: conversationId ? Number(conversationId) : null, instruction: instruction || null }),
+    onSuccess: (r) => {
+      setText(r.text);
+      setErr(null);
+    },
+    onError: (e) => setErr((e as Error).message),
+  });
+  const send = useMutation({
+    mutationFn: () =>
+      api.post<{ note: string | null }>(`/calendar/holds/${sessionId}/proposal`, {
+        conversationId: Number(conversationId),
+        text,
+        createWaitingTask: waiting,
+        followUpAt: waiting ? d?.defaultFollowUpAt : null,
+      }),
+    onSuccess: (r) => {
+      draft.clear();
+      onSent(`候補日を打診しました${waiting ? '。返事待ちのタスクも作りました' : ''}${r.note ? `（${r.note}）` : ''}`);
+    },
+    onError: (e) => setErr((e as Error).message),
+  });
+
+  return (
+    <div className="fade-in mt-1 space-y-2 rounded border border-blue-200 bg-blue-50/30 p-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-semibold">候補日を依頼者に打診</span>
+        {ctx.isLoading && <span className="loading-text text-xs text-slate-500">読み込み中…</span>}
+        <button className="ml-auto text-xs text-slate-500 hover:underline" onClick={onClose}>
+          閉じる
+        </button>
+      </div>
+      {d?.blocked && <div className="rounded bg-orange-50 px-2 py-1 text-xs text-orange-800">{d.blocked}</div>}
+      {d && !d.blocked && (
+        <>
+          <label className="flex flex-wrap items-center gap-1 text-xs">
+            送り先
+            <select className="input w-auto py-0.5" value={conversationId} onChange={(e) => setConversationId(e.target.value)}>
+              {d.conversations.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {channelLabel(c.channel)}
+                  {c.preferred ? '（いつもの連絡先）' : ''}
+                  {c.counterpartName ? ` / ${c.counterpartName}` : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+          <textarea className="input min-h-28 text-sm" value={text} onChange={(e) => setText(e.target.value)} />
+          <DraftHint handle={draft} />
+          <div className="flex flex-wrap items-center gap-2">
+            <input className="input min-w-0 flex-1 py-0.5 text-xs" value={instruction} onChange={(e) => setInstruction(e.target.value)} placeholder="AI への指示（例: 事務所での面談であることも書く）" />
+            <button className="btn btn-sm" onClick={() => restyle.mutate()} disabled={restyle.isPending} title="いつもの言い回しに書き直します（候補の日時はそのまま）">
+              {restyle.isPending ? '整えています…' : '自分の文体で整える'}
+            </button>
+            <button className="btn btn-sm" onClick={() => setText(d.text)} title="テンプレートどおりの文に戻します">
+              元に戻す
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <label className="flex items-center gap-1">
+              <input type="checkbox" checked={waiting} onChange={(e) => setWaiting(e.target.checked)} /> 「返事待ち」のタスクも作る
+            </label>
+            <button className="btn btn-primary btn-sm ml-auto" onClick={() => send.mutate()} disabled={!text.trim() || !conversationId || send.isPending}>
+              {send.isPending ? '送信中…' : `${channelLabel(d.conversations.find((c) => c.id === Number(conversationId))?.channel ?? '')} で送る`}
+            </button>
+          </div>
+          {err && <div className="text-xs text-red-600">{err}</div>}
+        </>
+      )}
+    </div>
+  );
+}
+
 function CaseHolds({
   caseId,
   clientId,
@@ -344,6 +451,8 @@ function CaseHolds({
   const q = useCaseHolds(caseId);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [adding, setAdding] = useState(false);
+  // 候補日の打診を開いている日程調整
+  const [proposing, setProposing] = useState<number | null>(null);
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['case-holds', caseId] });
     qc.invalidateQueries({ queryKey: ['case', String(caseId)] });
@@ -396,10 +505,11 @@ function CaseHolds({
           defaultDay={new Date(new Date(reschedule.startAt).getTime() + 9 * 3600_000).toISOString().slice(0, 10)}
           reschedule={reschedule}
           onClose={onRescheduleClose}
-          onSaved={(text) => {
+          onSaved={(text, sessionId) => {
             onRescheduleClose();
             refresh();
             setMsg({ kind: 'ok', text });
+            if (sessionId) setProposing(sessionId);
           }}
           onError={(text) => setMsg({ kind: 'err', text })}
         />
@@ -409,10 +519,12 @@ function CaseHolds({
           defaultDay={new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10)}
           fixed={{ clientId, clientName, caseId, caseTitle }}
           onClose={() => setAdding(false)}
-          onSaved={(text) => {
+          onSaved={(text, sessionId) => {
             setAdding(false);
             refresh();
             setMsg({ kind: 'ok', text });
+            // 登録したらそのまま打診にすすめる
+            if (sessionId) setProposing(sessionId);
           }}
           onError={(text) => setMsg({ kind: 'err', text })}
         />
@@ -434,7 +546,14 @@ function CaseHolds({
                 </Link>
               )}
               <button
-                className="btn btn-sm ml-auto"
+                className="btn btn-sm btn-primary ml-auto"
+                onClick={() => setProposing(proposing === s.sessionId ? null : s.sessionId)}
+                title="候補日を並べた文を作って、依頼者に送ります"
+              >
+                候補日を打診
+              </button>
+              <button
+                className="btn btn-sm"
                 disabled={cancelHold.isPending}
                 onClick={() => {
                   if (window.confirm(`この日程調整の仮押さえ ${s.candidates.length} 件をすべて取り消しますか？`)) cancelHold.mutate(s.sessionId);
@@ -456,6 +575,17 @@ function CaseHolds({
                   この事件に紐付ける
                 </button>
               </div>
+            )}
+            {proposing === s.sessionId && (
+              <HoldProposalPanel
+                sessionId={s.sessionId}
+                onClose={() => setProposing(null)}
+                onSent={(text) => {
+                  setProposing(null);
+                  refresh();
+                  setMsg({ kind: 'ok', text });
+                }}
+              />
             )}
             <ul className="divide-y divide-slate-100">
               {s.candidates.map((v) => (

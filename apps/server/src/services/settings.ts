@@ -69,6 +69,10 @@ http://www.noboriohji.com/access/`,
   digest_max_items: '15',
   alert_notify_title: '確認が必要な事項',
   line_manual_send_note: 'ファイルは LINE公式アカウントの管理画面（チャット）から手動でお送りください。',
+  /** 仮押さえの候補日を依頼者に打診する文。{kind}=打合せ等 / {client}=依頼者名 / {slots}=候補の行 */
+  hold_proposal_template: '{kind}の候補日ですが、\n{slots}\nでいかがでしょうか？',
+  /** 候補 1 件の書き方。{M}=月 {D}=日 {wd}=曜日 {start}=開始 {end}=終了 */
+  hold_proposal_slot_format: '{M}/{D} {start}-',
 };
 
 const cache = new Map<string, string>();

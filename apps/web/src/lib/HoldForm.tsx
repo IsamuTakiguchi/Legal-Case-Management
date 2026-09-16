@@ -48,7 +48,22 @@ function rescheduleSlots(t: RescheduleTarget): { start: string; end: string }[] 
  * fixed を渡すと依頼者・事件は選ばず、その事件の仮押さえとして登録する。
  * reschedule を渡すと決まっている予定の日程変更になり、件名・種別・依頼者・事件は元の予定から引き継ぐ。
  */
-export function HoldForm({ defaultDay, fixed = null, reschedule = null, onClose, onSaved, onError }: { defaultDay: string; fixed?: HoldFormFixed | null; reschedule?: RescheduleTarget | null; onClose: () => void; onSaved: (msg: string) => void; onError: (msg: string) => void }) {
+export function HoldForm({
+  defaultDay,
+  fixed = null,
+  reschedule = null,
+  onClose,
+  onSaved,
+  onError,
+}: {
+  defaultDay: string;
+  fixed?: HoldFormFixed | null;
+  reschedule?: RescheduleTarget | null;
+  onClose: () => void;
+  /** 登録できたら知らせる。sessionId は、そのまま候補日の打診へ進むときに使う */
+  onSaved: (msg: string, sessionId?: number) => void;
+  onError: (msg: string) => void;
+}) {
   const [title, setTitle] = useState('打合せ');
   const [kind, setKind] = useState<EventKind>('meeting');
   const [clientId, setClientId] = useState(fixed?.clientId ? String(fixed.clientId) : '');
@@ -129,6 +144,7 @@ export function HoldForm({ defaultDay, fixed = null, reschedule = null, onClose,
         reschedule
           ? `日程変更の候補を ${r.events.length} 件仮押さえしました。相手が選んだ候補で「この候補で確定」を押すと、元の予定は自動で消えます`
           : `仮押さえを ${r.events.length} 件登録しました。相手の返事が来たら、その候補の「この候補で確定」を押してください`,
+        r.sessionId,
       );
     },
     onError: (e) => onError((e as Error).message),

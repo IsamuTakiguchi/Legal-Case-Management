@@ -82,6 +82,17 @@ const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean; 
   { key: 'travel_buffer_minutes', label: '外出予定の前後に空ける移動時間（分）', hint: '場所が事務所でも WEB でもない予定（裁判所など）の前後は、この時間を空けて候補を出します' },
   { key: 'slot_gap_minutes', label: '予定と予定の間に空ける時間（分）', hint: 'すべての予定の前後に空ける余裕。0 なら続けて入れます' },
   { key: 'default_meeting_minutes', label: '既定の所要時間（分）' },
+  {
+    key: 'hold_proposal_template',
+    label: '候補日の打診文',
+    hint: '仮押さえた候補日を依頼者に送るときの文です。{kind} は「打合せ」「面談」など、{client} は依頼者名、{slots} は候補日の行に置き換わります。空にすると既定の文に戻ります',
+    multiline: true,
+  },
+  {
+    key: 'hold_proposal_slot_format',
+    label: '候補日 1 行の書き方',
+    hint: '{M}=月 {D}=日 {wd}=曜日 {start}=開始 {end}=終了。既定は「{M}/{D} {start}-」（例: 10/5 10:00-）。曜日や終了も入れるなら「{M}/{D}({wd}) {start}〜{end}」（例: 10/5(月) 10:00〜11:00）',
+  },
   { key: 'waiting_followup_business_days', label: '返信待ちのフォロー期限（営業日）' },
   { key: 'scheduling_stale_business_days', label: '日程調整の停滞判定（営業日）' },
   { key: 'holidays', label: '休業日（YYYY-MM-DD をカンマ区切り）', multiline: true },
