@@ -48,8 +48,17 @@ export default function Login() {
     }
   };
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
-      <div className="card w-full max-w-[380px] space-y-6 p-8 shadow-[var(--shadow-float)]">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden p-4">
+      {/* 背景にロゴの色み（濃紺と金）をうっすら敷く */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            'radial-gradient(760px 420px at 18% 8%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 62%), radial-gradient(620px 420px at 86% 92%, var(--gold-soft), transparent 60%)',
+        }}
+      />
+      <div className="card relative w-full max-w-[380px] space-y-6 p-8 shadow-[var(--shadow-float)]">
         <div className="flex flex-col items-center gap-3 text-center">
           <img src="/icon-192.png?v=4" alt="" className="h-16 w-16 rounded-[16px] shadow-[0_4px_14px_rgba(0,0,0,0.16)]" />
           <div>

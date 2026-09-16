@@ -2,6 +2,7 @@ import { Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './lib/api';
+import { useTheme, THEME_CHOICES, THEME_LABEL } from './lib/theme';
 import { fmtDateTime } from './lib/format';
 import { Icon, type IconName } from './lib/icons';
 import Login from './pages/Login';
@@ -67,9 +68,9 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen">
-      <aside className="sticky top-0 hidden h-screen w-[232px] shrink-0 flex-col border-r border-[var(--hairline)] bg-white/60 backdrop-blur-2xl md:flex">
+      <aside className="sidebar-surface sticky top-0 hidden h-screen w-[236px] shrink-0 flex-col border-r border-[var(--hairline)] md:flex">
         <div className="flex items-center gap-3 px-4 pb-3 pt-5">
-          <img src="/icon-192.png?v=4" alt="" className="h-9 w-9 rounded-[10px] shadow-[0_2px_6px_rgba(0,0,0,0.12)]" />
+          <img src="/icon-192.png?v=4" alt="" className="h-9 w-9 rounded-[10px] shadow-[0_2px_6px_rgba(16,32,48,0.14)]" />
           <div className="min-w-0">
             <div className="truncate text-[15px] font-semibold tracking-[-0.02em]">T-Lex</div>
             <div className="truncate whitespace-nowrap text-[11px] text-slate-500">連絡・事件・期日をひとつに</div>
@@ -79,6 +80,7 @@ export default function App() {
         <div className="mt-auto space-y-2 border-t border-[var(--hairline)] p-3">
           <RefreshButtons />
           <BackupStatus />
+          <ThemeSwitch />
           <LogoutButton className="w-full" />
         </div>
       </aside>
@@ -318,6 +320,23 @@ function BackupStatus() {
   );
 }
 
+/** 表示テーマの切り替え（端末に合わせる／昼／夜） */
+function ThemeSwitch() {
+  const [choice, choose] = useTheme();
+  return (
+    <div className="flex items-center gap-2 px-0.5">
+      <span className="text-[11px] text-slate-500">表示</span>
+      <div className="segmented ml-auto" role="group" aria-label="表示テーマ">
+        {THEME_CHOICES.map((c) => (
+          <button key={c} type="button" aria-pressed={choice === c} onClick={() => choose(c)} title={THEME_LABEL[c]}>
+            {c === 'auto' ? '自動' : THEME_LABEL[c]}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function LogoutButton({ className = '' }: { className?: string }) {
   const [busy, setBusy] = useState(false);
   const logout = async () => {
@@ -371,7 +390,10 @@ function MobileTabs({ counts }: { counts: NavCounts }) {
     <>
       {mounted && (
         <div className={`sheet-backdrop fixed inset-0 z-30 md:hidden ${shown ? 'is-open' : ''}`} onClick={() => setOpen(false)}>
-          <div className="sheet absolute inset-x-0 bottom-0 rounded-t-[22px] bg-white/95 p-4 pb-[calc(env(safe-area-inset-bottom)+72px)] shadow-[0_-8px_40px_rgba(0,0,0,0.18)] backdrop-blur-2xl" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="sheet sidebar-surface absolute inset-x-0 bottom-0 rounded-t-[22px] p-4 pb-[calc(env(safe-area-inset-bottom)+72px)] shadow-[0_-8px_40px_rgba(0,0,0,0.18)]"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-slate-300" />
             <div className="grid grid-cols-3 gap-2">
               {rest.map((n) => (
@@ -384,9 +406,8 @@ function MobileTabs({ counts }: { counts: NavCounts }) {
             <div className="mt-3 space-y-2">
               <RefreshButtons />
               <BackupStatus />
-              <div className="flex justify-end">
-                <LogoutButton />
-              </div>
+              <ThemeSwitch />
+              <LogoutButton className="w-full" />
             </div>
           </div>
         </div>
