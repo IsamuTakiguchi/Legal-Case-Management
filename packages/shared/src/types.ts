@@ -407,3 +407,27 @@ export const AI_MODEL_IDS = AI_MODELS.map((m) => m.id) as readonly string[];
 export function aiModelLabel(id: string): string {
   return AI_MODELS.find((m) => m.id === id)?.label ?? id;
 }
+
+/** 事務局への確認（Chatwork）。受信箱の会話からも、事件の記録からも使う */
+export const staffAskDraftSchema = z.object({
+  /** 会話から使うとき、引用するメッセージ */
+  messageId: z.number().int().nullable().optional(),
+  /** AI への指示 */
+  instruction: z.string().nullable().optional(),
+});
+
+export const staffAskSendSchema = z.object({
+  messageId: z.number().int().nullable().optional(),
+  /** 宛先の事務局メンバー */
+  staffId: z.number().int().nullable().optional(),
+  roomId: z.number().int(),
+  text: z.string().min(1),
+  /** Chatwork のタスクとして送る */
+  asTask: z.boolean().optional(),
+  /** タスクの期限（YYYY-MM-DD） */
+  due: z.string().nullable().optional(),
+  /** 元の連絡・記録を引用する */
+  quote: z.boolean().optional(),
+  /** アプリ側にも「事務局の返事待ち」を作る */
+  createWaitingTask: z.boolean().optional(),
+});

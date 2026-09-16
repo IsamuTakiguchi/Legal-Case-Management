@@ -8,14 +8,14 @@ import { linkConversationToClient, suggestClients } from '../services/identity.j
 import { linkConversationToContact, unlinkConversation, createContact, getContact } from '../services/contacts.js';
 import { assignConversationAttachments } from '../services/attachments.js';
 import { sendToConversation } from '../services/send.js';
-import { staffAskContext, draftStaffAsk, sendStaffAsk } from '../services/staffAsk.js';
+import { staffAskContext, draftStaffAsk, sendStaffAsk, type StaffAskSource } from '../services/staffAsk.js';
 import { scheduleMessage, listScheduled, updateScheduled, cancelScheduled, dispatchScheduled } from '../services/scheduledSend.js';
 import { draftReply } from '../services/style.js';
 import { judgeWaiting } from '../services/tasks.js';
 import { listTemplates } from '../services/templates.js';
 import { getSetting } from '../services/settings.js';
 import { activeCasesForClient } from '../services/cases.js';
-import { sendMessageSchema, draftRequestSchema, caseContactInputSchema, parseChatworkReactions, type Channel } from '@lcm/shared';
+import { sendMessageSchema, draftRequestSchema, caseContactInputSchema, parseChatworkReactions, staffAskDraftSchema, staffAskSendSchema, type Channel } from '@lcm/shared';
 
 export const inboxRoutes = new Hono();
 
@@ -166,29 +166,24 @@ inboxRoutes.post('/conversations/:id/draft', async (c) => {
 });
 
 /** 事務局に確認するチャット（Chatwork）の下ごしらえ・下書き・送信 */
+const convSource = (c: { req: { param: (k: string) => string } }, messageId?: number | null): StaffAskSource => ({
+  kind: 'conversation',
+  conversationId: Number(c.req.param('id')),
+  messageId: messageId ?? null,
+});
+
 inboxRoutes.get('/conversations/:id/staff-ask', async (c) =>
-  c.json(await staffAskContext(Number(c.req.param('id')), { messageId: c.req.query('messageId') ? Number(c.req.query('messageId')) : undefined })),
+  c.json(await staffAskContext(convSource(c, c.req.query('messageId') ? Number(c.req.query('messageId')) : null))),
 );
 
 inboxRoutes.post('/conversations/:id/staff-ask/draft', async (c) => {
-  const body = z.object({ messageId: z.number().int().nullable().optional(), instruction: z.string().nullable().optional() }).parse(await c.req.json().catch(() => ({})));
-  return c.json(await draftStaffAsk(Number(c.req.param('id')), { messageId: body.messageId ?? undefined, instruction: body.instruction }));
+  const body = staffAskDraftSchema.parse(await c.req.json().catch(() => ({})));
+  return c.json(await draftStaffAsk(convSource(c, body.messageId), { instruction: body.instruction }));
 });
 
 inboxRoutes.post('/conversations/:id/staff-ask', async (c) => {
-  const body = z
-    .object({
-      messageId: z.number().int().nullable().optional(),
-      staffId: z.number().int().nullable().optional(),
-      roomId: z.number().int(),
-      text: z.string().min(1),
-      asTask: z.boolean().optional(),
-      due: z.string().nullable().optional(),
-      quote: z.boolean().optional(),
-      createWaitingTask: z.boolean().optional(),
-    })
-    .parse(await c.req.json());
-  return c.json(await sendStaffAsk(Number(c.req.param('id')), body));
+  const body = staffAskSendSchema.parse(await c.req.json());
+  return c.json(await sendStaffAsk(convSource(c, body.messageId), body));
 });
 
 /**
