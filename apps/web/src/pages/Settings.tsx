@@ -62,6 +62,12 @@ const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean; 
     ],
   },
   {
+    key: 'chatwork_reactions',
+    label: 'Chatwork のリアクション（ワンタップ返信）',
+    hint: 'Chatwork のリアクションそのものは公開 API に無いため、会話画面のボタンは「そのメッセージへの短い返信」として送ります。1 行に 1 つ、「ラベル|送る本文」の形で書きます。本文には Chatwork の絵文字コード（(roger) (bow) (y) (clap) :) :o など）が使えます。空にすると既定の 6 つに戻ります',
+    multiline: true,
+  },
+  {
     key: 'my_email_addresses',
     label: '自分のメールアドレス（別名・他アカウント、カンマ区切り）',
     hint: 'Gmail の送信者名に登録した別名や、事務所の別アドレスから送ったメールが「受信」として受信箱に入るのを防ぎます。Gmail のプロフィールと送信者名の別名は自動で判定に含めます',

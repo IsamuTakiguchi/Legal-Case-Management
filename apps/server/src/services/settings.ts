@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
+import { DEFAULT_CHATWORK_REACTIONS } from '@lcm/shared';
 
 export const SETTING_DEFAULTS: Record<string, string> = {
   office_name: '登大路総合法律事務所',
@@ -56,6 +57,8 @@ http://www.noboriohji.com/access/`,
   my_email_addresses: '',
   /** Chatwork の取込範囲: all（参加ルームの全メッセージ）| to_me（自分宛の To・自分への返信 re・全員宛・ダイレクト・自分に振られたタスクのメッセージだけ） */
   chatwork_scope: 'all',
+  /** Chatwork のリアクション（ワンタップ返信）のボタン。1 行 1 つ、`ラベル|送る本文`。空なら既定の 6 つ */
+  chatwork_reactions: DEFAULT_CHATWORK_REACTIONS,
   /** Google でログインできるメールアドレス（カンマ／改行区切り）。空なら「Google に接続」したアカウント */
   login_google_emails: '',
   backup_folder: '_システム/バックアップ',

@@ -13,8 +13,9 @@ import { scheduleMessage, listScheduled, updateScheduled, cancelScheduled, dispa
 import { draftReply } from '../services/style.js';
 import { judgeWaiting } from '../services/tasks.js';
 import { listTemplates } from '../services/templates.js';
+import { getSetting } from '../services/settings.js';
 import { activeCasesForClient } from '../services/cases.js';
-import { sendMessageSchema, draftRequestSchema, caseContactInputSchema, type Channel } from '@lcm/shared';
+import { sendMessageSchema, draftRequestSchema, caseContactInputSchema, parseChatworkReactions, type Channel } from '@lcm/shared';
 
 export const inboxRoutes = new Hono();
 
@@ -90,7 +91,9 @@ inboxRoutes.get('/conversations/:id', (c) => {
   const drafts = db().select().from(schema.drafts).where(eq(schema.drafts.conversationId, conv.id)).orderBy(desc(schema.drafts.createdAt)).limit(5).all();
   const suggestions = conv.clientId ? [] : suggestClients(conv.counterpartName);
   const scheduled = listScheduled({ conversationId: conv.id });
-  return c.json({ ...conv, drafts, suggestions, scheduled });
+  // Chatwork はリアクション（ワンタップ返信）のボタンを一緒に返す
+  const reactions = conv.channel === 'chatwork' ? parseChatworkReactions(getSetting('chatwork_reactions')) : [];
+  return c.json({ ...conv, drafts, suggestions, scheduled, reactions });
 });
 
 inboxRoutes.post('/conversations/:id/link', async (c) => {
@@ -186,6 +189,24 @@ inboxRoutes.post('/conversations/:id/staff-ask', async (c) => {
     })
     .parse(await c.req.json());
   return c.json(await sendStaffAsk(Number(c.req.param('id')), body));
+});
+
+/**
+ * リアクション（ワンタップ返信）。
+ * Chatwork のリアクションは公開 API に無いので、そのメッセージへの返信として短い一言を送る。
+ */
+inboxRoutes.post('/conversations/:id/messages/:messageId/reaction', async (c) => {
+  const id = Number(c.req.param('id'));
+  const messageId = Number(c.req.param('messageId'));
+  const body = z.object({ text: z.string().min(1).max(200) }).parse(await c.req.json());
+  const conv = db().select().from(schema.conversations).where(eq(schema.conversations.id, id)).get();
+  if (!conv) return c.json({ error: 'not found' }, 404);
+  if (conv.channel !== 'chatwork') return c.json({ error: 'リアクションは Chatwork の会話だけで使えます' }, 400);
+  // 設定にあるボタンの本文しか送らない（画面から任意の文面を送る口にしない）
+  const reaction = parseChatworkReactions(getSetting('chatwork_reactions')).find((r) => r.text === body.text);
+  if (!reaction) return c.json({ error: 'そのリアクションは設定にありません' }, 400);
+  const r = await sendToConversation(id, { ...sendMessageSchema.parse({ text: reaction.text }), replyToMessageId: messageId }, { learn: false });
+  return c.json({ ok: true, messageId: r.messageId, text: reaction.text });
 });
 
 /** 送信（scheduledAt があれば今は送らず予約する） */
