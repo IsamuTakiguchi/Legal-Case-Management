@@ -8,6 +8,7 @@ import { linkConversationToClient, suggestClients } from '../services/identity.j
 import { linkConversationToContact, unlinkConversation, createContact, getContact } from '../services/contacts.js';
 import { assignConversationAttachments } from '../services/attachments.js';
 import { sendToConversation } from '../services/send.js';
+import { staffAskContext, draftStaffAsk, sendStaffAsk } from '../services/staffAsk.js';
 import { scheduleMessage, listScheduled, updateScheduled, cancelScheduled, dispatchScheduled } from '../services/scheduledSend.js';
 import { draftReply } from '../services/style.js';
 import { judgeWaiting } from '../services/tasks.js';
@@ -159,6 +160,32 @@ inboxRoutes.post('/conversations/:id/draft', async (c) => {
   );
   const draft = db().insert(schema.drafts).values({ conversationId: id, instruction: req.instruction, generatedText: text }).returning().get();
   return c.json(draft);
+});
+
+/** 事務局に確認するチャット（Chatwork）の下ごしらえ・下書き・送信 */
+inboxRoutes.get('/conversations/:id/staff-ask', async (c) =>
+  c.json(await staffAskContext(Number(c.req.param('id')), { messageId: c.req.query('messageId') ? Number(c.req.query('messageId')) : undefined })),
+);
+
+inboxRoutes.post('/conversations/:id/staff-ask/draft', async (c) => {
+  const body = z.object({ messageId: z.number().int().nullable().optional(), instruction: z.string().nullable().optional() }).parse(await c.req.json().catch(() => ({})));
+  return c.json(await draftStaffAsk(Number(c.req.param('id')), { messageId: body.messageId ?? undefined, instruction: body.instruction }));
+});
+
+inboxRoutes.post('/conversations/:id/staff-ask', async (c) => {
+  const body = z
+    .object({
+      messageId: z.number().int().nullable().optional(),
+      staffId: z.number().int().nullable().optional(),
+      roomId: z.number().int(),
+      text: z.string().min(1),
+      asTask: z.boolean().optional(),
+      due: z.string().nullable().optional(),
+      quote: z.boolean().optional(),
+      createWaitingTask: z.boolean().optional(),
+    })
+    .parse(await c.req.json());
+  return c.json(await sendStaffAsk(Number(c.req.param('id')), body));
 });
 
 /** 送信（scheduledAt があれば今は送らず予約する） */

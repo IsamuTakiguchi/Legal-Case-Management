@@ -109,6 +109,7 @@ export default function Conversation() {
   const [driveFiles, setDriveFiles] = useState<DriveFile[]>([]);
   const [showFiles, setShowFiles] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
+  const [showStaffAsk, setShowStaffAsk] = useState(false);
   const [showExtract, setShowExtract] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [linkClientId, setLinkClientId] = useState('');
@@ -538,6 +539,9 @@ export default function Conversation() {
             <button className="btn btn-sm" onClick={() => setShowExtract(!showExtract)} title="やり取りから日時を読み取ってカレンダーに登録します">
               🗓 会話から予定を登録
             </button>
+            <button className="btn btn-sm" onClick={() => setShowStaffAsk(!showStaffAsk)} title="届いた連絡を引用して、Chatwork で担当事務局に確認します">
+              💬 事務局に確認
+            </button>
             <button className="btn btn-sm" onClick={() => judge.mutate()} disabled={!text || judge.isPending}>
               返信待ちになる？
             </button>
@@ -585,6 +589,7 @@ export default function Conversation() {
               </div>
             </div>
           )}
+          {showStaffAsk && <StaffAskPanel conversationId={c.id} onClose={() => setShowStaffAsk(false)} onSent={invalidate} />}
           {showSchedule && <SchedulePanel conversationId={c.id} onText={(t) => setText((prev) => (prev ? `${prev}\n\n${t}` : t))} onDone={invalidate} />}
           {showExtract && <ExtractSchedulePanel conversationId={c.id} cases={c.cases} onDone={invalidate} />}
         </div>
@@ -771,6 +776,145 @@ function parseTimeRanges(text: string): { from: string; to: string }[] {
     out.push({ from: `${m[1].padStart(2, '0')}:${m[2]}`, to: `${m[3].padStart(2, '0')}:${m[4]}` });
   }
   return out;
+}
+
+interface StaffAskCtx {
+  message: { id: number; channel: string; senderName: string | null; sentAt: string; body: string } | null;
+  clientName: string | null;
+  caseTitle: string | null;
+  staff: { id: number; name: string; chatworkAccountId: number | null }[];
+  defaultStaffId: number | null;
+  rooms: { roomId: number; name: string; kind: string }[];
+  defaultRoomId: number | null;
+  blocked: string | null;
+}
+
+const ROOM_KIND_LABEL: Record<string, string> = { case: '事件専用', client: '依頼者', my: 'マイチャット', other: '' };
+
+/** 届いた連絡を引用して、Chatwork で担当事務局に確認する */
+function StaffAskPanel({ conversationId, onClose, onSent }: { conversationId: number; onClose: () => void; onSent: () => void }) {
+  const ctx = useQuery({ queryKey: ['staff-ask', conversationId], queryFn: () => api.get<StaffAskCtx>(`/conversations/${conversationId}/staff-ask`) });
+  const [staffId, setStaffId] = useState('');
+  const [roomId, setRoomId] = useState('');
+  const [text, setText] = useState('');
+  const [instruction, setInstruction] = useState('');
+  const [quote, setQuote] = useState(true);
+  const [asTask, setAsTask] = useState(false);
+  const [due, setDue] = useState('');
+  const [waiting, setWaiting] = useState(false);
+  const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const d = ctx.data;
+  useEffect(() => {
+    if (!d) return;
+    setStaffId(d.defaultStaffId ? String(d.defaultStaffId) : '');
+    setRoomId(d.defaultRoomId ? String(d.defaultRoomId) : '');
+  }, [d]);
+  // 書きかけの確認文はこの端末に自動保存する
+  const askDraft = useDraft(`conv:${conversationId}:staff-ask`, text, setText, '');
+  const draft = useMutation({
+    mutationFn: () => api.post<{ text: string; title: string }>(`/conversations/${conversationId}/staff-ask/draft`, { messageId: d?.message?.id ?? null, instruction: instruction || null }),
+    onSuccess: (r) => {
+      setText(r.text);
+      setMsg(null);
+    },
+    onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
+  });
+  const send = useMutation({
+    mutationFn: () =>
+      api.post<{ roomName: string; staffName: string | null; asTask: boolean }>(`/conversations/${conversationId}/staff-ask`, {
+        messageId: d?.message?.id ?? null,
+        staffId: staffId ? Number(staffId) : null,
+        roomId: Number(roomId),
+        text,
+        quote,
+        asTask,
+        due: due || null,
+        createWaitingTask: waiting,
+      }),
+    onSuccess: (r) => {
+      askDraft.clear();
+      setText('');
+      setMsg({ kind: 'ok', text: `${r.roomName} に${r.staffName ? `（${r.staffName}さん宛で）` : ''}${r.asTask ? 'タスクとして' : ''}送りました` });
+      onSent();
+    },
+    onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
+  });
+  return (
+    <section className="fade-in card space-y-2 border-blue-200 text-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="font-semibold">事務局に確認（Chatwork）</h3>
+        {d?.message && (
+          <span className="text-xs text-slate-500">
+            {channelLabel(d.message.channel)}・{fmtDateTime(d.message.sentAt)}
+            {d.message.senderName ? `・${d.message.senderName}` : ''} の連絡について
+          </span>
+        )}
+        <button className="btn btn-sm ml-auto" onClick={onClose}>
+          閉じる
+        </button>
+      </div>
+      {ctx.isLoading && <div className="loading-text text-slate-500">読み込み中…</div>}
+      {d?.blocked && <div className="rounded-md bg-orange-50 px-3 py-2 text-xs text-orange-800">{d.blocked}</div>}
+      {d && !d.blocked && (
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-1">
+              担当
+              <select className="input w-auto" value={staffId} onChange={(e) => setStaffId(e.target.value)}>
+                <option value="">（宛先を付けない）</option>
+                {d.staff.map((s) => (
+                  <option key={s.id} value={s.id} disabled={!s.chatworkAccountId}>
+                    {s.name}
+                    {s.chatworkAccountId ? '' : '（Chatwork 未登録）'}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex min-w-0 flex-1 items-center gap-1">
+              送り先
+              <select className="input min-w-0 flex-1" value={roomId} onChange={(e) => setRoomId(e.target.value)}>
+                {d.rooms.map((r) => (
+                  <option key={r.roomId} value={r.roomId}>
+                    {r.name}
+                    {ROOM_KIND_LABEL[r.kind] ? `（${ROOM_KIND_LABEL[r.kind]}）` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <input className="input min-w-0 flex-1" value={instruction} onChange={(e) => setInstruction(e.target.value)} placeholder="AI への指示（例: 査定書が届いているか確認してほしい）" />
+            <button className="btn btn-sm" onClick={() => draft.mutate()} disabled={draft.isPending}>
+              {draft.isPending ? '作成中…' : 'AI で下書き'}
+            </button>
+          </div>
+          <textarea className="input min-h-24" value={text} onChange={(e) => setText(e.target.value)} placeholder="確認したいこと（例: 先週お送りした査定書が届いているか、依頼者に確認をお願いします）" />
+          <DraftHint handle={askDraft} />
+          <div className="flex flex-wrap items-center gap-3 text-xs">
+            <label className="flex items-center gap-1">
+              <input type="checkbox" checked={quote} onChange={(e) => setQuote(e.target.checked)} /> 届いた連絡を引用する
+            </label>
+            <label className="flex items-center gap-1">
+              <input type="checkbox" checked={asTask} onChange={(e) => setAsTask(e.target.checked)} /> Chatwork のタスクとして送る
+            </label>
+            {(asTask || waiting) && (
+              <label className="flex items-center gap-1">
+                期限 <input type="date" className="input w-auto py-0.5" value={due} onChange={(e) => setDue(e.target.value)} />
+              </label>
+            )}
+            <label className="flex items-center gap-1">
+              <input type="checkbox" checked={waiting} onChange={(e) => setWaiting(e.target.checked)} /> アプリにも「事務局の返事待ち」を作る
+            </label>
+            <button className="btn btn-primary btn-sm ml-auto" onClick={() => send.mutate()} disabled={!text.trim() || !roomId || send.isPending}>
+              {send.isPending ? '送信中…' : '事務局に送る'}
+            </button>
+          </div>
+          {msg && <div className={`fade-in text-xs ${msg.kind === 'ok' ? 'text-green-700' : 'text-red-600'}`}>{msg.text}</div>}
+          <div className="text-xs text-slate-400">送った内容は、その Chatwork ルームの会話にも控えとして残ります。</div>
+        </>
+      )}
+    </section>
+  );
 }
 
 function SchedulePanel({ conversationId, onText, onDone }: { conversationId: number; onText: (t: string) => void; onDone: () => void }) {
