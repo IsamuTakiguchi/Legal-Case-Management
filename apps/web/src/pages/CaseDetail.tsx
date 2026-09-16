@@ -66,6 +66,14 @@ export default function CaseDetail() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<'overview' | 'timeline' | 'creditors'>('overview');
   const d = useQuery({ queryKey: ['case', id], queryFn: () => api.get<CaseData>(`/cases/${id}`) });
+  // ダッシュボードの「最近の動き」から #note-ID で開かれたら、その記録まで運ぶ
+  const loaded = !!d.data;
+  useEffect(() => {
+    const hash = location.hash;
+    if (!loaded || !/^#note-\d+$/.test(hash)) return;
+    const t = setTimeout(() => document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80);
+    return () => clearTimeout(t);
+  }, [loaded]);
   // 期日の記録を保存した直後（または記録の「依頼者に期日連絡」）に開く連絡パネル
   const [noticeNoteId, setNoticeNoteId] = useState<number | null>(null);
   // 「予定」から選んだ、日程変更（リスケ）する予定
@@ -1202,7 +1210,7 @@ function NoteView({ n, onDeleted, onNotice }: { n: Note; onDeleted: () => void; 
   const [taskOpen, setTaskOpen] = useState(false);
   if (editing) {
     return (
-      <li className="rounded border border-blue-200 bg-blue-50/30 p-3 text-sm">
+      <li id={`note-${n.id}`} className="scroll-mt-20 rounded border border-blue-200 bg-blue-50/30 p-3 text-sm">
         <NoteEditor
           n={n}
           onSaved={() => {
@@ -1215,7 +1223,7 @@ function NoteView({ n, onDeleted, onNotice }: { n: Note; onDeleted: () => void; 
     );
   }
   return (
-    <li className="rounded border border-slate-100 p-3 text-sm">
+    <li id={`note-${n.id}`} className="scroll-mt-20 rounded border border-slate-100 p-3 text-sm target:border-blue-300 target:bg-blue-50/40">
       <div className="flex items-center gap-2">
         <span className="badge badge-gray">{CASE_NOTE_KIND_LABEL[n.kind as CaseNoteKind] ?? n.kind}</span>
         <span className="text-slate-500">{fmtDateTime(n.occurredAt)}</span>
