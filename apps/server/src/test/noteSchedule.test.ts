@@ -66,7 +66,7 @@ function seedNote(patch: Record<string, unknown> = {}) {
       gist: '次回の打合せ日程を相談した',
       theirSaid: ['来週の午後がよい'],
       ourSaid: ['候補を 3 つ出します'],
-      decisions: '次回打合せは来週の午後で調整',
+      decisions: ['次回打合せは来週の午後で調整'],
       nextActions: [{ title: '候補日を送る', due: null }],
       rawText: '来週の午後で、と本人の希望。',
       ...patch,
@@ -113,7 +113,7 @@ describe('記録から日程調整', () => {
   });
 
   it('日時が決まっている記録では候補を出さない', async () => {
-    const { note } = seedNote({ decisions: '次回期日は 10 月 11 日 13 時 30 分に決まった' });
+    const { note } = seedNote({ decisions: ['次回期日は 10 月 11 日 13 時 30 分に決まった'] });
     extracted = extraction({ found: false, content: '', quote: '', note: '日時は確定済み' });
     const r = await proposeScheduleFromNote(note.id);
     expect(r.found).toBe(false);

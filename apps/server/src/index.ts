@@ -17,6 +17,7 @@ import { inboxRoutes } from './routes/inbox.js';
 import { clientRoutes } from './routes/clients.js';
 import { taskRoutes } from './routes/tasks.js';
 import { schedulingRoutes } from './routes/scheduling.js';
+import { searchRoutes } from './routes/search.js';
 import { fileRoutes } from './routes/files.js';
 import { settingsRoutes } from './routes/settings.js';
 import { setupRoutes } from './routes/setup.js';
@@ -84,6 +85,7 @@ export function createApp() {
   api.route('/', clientRoutes);
   api.route('/', taskRoutes);
   api.route('/', schedulingRoutes);
+  api.route('/', searchRoutes);
   api.route('/', fileRoutes);
   api.route('/', settingsRoutes);
   api.route('/', setupRoutes);

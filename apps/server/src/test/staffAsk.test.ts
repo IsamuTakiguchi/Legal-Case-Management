@@ -135,7 +135,7 @@ describe('事件の記録を事務局に確認する', () => {
         gist: '査定書の受領を確認した',
         theirSaid: ['2 社のうち 1 社は届いた'],
         ourSaid: ['残り 1 社を待つ'],
-        decisions: '残り 1 社が届き次第、調停に提出する',
+        decisions: ['残り 1 社が届き次第、調停に提出する'],
         nextActions: [{ title: '残り 1 社の査定書を受領', due: '2027-09-08' }],
         rawText: '元メモ',
       })
@@ -165,6 +165,18 @@ describe('事件の記録を事務局に確認する', () => {
     // 返事待ちは会話ではなく事件に紐付く
     const task = db().select().from(schema.tasks).where(eq(schema.tasks.id, r.waitingTaskId!)).get()!;
     expect([task.caseId, task.clientId, task.conversationId, task.status]).toEqual([kase.id, client.id, null, 'waiting_other']);
+  });
+
+  it('決定事項が無い記録では「決定:」を出さない', async () => {
+    const { client, kase } = seed();
+    const note = db()
+      .insert(schema.caseNotes)
+      .values({ caseId: kase.id, clientId: client.id, kind: 'memo', occurredAt: '2027-09-01T01:00:00.000Z', gist: '中身だけの記録' })
+      .returning()
+      .get();
+    const ctx = await staffAskContext({ kind: 'note', noteId: note.id });
+    expect(ctx.subject!.body).toBe('中身だけの記録');
+    expect(ctx.subject!.body).not.toContain('決定:');
   });
 
   it('引用を外すと記録の中身は載せない', async () => {

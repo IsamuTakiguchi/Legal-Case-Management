@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 /** SF Symbols 風の線画アイコン（絵文字を使わず、太さと角丸を揃える） */
 export type IconName = 'home' | 'inbox' | 'calendar' | 'person' | 'scale' | 'check' | 'bell' | 'clip' | 'doc' | 'plug' | 'gear' | 'menu'
-  | 'close' | 'refresh' | 'mail' | 'clock' | 'alert' | 'chat';
+  | 'close' | 'refresh' | 'mail' | 'clock' | 'alert' | 'chat' | 'search';
 
 const PATHS: Record<IconName, ReactNode> = {
   home: (
@@ -97,6 +97,12 @@ const PATHS: Record<IconName, ReactNode> = {
     </>
   ),
   chat: <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 3.5V16A2.5 2.5 0 0 1 4 13.5v-7Z" />,
+  search: (
+    <>
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="m16 16 4.5 4.5" />
+    </>
+  ),
 };
 
 export function Icon({ name, className = 'h-5 w-5', strokeWidth = 1.75 }: { name: IconName; className?: string; strokeWidth?: number }) {

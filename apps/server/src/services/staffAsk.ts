@@ -66,7 +66,7 @@ function noteBody(n: typeof schema.caseNotes.$inferSelect): string {
   else if (n.rawText) parts.push(n.rawText);
   if (n.theirSaid.length) parts.push(`${n.counterpart ?? '相手'}: ${n.theirSaid.join(' / ')}`);
   if (n.ourSaid.length) parts.push(`こちら: ${n.ourSaid.join(' / ')}`);
-  if (n.decisions) parts.push(`決定: ${n.decisions}`);
+  if (n.decisions.length) parts.push(`決定: ${n.decisions.join(' / ')}`);
   if (n.nextActions.length) parts.push(`次のアクション: ${n.nextActions.map((a) => `${a.title}${a.due ? `（${a.due}）` : ''}`).join(' / ')}`);
   return excerpt(parts.join('\n'));
 }
