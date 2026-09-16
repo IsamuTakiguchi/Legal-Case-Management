@@ -15,6 +15,7 @@ import ClientDetail from './pages/ClientDetail';
 import Cases from './pages/Cases';
 import CaseDetail from './pages/CaseDetail';
 import Forms from './pages/Forms';
+import Search from './pages/Search';
 import Tasks from './pages/Tasks';
 import Alerts from './pages/Alerts';
 import Files from './pages/Files';
@@ -38,6 +39,7 @@ function navBadge(to: string, c: NavCounts): { n: number; tone: 'blue' | 'gray' 
 const NAV: { to: string; label: string; icon: IconName }[] = [
   { to: '/', label: 'ダッシュボード', icon: 'home' },
   { to: '/inbox', label: '受信箱', icon: 'inbox' },
+  { to: '/search', label: 'AI 検索', icon: 'search' },
   { to: '/calendar', label: '予定', icon: 'calendar' },
   { to: '/clients', label: '依頼者', icon: 'person' },
   { to: '/cases', label: '事件', icon: 'scale' },
@@ -97,6 +99,7 @@ export default function App() {
             <Route path="/cases" element={<Cases />} />
             <Route path="/cases/:id" element={<CaseDetail />} />
             <Route path="/forms" element={<Forms />} />
+            <Route path="/search" element={<Search />} />
             <Route path="/tasks" element={<Tasks />} />
             <Route path="/alerts" element={<Alerts />} />
             <Route path="/files" element={<Files />} />

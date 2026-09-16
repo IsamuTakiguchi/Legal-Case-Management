@@ -99,6 +99,20 @@ function ensureFts(s: Database.Database) {
       INSERT INTO form_templates_fts(rowid, name, extracted_text) VALUES (new.id, new.name, new.extracted_text);
     END;
 
+    CREATE VIRTUAL TABLE IF NOT EXISTS case_notes_fts USING fts5(
+      gist, raw_text, decisions, content='case_notes', content_rowid='id', tokenize='trigram'
+    );
+    CREATE TRIGGER IF NOT EXISTS case_notes_ai AFTER INSERT ON case_notes BEGIN
+      INSERT INTO case_notes_fts(rowid, gist, raw_text, decisions) VALUES (new.id, new.gist, new.raw_text, new.decisions);
+    END;
+    CREATE TRIGGER IF NOT EXISTS case_notes_ad AFTER DELETE ON case_notes BEGIN
+      INSERT INTO case_notes_fts(case_notes_fts, rowid, gist, raw_text, decisions) VALUES ('delete', old.id, old.gist, old.raw_text, old.decisions);
+    END;
+    CREATE TRIGGER IF NOT EXISTS case_notes_au AFTER UPDATE ON case_notes BEGIN
+      INSERT INTO case_notes_fts(case_notes_fts, rowid, gist, raw_text, decisions) VALUES ('delete', old.id, old.gist, old.raw_text, old.decisions);
+      INSERT INTO case_notes_fts(rowid, gist, raw_text, decisions) VALUES (new.id, new.gist, new.raw_text, new.decisions);
+    END;
+
     CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
       body, content='messages', content_rowid='id', tokenize='trigram'
     );
@@ -109,6 +123,16 @@ function ensureFts(s: Database.Database) {
       INSERT INTO messages_fts(messages_fts, rowid, body) VALUES ('delete', old.id, old.body);
     END;
   `);
+  // 索引をあとから足したときは、すでにある記録も検索できるように作り直す
+  // （トリガーはこれ以降の書き込みにしか効かないため）
+  const notes = (s.prepare('SELECT COUNT(*) AS c FROM case_notes').get() as { c: number }).c;
+  if (notes > 0) {
+    const indexed = (s.prepare('SELECT COUNT(*) AS c FROM case_notes_fts').get() as { c: number }).c;
+    if (indexed === 0) {
+      s.exec(`INSERT INTO case_notes_fts(case_notes_fts) VALUES ('rebuild')`);
+      logger.info({ notes }, '記録の全文検索の索引を作りました');
+    }
+  }
 }
 
 function seedDefaults(s: Database.Database) {

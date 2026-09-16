@@ -73,7 +73,7 @@ function noteText(n: typeof schema.caseNotes.$inferSelect): string {
   if (n.gist) parts.push(`要旨: ${n.gist}`);
   if (n.theirSaid.length) parts.push(`相手が言ったこと:\n${n.theirSaid.map((t) => `・${t}`).join('\n')}`);
   if (n.ourSaid.length) parts.push(`こちらが言ったこと:\n${n.ourSaid.map((t) => `・${t}`).join('\n')}`);
-  if (n.decisions) parts.push(`決定事項: ${n.decisions}`);
+  if (n.decisions.length) parts.push(`決定事項: ${n.decisions.join(' / ')}`);
   if (n.nextActions.length) parts.push(`次のアクション:\n${n.nextActions.map((a) => `・${a.title}${a.due ? `（${a.due} まで）` : ''}`).join('\n')}`);
   if (n.rawText) parts.push(`元メモ:\n${n.rawText.slice(0, 3000)}`);
   return parts.join('\n');
