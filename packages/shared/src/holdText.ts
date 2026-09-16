@@ -37,7 +37,11 @@ function parseTime(s: string): number | null {
 
 const TIME = '\\d{1,2}(?::\\d{1,2}|時(?:\\d{1,2}分?|半)?)?';
 const RANGE_RE = new RegExp(`(${TIME})\\s*~\\s*(${TIME})`, 'g');
-const SINGLE_RE = new RegExp(`(?:^|\\s)(${TIME})(?=\\s|$)`, 'g');
+// 「10:00-」「10:00（WEB）」のように後ろに何か続いても読めるよう、
+// 「時刻の続き（数字・:・時・分・半）でなければよい」という見方にする
+const SINGLE_RE = new RegExp(`(?:^|\\s)(${TIME})(?![\\d:時分半])`, 'g');
+/** 「~12:00」のように終了だけ書かれている（開始が無い）行 */
+const OPEN_START_RE = new RegExp(`~\\s*${TIME}`);
 const DATE_RE = /(?:(\d{4})[\/年])?(\d{1,2})[\/月](\d{1,2})日?/;
 
 /**
@@ -95,7 +99,8 @@ export function parseHoldText(text: string, opts: { now?: Date; defaultMinutes?:
       found.push({ start: s, end: null });
     }
     if (found.length === 0) {
-      errors.push(`時刻が読めません: ${rawLine.trim()}`);
+      // 「〜12:00」は「12 時まで」の意味で、開始が分からないため候補にできない
+      errors.push(OPEN_START_RE.test(consumed) ? `開始の時刻がありません（「10:00〜12:00」のように書いてください）: ${rawLine.trim()}` : `時刻が読めません: ${rawLine.trim()}`);
       continue;
     }
     for (const f of found.sort((a, b) => a.start - b.start)) {
