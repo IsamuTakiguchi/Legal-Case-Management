@@ -617,7 +617,9 @@ export default function Conversation() {
           )}
           {showStaffAsk && <StaffAskPanel base={`/conversations/${c.id}`} draftKey={`conv:${c.id}`} onClose={() => setShowStaffAsk(false)} onSent={invalidate} />}
           {showSchedule && <SchedulePanel conversationId={c.id} onText={(t) => setText((prev) => (prev ? `${prev}\n\n${t}` : t))} onDone={invalidate} />}
-          {showExtract && <ExtractSchedulePanel conversationId={c.id} cases={c.cases} onDone={invalidate} />}
+          {showExtract && (
+            <ExtractSchedulePanel conversationId={c.id} cases={c.cases} onText={(t) => setText((prev) => (prev ? `${prev}\n\n${t}` : t))} onDone={invalidate} />
+          )}
         </div>
       </div>
 
@@ -1129,10 +1131,14 @@ interface Extracted {
   clientName: string | null;
   counterpartName: string;
   title: string;
+  /** いま使える WEB 会議の提供元 */
+  webProvider: 'zoom' | 'meet' | 'none';
 }
 
+const WEB_PROVIDER_LABEL: Record<'zoom' | 'meet' | 'none', string> = { zoom: 'Zoom', meet: 'Google Meet', none: '（未設定）' };
+
 /** 会話のやり取りから日程を読み取り、確認してカレンダーに登録 */
-function ExtractSchedulePanel({ conversationId, cases, onDone }: { conversationId: number; cases: { id: number; title: string }[]; onDone: () => void }) {
+function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conversationId: number; cases: { id: number; title: string }[]; onText: (t: string) => void; onDone: () => void }) {
   const [res, setRes] = useState<Extracted | null>(null);
   const [mode, setMode] = useState<'confirmed' | 'holds'>('confirmed');
   const [title, setTitle] = useState('');
@@ -1141,6 +1147,8 @@ function ExtractSchedulePanel({ conversationId, cases, onDone }: { conversationI
   const [location, setLocation] = useState('');
   const [caseId, setCaseId] = useState('');
   const [slots, setSlots] = useState<{ start: string; quote?: string; timeKnown?: boolean }[]>([]);
+  const [web, setWeb] = useState(false);
+  const [webText, setWebText] = useState('');
   const [err, setErr] = useState('');
   const [done, setDone] = useState('');
   const extract = useMutation({
@@ -1153,7 +1161,9 @@ function ExtractSchedulePanel({ conversationId, cases, onDone }: { conversationI
       setTitle(r.title);
       setKind(r.kind);
       setDuration(r.durationMinutes);
-      setLocation(r.location ?? (r.web ? 'WEB会議' : ''));
+      setWeb(r.web);
+      setWebText('');
+      setLocation(r.web ? (r.location ?? '') : (r.location ?? ''));
       setCaseId(cases[0] ? String(cases[0].id) : '');
       setSlots(r.slots.map((s) => ({ start: toLocalInput(s.startAt), quote: s.quote, timeKnown: s.timeKnown })));
     },
@@ -1161,19 +1171,20 @@ function ExtractSchedulePanel({ conversationId, cases, onDone }: { conversationI
       // AI が使えないときも手入力で登録できるように空の結果を出す
       setErr(`読み取りに失敗しました: ${(e as Error).message}`);
       if (!res) {
-        setRes({ status: 'none', content: '打合せ', kind: 'meeting', web: false, durationMinutes: 60, location: null, slots: [], note: '', clientId: null, clientName: null, counterpartName: '', title: '' });
+        setRes({ status: 'none', content: '打合せ', kind: 'meeting', web: false, durationMinutes: 60, location: null, slots: [], note: '', clientId: null, clientName: null, counterpartName: '', title: '', webProvider: 'none' });
         setSlots([{ start: todayLocalInput(10) }]);
       }
     },
   });
   const register = useMutation({
     mutationFn: () =>
-      api.post<{ mode: string; events: { id: number }[] }>(`/conversations/${conversationId}/schedule/register`, {
+      api.post<{ mode: string; events: { id: number }[]; webText: string }>(`/conversations/${conversationId}/schedule/register`, {
         mode,
         title: mode === 'holds' ? title.replace(/\s*仮$/, '') : title,
         kind,
         caseId: caseId ? Number(caseId) : null,
         location: location || null,
+        web,
         slots: (mode === 'confirmed' ? slots.slice(0, 1) : slots)
           .filter((s) => s.start)
           .map((s) => {
@@ -1182,7 +1193,12 @@ function ExtractSchedulePanel({ conversationId, cases, onDone }: { conversationI
           }),
       }),
     onSuccess: (r) => {
-      setDone(r.mode === 'confirmed' ? 'カレンダーに登録しました' : `${r.events.length} 件を仮押さえしました。確定したら「予定」画面の「この候補で確定」を押してください`);
+      setWebText(r.webText ?? '');
+      setDone(
+        r.mode === 'confirmed'
+          ? 'カレンダーに登録しました'
+          : `${r.events.length} 件を仮押さえしました。確定したら「予定」画面の「この候補で確定」を押してください${web ? '（そのときに会議 URL を発行します）' : ''}`,
+      );
       setErr('');
       onDone();
     },
@@ -1208,6 +1224,15 @@ function ExtractSchedulePanel({ conversationId, cases, onDone }: { conversationI
           <Link to="/calendar" className="text-blue-700 underline">
             予定を開く
           </Link>
+        </div>
+      )}
+      {done && webText && (
+        <div className="mb-2 rounded border border-blue-200 bg-blue-50 p-2">
+          <div className="mb-1 text-xs font-medium text-blue-900">会議 URL を発行しました（予定の説明欄にも入れました）</div>
+          <pre className="whitespace-pre-wrap break-all font-mono text-xs text-slate-700">{webText}</pre>
+          <button type="button" className="btn btn-sm mt-2" onClick={() => onText(webText)}>
+            返信欄に入れる
+          </button>
         </div>
       )}
       {res && !done && (
@@ -1244,7 +1269,22 @@ function ExtractSchedulePanel({ conversationId, cases, onDone }: { conversationI
             </div>
             <div>
               <label className="label">場所</label>
-              <input className="input" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="事務所 / Zoom など" />
+              <input className="input" value={location} onChange={(e) => setLocation(e.target.value)} placeholder={web ? WEB_PROVIDER_LABEL[res.webProvider] : '事務所 など'} />
+            </div>
+            <div className="md:col-span-2">
+              <label className="flex flex-wrap items-center gap-2 text-sm">
+                <input type="checkbox" checked={web} onChange={(e) => setWeb(e.target.checked)} />
+                WEB 会議で行う（{WEB_PROVIDER_LABEL[res.webProvider]} の URL を発行する）
+              </label>
+              {web && (
+                <p className="mt-1 text-xs text-slate-500">
+                  {res.webProvider === 'none'
+                    ? 'Zoom も Google Meet も使えない設定です。初期設定で Zoom を登録するか、Google に接続すると URL を自動で発行します。いまは場所に「WEB会議」とだけ入ります。'
+                    : mode === 'confirmed'
+                      ? `登録と同時に ${WEB_PROVIDER_LABEL[res.webProvider]} の会議を作り、予定の説明欄に URL を入れます。登録後にこの画面から返信欄へ貼り付けられます。`
+                      : `候補の段階では会議を作りません。「この候補で確定」を押したときに ${WEB_PROVIDER_LABEL[res.webProvider]} の会議を 1 つだけ作ります。`}
+                </p>
+              )}
             </div>
             {cases.length > 0 && (
               <div>

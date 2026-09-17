@@ -1,0 +1,1 @@
+ALTER TABLE `scheduling_sessions` ADD `web` integer DEFAULT false NOT NULL;

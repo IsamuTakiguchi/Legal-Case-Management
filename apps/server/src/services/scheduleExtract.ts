@@ -5,6 +5,7 @@ import { generateStructured } from '../integrations/anthropic.js';
 import { familyName, formatJaDateTime, toJstParts, OPEN_CASE_STATUSES, type EventKind } from '@lcm/shared';
 import { createCalendarEvent, createHoldSet } from './court.js';
 import { getSetting, businessHours, fmtHm } from './settings.js';
+import { issueZoomIfNeeded, webLocation, webMeetingProvider, webMeetingText } from './webMeeting.js';
 
 /**
  * 会話（LINE / Chatwork / Gmail）の日程調整のやり取りを読み取り、
@@ -97,6 +98,8 @@ export async function extractScheduleFromConversation(conversationId: number, op
     clientId: conv.clientId,
     clientName: client?.name ?? null,
     counterpartName,
+    /** いま使える WEB 会議の提供元（zoom / meet / none）。画面の案内に使う */
+    webProvider: webMeetingProvider(),
     /** 登録時の件名（確定用） */
     title: `${counterpartName} ${content}`.trim(),
     summary: slots.length ? slots.map((s) => `${formatJaDateTime(new Date(s.startAt))}〜`).join(' / ') : '',
@@ -214,6 +217,8 @@ export interface RegisterScheduleInput {
   location?: string | null;
   description?: string | null;
   caseId?: number | null;
+  /** WEB 会議で行う。確定なら Zoom / Meet をその場で発行し、仮押さえなら確定時に発行する */
+  web?: boolean;
 }
 
 /** 抽出結果（ユーザーが確認・修正したもの）をカレンダーへ登録 */
@@ -229,9 +234,14 @@ export async function registerScheduleFromConversation(conversationId: number, i
     const open = d.select().from(schema.cases).where(and(eq(schema.cases.clientId, client.id), inArray(schema.cases.status, OPEN_CASE_STATUSES))).all();
     caseId = open.sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9))[0]?.id ?? null;
   }
-  const description = [input.description ?? '', `会話から登録（受信箱 #${conversationId}）`].filter(Boolean).join('\n');
+  const baseDescription = [input.description ?? '', `会話から登録（受信箱 #${conversationId}）`].filter(Boolean).join('\n');
+  const provider = input.web ? webMeetingProvider() : 'none';
   if (input.mode === 'confirmed') {
     const sl = input.slots[0];
+    const minutes = Math.max(15, Math.round((new Date(sl.endAt).getTime() - new Date(sl.startAt).getTime()) / 60_000));
+    // Zoom はここで発行する。Google Meet は予定を作るときに Google 側が発行する
+    const zoom = await issueZoomIfNeeded(provider, { topic: input.title, startAt: new Date(sl.startAt), durationMinutes: minutes });
+    const zoomText = webMeetingText(zoom);
     const row = await createCalendarEvent({
       title: input.title,
       startAt: sl.startAt,
@@ -239,10 +249,12 @@ export async function registerScheduleFromConversation(conversationId: number, i
       kind: input.kind === 'hold' ? 'meeting' : input.kind,
       clientId: client?.id ?? null,
       caseId,
-      location: input.location ?? null,
-      description,
+      location: input.web ? webLocation(provider, input.location) : (input.location ?? null),
+      description: [zoomText, baseDescription].filter(Boolean).join('\n'),
+      meet: provider === 'meet',
     });
-    return { mode: 'confirmed' as const, events: [row] };
+    const web = zoom ?? (row.meetUrl ? { provider: 'meet' as const, url: row.meetUrl, password: '', id: null } : null);
+    return { mode: 'confirmed' as const, events: [row], web, webText: webMeetingText(web) };
   }
   const who = client ? familyName(client.name) : familyName(conv.counterpartName ?? '');
   const content = input.title.replace(new RegExp(`^${who.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`), '').replace(/\s*仮$/, '').trim() || input.title;
@@ -253,8 +265,10 @@ export async function registerScheduleFromConversation(conversationId: number, i
     caseId,
     counterpartName: client ? null : who,
     location: input.location ?? null,
-    description,
+    description: baseDescription,
     slots: input.slots,
+    web: input.web ?? false,
   });
-  return { mode: 'holds' as const, sessionId: r.sessionId, events: r.events };
+  // 仮押さえの段階では会議 URL を作らない（どれか 1 つに確定したときに発行する）
+  return { mode: 'holds' as const, sessionId: r.sessionId, events: r.events, web: null, webText: '' };
 }

@@ -461,10 +461,10 @@ function CaseHolds({
   };
   const fail = (e: unknown) => setMsg({ kind: 'err', text: (e as Error).message });
   const confirmHold = useMutation({
-    mutationFn: (v: { sessionId: number; eventId: number }) => api.post(`/calendar/holds/${v.sessionId}/confirm`, { eventId: v.eventId }),
-    onSuccess: () => {
+    mutationFn: (v: { sessionId: number; eventId: number }) => api.post<{ webText?: string }>(`/calendar/holds/${v.sessionId}/confirm`, { eventId: v.eventId }),
+    onSuccess: (r) => {
       refresh();
-      setMsg({ kind: 'ok', text: '確定しました。ほかの候補の仮押さえは削除しました' });
+      setMsg({ kind: 'ok', text: `確定しました。ほかの候補の仮押さえは削除しました${r.webText ? `\n${r.webText}` : ''}` });
     },
     onError: fail,
   });
@@ -499,7 +499,7 @@ function CaseHolds({
           予定を見る
         </Link>
       </div>
-      {msg && <div className={`fade-in rounded-md px-3 py-2 text-sm ${msg.kind === 'ok' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700'}`}>{msg.text}</div>}
+      {msg && <div className={`fade-in whitespace-pre-wrap break-words rounded-md px-3 py-2 text-sm ${msg.kind === 'ok' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700'}`}>{msg.text}</div>}
       {reschedule && (
         <HoldForm
           defaultDay={new Date(new Date(reschedule.startAt).getTime() + 9 * 3600_000).toISOString().slice(0, 10)}
