@@ -75,6 +75,10 @@ http://www.noboriohji.com/access/`,
   hold_proposal_slot_format: '{M}/{D} {start}-',
   /** ホーム画面・タスクバーのアイコンに出す件数: inbox_unread（未読）| inbox（未返信）| inbox_alerts（未返信＋要確認）| off */
   app_badge_source: 'inbox',
+  /** 受信したらすぐ端末に知らせる（Web Push）: 1 = 知らせる / 0 = 知らせない */
+  push_inbound: '1',
+  /** 通知の送信元として登録する連絡先（配信元に障害があったときの連絡先。外部には表示されない） */
+  vapid_contact_email: 'takiguchi@noborilaw.com',
 };
 
 const cache = new Map<string, string>();

@@ -1,5 +1,5 @@
 /* 最小限のサービスワーカー。画面の骨格だけをキャッシュし、API は常にネットワークへ */
-const VERSION = 'lcm-shell-v7';
+const VERSION = 'lcm-shell-v8';
 const SHELL = ['/', '/manifest.json', '/theme-boot.js?v=1', '/icon-192.png'];
 
 self.addEventListener('install', (event) => {
@@ -38,5 +38,59 @@ self.addEventListener('fetch', (event) => {
         }
         return new Response('オフラインです。接続を確認してください。', { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
       }),
+  );
+});
+
+/* 受信があったときの通知（Web Push）。アプリを閉じていても届く */
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    data = { title: 'T-Lex', body: event.data ? event.data.text() : '' };
+  }
+  const title = data.title || 'T-Lex';
+  const options = {
+    body: data.body || '',
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    tag: data.tag || 'lcm',
+    renotify: true,
+    data: { url: data.url || '/' },
+  };
+  event.waitUntil(
+    (async () => {
+      await self.registration.showNotification(title, options);
+      // アイコンの数字も合わせて更新する
+      if (typeof data.badge === 'number' && self.navigator && self.navigator.setAppBadge) {
+        try {
+          if (data.badge > 0) await self.navigator.setAppBadge(data.badge);
+          else await self.navigator.clearAppBadge();
+        } catch {
+          /* 未対応・未許可のときは何もしない */
+        }
+      }
+      // 開いている画面には件数を取り直させる
+      const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const c of clients) c.postMessage({ type: 'inbound' });
+    })(),
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || '/';
+  event.waitUntil(
+    (async () => {
+      const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const c of clients) {
+        if (new URL(c.url).origin === self.location.origin) {
+          await c.focus();
+          c.postMessage({ type: 'navigate', url });
+          return;
+        }
+      }
+      await self.clients.openWindow(url);
+    })(),
   );
 });

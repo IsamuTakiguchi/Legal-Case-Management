@@ -1,4 +1,4 @@
-import { Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
+import { Routes, Route, NavLink, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './lib/api';
@@ -56,6 +56,7 @@ const NAV: { to: string; label: string; icon: IconName }[] = [
 
 export default function App() {
   const loc = useLocation();
+  useServiceWorkerMessages();
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.get<{ authenticated: boolean }>('/auth/me'), retry: false });
   // メニューの件数（受信箱の要返信・未完了タスク・要確認）
   const counts = useQuery({ queryKey: ['nav-counts'], queryFn: () => api.get<NavCounts>('/nav-counts'), enabled: me.data?.authenticated === true, refetchInterval: 60_000 });
@@ -203,6 +204,33 @@ function useLiquidPill(axis: 'x' | 'y', inset: { x: number; y: number }) {
 /** 左メニュー。選択中のガラスの粒は、別の項目を選ぶと伸びながら滑って移動する */
 const SIDE_INSET = { x: 0, y: 0 };
 const TAB_INSET = { x: 8, y: 4 };
+
+/**
+ * サービスワーカーからの合図を受ける。
+ * inbound = 新しい受信があった → 件数と受信箱を取り直す
+ * navigate = 通知を押して開いた → その会話へ移動する
+ */
+function useServiceWorkerMessages() {
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+    const onMessage = (e: MessageEvent) => {
+      const data = e.data as { type?: string; url?: string } | null;
+      if (!data) return;
+      if (data.type === 'inbound') {
+        qc.invalidateQueries({ queryKey: ['nav-counts'] });
+        qc.invalidateQueries({ queryKey: ['conversations'] });
+        qc.invalidateQueries({ queryKey: ['dashboard'] });
+      } else if (data.type === 'navigate' && data.url) {
+        navigate(data.url);
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage);
+  }, [qc, navigate]);
+}
+
 function SideNav({ counts }: { counts: NavCounts }) {
   const pill = useLiquidPill('y', SIDE_INSET);
   return (

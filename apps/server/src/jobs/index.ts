@@ -78,7 +78,8 @@ export async function runJob(job: JobDef): Promise<{ ok: boolean; summary?: stri
 import { eq, lt } from 'drizzle-orm';
 
 export const JOBS: JobDef[] = [
-  { name: 'gmailPoll', label: 'Gmail 受信', cron: '*/2 * * * *', run: pollGmail, enabled: () => isGoogleConnected() },
+  // Gmail は毎分見に行く（LINE・Chatwork は webhook なので届いた時点で入る）
+  { name: 'gmailPoll', label: 'Gmail 受信', cron: '* * * * *', run: pollGmail, enabled: () => isGoogleConnected(), quiet: true },
   { name: 'chatworkPoll', label: 'Chatwork 受信（ポーリング）', cron: '*/5 * * * *', run: () => pollChatwork(), enabled: () => isConfigured('chatwork') },
   { name: 'calendarSync', label: 'カレンダー同期', cron: '*/15 * * * *', run: syncCalendar, enabled: () => isGoogleConnected() },
   { name: 'postEventCheck', label: '期日終了後の次回期日確認', cron: '5,20,35,50 * * * *', run: async () => ({ alerts: checkPostEvents() }), enabled: () => true },

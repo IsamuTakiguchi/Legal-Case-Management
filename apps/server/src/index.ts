@@ -20,6 +20,7 @@ import { schedulingRoutes } from './routes/scheduling.js';
 import { searchRoutes } from './routes/search.js';
 import { fileRoutes } from './routes/files.js';
 import { settingsRoutes } from './routes/settings.js';
+import { pushRoutes } from './routes/push.js';
 import { setupRoutes } from './routes/setup.js';
 import { applyCredentialOverrides } from './services/credentials.js';
 import { startJobs } from './jobs/index.js';
@@ -88,6 +89,7 @@ export function createApp() {
   api.route('/', searchRoutes);
   api.route('/', fileRoutes);
   api.route('/', settingsRoutes);
+  api.route('/', pushRoutes);
   api.route('/', setupRoutes);
   app.route('/api', api);
 

@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import { useDraft, useDraftRecord, DraftHint } from '../lib/draft';
 import { fmtDateTime } from '../lib/format';
 import { badgeSupported, notificationPermission, requestNotificationPermission } from '../lib/badge';
+import { disablePush, enablePush, isIos, isStandalone, pushState, type PushState } from '../lib/push';
 
 interface Status {
   publicBaseUrl: string;
@@ -179,6 +180,129 @@ function AppBadgeStatus({ source }: { source: string }) {
         </span>
       )}
     </div>
+  );
+}
+
+/**
+ * 受信があったらすぐ端末に知らせる（Web Push）。
+ * 端末ごとに許可が要るので、使う端末それぞれでこの画面から「この端末で受け取る」を押してもらう。
+ */
+function PushSection({ enabled, onChangeEnabled, onSave, saving }: { enabled: boolean; onChangeEnabled: (v: boolean) => void; onSave: () => void; saving: boolean }) {
+  const qc = useQueryClient();
+  const [state, setState] = useState<PushState | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const devices = useQuery({
+    queryKey: ['push-subscriptions'],
+    queryFn: () => api.get<{ id: number; label: string | null; createdAt: string; lastSuccessAt: string | null; lastErrorAt: string | null; lastError: string | null }[]>('/push/subscriptions'),
+  });
+  useEffect(() => {
+    void pushState().then(setState);
+  }, []);
+  const turnOn = async () => {
+    setBusy(true);
+    setMsg('');
+    try {
+      const next = await enablePush();
+      setState(next);
+      if (next === 'on') setMsg('この端末で受け取るようにしました。');
+      else if (next === 'denied') setMsg('通知が拒否されています。端末の「設定 → 通知」から許可してください。');
+      else setMsg('通知を受け取れませんでした。');
+      qc.invalidateQueries({ queryKey: ['push-subscriptions'] });
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const turnOff = async () => {
+    setBusy(true);
+    setMsg('');
+    try {
+      setState(await disablePush());
+      setMsg('この端末では受け取らないようにしました。');
+      qc.invalidateQueries({ queryKey: ['push-subscriptions'] });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const test = useMutation({
+    mutationFn: () => api.post<{ sent: number; removed: number; failed: number }>('/push/test'),
+    onSuccess: (r) => setMsg(r.sent ? `${r.sent} 台に送りました。数秒で届きます。` : '送り先の端末がまだありません。先に「この端末で受け取る」を押してください。'),
+    onError: (e) => setMsg((e as Error).message),
+  });
+  const needsHomeScreen = isIos() && !isStandalone();
+  return (
+    <section className="card">
+      <h2 className="mb-1 font-semibold">受信したらすぐ知らせる（通知）</h2>
+      <p className="mb-3 text-xs text-slate-500">
+        LINE・Chatwork・Gmail に連絡が届いたら、アプリを開いていなくても端末に通知を出します。相手の名前と本文の冒頭が出て、押すとその会話が開きます。
+      </p>
+      <label className="flex items-center gap-2 text-sm">
+        <input type="checkbox" checked={enabled} onChange={(e) => onChangeEnabled(e.target.checked)} />
+        受信したら通知する
+      </label>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button className="btn btn-primary" onClick={onSave} disabled={saving}>
+          保存
+        </button>
+      </div>
+
+      <div className="mt-4 border-t border-[var(--hairline)] pt-3">
+        <div className="mb-1 text-sm font-medium">いま使っている端末</div>
+        {needsHomeScreen ? (
+          <div className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            iPhone・iPad では、Safari で共有ボタン →「ホーム画面に追加」で入れたアプリからでないと通知を受け取れません。ホーム画面のアイコンから開き直して、この画面をもう一度開いてください。
+          </div>
+        ) : state === 'unsupported' ? (
+          <div className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">このブラウザは通知に対応していません。</div>
+        ) : state === 'denied' ? (
+          <div className="rounded-md bg-orange-50 px-3 py-2 text-xs text-orange-800">
+            通知が拒否されています。端末の「設定 → 通知」または、ブラウザのアドレス欄の鍵アイコンから許可してください。
+          </div>
+        ) : state === 'on' ? (
+          <div className="flex flex-wrap items-center gap-2 text-xs text-green-700">
+            <span>この端末は通知を受け取ります。</span>
+            <button type="button" className="btn btn-sm" onClick={turnOff} disabled={busy}>
+              受け取らない
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+            <span>この端末はまだ通知を受け取りません。</span>
+            <button type="button" className="btn btn-sm btn-primary" onClick={turnOn} disabled={busy}>
+              この端末で受け取る
+            </button>
+          </div>
+        )}
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <button type="button" className="btn btn-sm" onClick={() => test.mutate()} disabled={test.isPending}>
+            テスト送信
+          </button>
+          {msg && <span className="text-xs text-slate-600">{msg}</span>}
+        </div>
+      </div>
+
+      {(devices.data?.length ?? 0) > 0 && (
+        <div className="mt-4 border-t border-[var(--hairline)] pt-3">
+          <div className="mb-1 text-sm font-medium">通知を受け取る端末（{devices.data!.length} 台）</div>
+          <ul className="space-y-1 text-xs text-slate-600">
+            {devices.data!.map((d) => (
+              <li key={d.id} className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">{d.label ?? '端末'}</span>
+                <span className="text-slate-400">登録 {fmtDateTime(d.createdAt)}</span>
+                {d.lastSuccessAt && <span className="text-slate-400">最後に届いた {fmtDateTime(d.lastSuccessAt)}</span>}
+                {d.lastError && <span className="text-orange-700">エラー: {d.lastError}</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <p className="mt-3 text-xs text-slate-400">
+        端末ごとに許可が要ります。使う端末それぞれでこの画面を開いて「この端末で受け取る」を押してください。LINE・Chatwork は届いた時点で、Gmail は最大 1 分以内に通知します。
+      </p>
+    </section>
   );
 }
 
@@ -478,6 +602,13 @@ export default function Settings() {
 
       <StaffSection />
 
+      <PushSection
+        enabled={(form.push_inbound ?? '1') !== '0'}
+        onChangeEnabled={(v) => setForm({ ...form, push_inbound: v ? '1' : '0' })}
+        onSave={() => save.mutate()}
+        saving={save.isPending}
+      />
+
       <section className="card">
         <h2 className="mb-1 font-semibold">アプリのアイコンに出す件数（バッジ）</h2>
         <p className="mb-3 text-xs text-slate-500">
@@ -497,7 +628,7 @@ export default function Settings() {
           </button>
         </div>
         <p className="mt-2 text-xs text-slate-400">
-          iPhone・iPad は Safari の「ホーム画面に追加」で入れたアプリで、通知を許可したときだけ出ます。パソコンは Chrome / Edge でインストールしたときに出ます。アプリを完全に閉じている間は数が変わりません。
+          iPhone・iPad は Safari の「ホーム画面に追加」で入れたアプリで、通知を許可したときだけ出ます。パソコンは Chrome / Edge でインストールしたときに出ます。アプリを閉じている間も、上の通知を有効にしていれば連絡が届いたときに数が変わります。
         </p>
       </section>
 

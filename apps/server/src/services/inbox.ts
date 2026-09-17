@@ -12,6 +12,7 @@ import { findContactByIdentity, contactBriefs } from './contacts.js';
 import { maybeClassifyInBackground } from './caseClassify.js';
 import { getSetting } from './settings.js';
 import { NON_PRIMARY_CATEGORIES, type GmailCategory } from '../channels/gmail.js';
+import { queueInboundPush } from './push.js';
 
 export type ConversationRow = typeof schema.conversations.$inferSelect;
 export type MessageRow = typeof schema.messages.$inferSelect;
@@ -193,6 +194,14 @@ export async function ingestMessage(
       onInboundForTasks(conv.id, message);
     } catch (err) {
       logger.warn({ err }, '返信待ちタスクの更新に失敗');
+    }
+    // 端末へすぐ知らせる。過去分のさかのぼり取り込みは通知しない
+    if (!backfill) {
+      try {
+        queueInboundPush({ ...conv, ...patch } as ConversationRow, message);
+      } catch (err) {
+        logger.warn({ err }, '受信の通知の登録に失敗');
+      }
     }
   }
   // 依頼者に複数の事件があれば、どの事件の話かを裏で判定する（関係者・事務局の会話は対象外）
