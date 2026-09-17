@@ -71,6 +71,13 @@
       "when": 1789432699169,
       "tag": "0009_rainy_lenny_balinger",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1789611871151,
+      "tag": "0010_thin_deathbird",
+      "breakpoints": true
     }
   ]
 }

@@ -458,3 +458,18 @@ export const sessions = sqliteTable('sessions', {
   expiresAt: text('expires_at').notNull(),
   createdAt: text('created_at').notNull().default(now()),
 });
+
+/** 端末ごとの通知の宛先（Web Push の購読）。受信があったらここへ送る */
+export const pushSubscriptions = sqliteTable('push_subscriptions', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  endpoint: text('endpoint').notNull().unique(),
+  p256dh: text('p256dh').notNull(),
+  auth: text('auth').notNull(),
+  label: text('label'), // 端末の呼び名（iPhone など）
+  userAgent: text('user_agent'),
+  createdAt: text('created_at').notNull().default(now()),
+  lastSuccessAt: text('last_success_at'),
+  lastErrorAt: text('last_error_at'),
+  lastError: text('last_error'),
+  failCount: integer('fail_count').notNull().default(0),
+});
