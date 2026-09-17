@@ -73,6 +73,8 @@ http://www.noboriohji.com/access/`,
   hold_proposal_template: '{kind}の候補日ですが、\n{slots}\nでいかがでしょうか？',
   /** 候補 1 件の書き方。{M}=月 {D}=日 {wd}=曜日 {start}=開始 {end}=終了 */
   hold_proposal_slot_format: '{M}/{D} {start}-',
+  /** ホーム画面・タスクバーのアイコンに出す件数: inbox（受信箱の未返信）| inbox_alerts（＋要確認）| off */
+  app_badge_source: 'inbox',
 };
 
 const cache = new Map<string, string>();

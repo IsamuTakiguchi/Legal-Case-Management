@@ -4,6 +4,7 @@ import { AI_MODELS, aiModelLabel } from '@lcm/shared';
 import { api } from '../lib/api';
 import { useDraft, useDraftRecord, DraftHint } from '../lib/draft';
 import { fmtDateTime } from '../lib/format';
+import { badgeSupported, notificationPermission, requestNotificationPermission } from '../lib/badge';
 
 interface Status {
   publicBaseUrl: string;
@@ -71,6 +72,16 @@ const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean; 
     key: 'my_email_addresses',
     label: '自分のメールアドレス（別名・他アカウント、カンマ区切り）',
     hint: 'Gmail の送信者名に登録した別名や、事務所の別アドレスから送ったメールが「受信」として受信箱に入るのを防ぎます。Gmail のプロフィールと送信者名の別名は自動で判定に含めます',
+  },
+  {
+    key: 'app_badge_source',
+    label: 'アプリのアイコンに出す件数',
+    hint: 'ホーム画面・タスクバーのアイコンに、対応が要る件数を数字で出します。iPhone・iPad は「ホーム画面に追加」で入れたアプリで、通知を許可したときだけ出ます（下のボタンで許可できます）。パソコンは Chrome / Edge でインストールしたときに出ます。アプリを完全に閉じている間は数が変わりません',
+    options: [
+      { value: 'inbox', label: '受信箱の未返信だけ' },
+      { value: 'inbox_alerts', label: '受信箱の未返信＋要確認' },
+      { value: 'off', label: '表示しない' },
+    ],
   },
   { key: 'lawyer_name', label: '弁護士名' },
   { key: 'office_name', label: '事務所名' },
@@ -145,6 +156,40 @@ function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/**
+ * この端末でアイコンに数を出せるかを見せる。
+ * iPhone・iPad は通知の許可がないと数字が出ないので、その場で許可も取れるようにする。
+ */
+function AppBadgeStatus({ source }: { source: string }) {
+  const [perm, setPerm] = useState(notificationPermission());
+  const supported = badgeSupported();
+  if (source === 'off') return null;
+  const ask = async () => {
+    await requestNotificationPermission();
+    setPerm(notificationPermission());
+  };
+  return (
+    <div className="mt-2 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+      {!supported ? (
+        <span>
+          いま見ているブラウザではアイコンに数を出せません。iPhone・iPad は Safari の「ホーム画面に追加」、パソコンは Chrome / Edge の「インストール」で入れたアプリで出ます。
+        </span>
+      ) : perm === 'granted' ? (
+        <span className="text-green-700">この端末ではアイコンに数を出せます（通知は許可済み）。</span>
+      ) : perm === 'denied' ? (
+        <span className="text-orange-800">通知が拒否されているため、iPhone・iPad ではアイコンに数字が出ません。端末の「設定 → 通知」から許可してください（パソコンでは許可がなくても出ます）。</span>
+      ) : (
+        <span className="flex flex-wrap items-center gap-2">
+          iPhone・iPad でアイコンに数字を出すには、通知の許可が必要です。
+          <button type="button" className="btn btn-sm" onClick={ask}>
+            通知を許可する
+          </button>
+        </span>
+      )}
+    </div>
+  );
 }
 
 export default function Settings() {
@@ -433,6 +478,7 @@ export default function Settings() {
             </div>
           ))}
         </div>
+        <AppBadgeStatus source={form.app_badge_source ?? 'inbox'} />
         <div className="mt-3 flex items-center gap-2">
           <button className="btn btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>
             保存
