@@ -2,6 +2,7 @@ import { Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './lib/api';
+import { applyAppBadge, badgeCount, badgeSource } from './lib/badge';
 import { useTheme, THEME_CHOICES, THEME_LABEL } from './lib/theme';
 import { fmtDateTime } from './lib/format';
 import { Icon, type IconName } from './lib/icons';
@@ -60,6 +61,16 @@ export default function App() {
   // ブラウザのタブには「T-Lex — 事務所名」を出す（事務所名は設定から）
   const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.get<Record<string, string>>('/settings'), enabled: me.data?.authenticated === true, staleTime: 5 * 60_000 });
   const officeName = settings.data?.office_name?.trim();
+  // ホーム画面・タスクバーのアイコンにも件数を出す（対応している端末だけ）
+  const source = badgeSource(settings.data?.app_badge_source);
+  useEffect(() => {
+    if (me.data?.authenticated !== true) return;
+    applyAppBadge(badgeCount(nav, source));
+  }, [me.data?.authenticated, nav, source]);
+  useEffect(() => {
+    // ログアウトしたら数も消す
+    if (me.data?.authenticated === false) applyAppBadge(0);
+  }, [me.data?.authenticated]);
   useEffect(() => {
     document.title = officeName ? `T-Lex — ${officeName}` : 'T-Lex';
   }, [officeName]);
