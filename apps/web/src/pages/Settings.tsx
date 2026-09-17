@@ -73,17 +73,6 @@ const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean; 
     label: '自分のメールアドレス（別名・他アカウント、カンマ区切り）',
     hint: 'Gmail の送信者名に登録した別名や、事務所の別アドレスから送ったメールが「受信」として受信箱に入るのを防ぎます。Gmail のプロフィールと送信者名の別名は自動で判定に含めます',
   },
-  {
-    key: 'app_badge_source',
-    label: 'アプリのアイコンに出す件数',
-    hint: '「未読」はまだ開いていない会話の数（開くと消えます）。「未返信」は読んでいても、返していなければ残ります。iPhone・iPad は「ホーム画面に追加」で入れたアプリで、通知を許可したときだけ出ます（下のボタンで許可できます）。パソコンは Chrome / Edge でインストールしたときに出ます。アプリを完全に閉じている間は数が変わりません',
-    options: [
-      { value: 'inbox_unread', label: '受信箱の未読だけ' },
-      { value: 'inbox', label: '受信箱の未返信だけ' },
-      { value: 'inbox_alerts', label: '受信箱の未返信＋要確認' },
-      { value: 'off', label: '表示しない' },
-    ],
-  },
   { key: 'lawyer_name', label: '弁護士名' },
   { key: 'office_name', label: '事務所名' },
   { key: 'office_location', label: '事務所所在地（カレンダーの場所欄）' },
@@ -479,7 +468,6 @@ export default function Settings() {
             </div>
           ))}
         </div>
-        <AppBadgeStatus source={form.app_badge_source ?? 'inbox'} />
         <div className="mt-3 flex items-center gap-2">
           <button className="btn btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>
             保存
@@ -489,6 +477,29 @@ export default function Settings() {
       </section>
 
       <StaffSection />
+
+      <section className="card">
+        <h2 className="mb-1 font-semibold">アプリのアイコンに出す件数（バッジ）</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          ホーム画面・タスクバーのアイコンに、対応が要る件数を数字で出します。「未読」はまだ開いていない会話の数（開くと消えます）。「未返信」は読んでいても、返していなければ残ります。
+        </p>
+        <label className="label">出す件数</label>
+        <select className="input w-auto" value={form.app_badge_source ?? 'inbox'} onChange={(e) => setForm({ ...form, app_badge_source: e.target.value })}>
+          <option value="inbox_unread">受信箱の未読だけ</option>
+          <option value="inbox">受信箱の未返信だけ</option>
+          <option value="inbox_alerts">受信箱の未返信＋要確認</option>
+          <option value="off">表示しない</option>
+        </select>
+        <AppBadgeStatus source={form.app_badge_source ?? 'inbox'} />
+        <div className="mt-3 flex items-center gap-2">
+          <button className="btn btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>
+            保存
+          </button>
+        </div>
+        <p className="mt-2 text-xs text-slate-400">
+          iPhone・iPad は Safari の「ホーム画面に追加」で入れたアプリで、通知を許可したときだけ出ます。パソコンは Chrome / Edge でインストールしたときに出ます。アプリを完全に閉じている間は数が変わりません。
+        </p>
+      </section>
 
       <section className="card">
         <h2 className="mb-1 font-semibold">通知の文面</h2>
