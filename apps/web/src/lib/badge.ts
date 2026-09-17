@@ -8,17 +8,22 @@
  * - アプリを完全に閉じている間は数が更新されない（最後の数のまま残る）
  */
 
-/** アイコンに出す数の決め方 */
-export type BadgeSource = 'inbox' | 'inbox_alerts' | 'off';
-export const BADGE_SOURCES: BadgeSource[] = ['inbox', 'inbox_alerts', 'off'];
+/**
+ * アイコンに出す数の決め方。
+ * 未読 = まだ開いていない会話の数（開くと 0 になる）。
+ * 未返信 = 相手から届いていて、まだ返していない会話の数（読んでいても残る）。
+ */
+export type BadgeSource = 'inbox_unread' | 'inbox' | 'inbox_alerts' | 'off';
+export const BADGE_SOURCES: BadgeSource[] = ['inbox_unread', 'inbox', 'inbox_alerts', 'off'];
 export const BADGE_SOURCE_LABEL: Record<BadgeSource, string> = {
+  inbox_unread: '受信箱の未読だけ',
   inbox: '受信箱の未返信だけ',
   inbox_alerts: '受信箱の未返信＋要確認',
   off: '表示しない',
 };
 
 export function badgeSource(v: string | undefined | null): BadgeSource {
-  return v === 'inbox_alerts' || v === 'off' ? v : 'inbox';
+  return v === 'inbox_unread' || v === 'inbox_alerts' || v === 'off' ? v : 'inbox';
 }
 
 /** この端末・このブラウザでアイコンに数を出せるか */
@@ -43,8 +48,9 @@ export async function requestNotificationPermission(): Promise<NotificationPermi
 }
 
 /** 件数から、アイコンに出す数を決める */
-export function badgeCount(counts: { inbox: number; alerts: number }, source: BadgeSource): number {
+export function badgeCount(counts: { inbox: number; unread?: number; alerts: number }, source: BadgeSource): number {
   if (source === 'off') return 0;
+  if (source === 'inbox_unread') return counts.unread ?? 0;
   return source === 'inbox_alerts' ? counts.inbox + counts.alerts : counts.inbox;
 }
 

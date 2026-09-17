@@ -19,7 +19,7 @@ import { openAlerts } from '../services/alerts.js';
 import { listTasks } from '../services/tasks.js';
 import { todaysEvents } from '../services/court.js';
 import { db, schema } from '../db/index.js';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, gt } from 'drizzle-orm';
 import { runBackup, listLocalBackups, localBackupPath, remoteBackupFolder, lastBackupInfo, restoreBackup, restoreLocalBackup } from '../services/backup.js';
 import { seedDemoData, clearDemoData, demoStatus } from '../services/demo.js';
 import fs from 'node:fs';
@@ -212,9 +212,11 @@ settingsRoutes.get('/api-usage', (c) => {
 /** メニューに出す件数（受信箱の要返信・未完了タスク・要確認）。軽いので 1 分ごとに取得する */
 settingsRoutes.get('/nav-counts', (c) => c.json(navCounts()));
 
-export function navCounts(): { inbox: number; tasks: number; alerts: number } {
+export function navCounts(): { inbox: number; unread: number; tasks: number; alerts: number } {
   const inbox = db().select({ id: schema.conversations.id }).from(schema.conversations).where(and(eq(schema.conversations.needsReply, true), eq(schema.conversations.archived, false))).all().length;
+  // まだ開いていない会話の数（開くと 0 になる）。アイコンの数を「未読だけ」にするときに使う
+  const unread = db().select({ id: schema.conversations.id }).from(schema.conversations).where(and(gt(schema.conversations.unread, 0), eq(schema.conversations.archived, false))).all().length;
   const tasks = listTasks({ status: 'active' }).length;
   const alerts = openAlerts().length;
-  return { inbox, tasks, alerts };
+  return { inbox, unread, tasks, alerts };
 }

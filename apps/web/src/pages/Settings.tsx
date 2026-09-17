@@ -76,8 +76,9 @@ const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean; 
   {
     key: 'app_badge_source',
     label: 'アプリのアイコンに出す件数',
-    hint: 'ホーム画面・タスクバーのアイコンに、対応が要る件数を数字で出します。iPhone・iPad は「ホーム画面に追加」で入れたアプリで、通知を許可したときだけ出ます（下のボタンで許可できます）。パソコンは Chrome / Edge でインストールしたときに出ます。アプリを完全に閉じている間は数が変わりません',
+    hint: '「未読」はまだ開いていない会話の数（開くと消えます）。「未返信」は読んでいても、返していなければ残ります。iPhone・iPad は「ホーム画面に追加」で入れたアプリで、通知を許可したときだけ出ます（下のボタンで許可できます）。パソコンは Chrome / Edge でインストールしたときに出ます。アプリを完全に閉じている間は数が変わりません',
     options: [
+      { value: 'inbox_unread', label: '受信箱の未読だけ' },
       { value: 'inbox', label: '受信箱の未返信だけ' },
       { value: 'inbox_alerts', label: '受信箱の未返信＋要確認' },
       { value: 'off', label: '表示しない' },

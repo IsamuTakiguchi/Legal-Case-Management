@@ -1784,3 +1784,34 @@ describe('依頼者の統合', () => {
     expect(db().select().from(schema.clients).where(eq(schema.clients.id, keep.id)).get()).toBeTruthy();
   });
 });
+
+describe('メニュー・アイコンに出す件数', () => {
+  it('未読は「まだ開いていない会話」、未返信は「読んでいても返していない会話」を数える', async () => {
+    const { navCounts } = await import('../routes/settings.js');
+    const { db, schema } = await import('../db/index.js');
+    const { markRead } = await import('../services/inbox.js');
+
+    const base = navCounts();
+    const mk = (thread: string, patch: Record<string, unknown>) =>
+      db()
+        .insert(schema.conversations)
+        .values({ channel: 'gmail', externalThreadId: thread, counterpartName: '相手', lastMessageAt: '2027-09-01T01:00:00.000Z', ...patch })
+        .returning()
+        .get();
+
+    const unreadConv = mk('nc-1', { unread: 2, needsReply: true });
+    mk('nc-2', { unread: 0, needsReply: true }); // 読んだが返していない
+    mk('nc-3', { unread: 3, needsReply: true, archived: true }); // アーカイブ済みは数えない
+    mk('nc-4', { unread: 0, needsReply: false }); // 対応済み
+
+    const after = navCounts();
+    expect(after.unread - base.unread).toBe(1);
+    expect(after.inbox - base.inbox).toBe(2);
+
+    // 会話を開くと未読だけ減り、未返信は残る
+    markRead(unreadConv.id);
+    const opened = navCounts();
+    expect(opened.unread - base.unread).toBe(0);
+    expect(opened.inbox - base.inbox).toBe(2);
+  });
+});

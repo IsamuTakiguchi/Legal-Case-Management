@@ -25,10 +25,12 @@ import Setup from './pages/Setup';
 
 interface NavCounts {
   inbox: number;
+  /** まだ開いていない会話の数（アイコンの数を「未読だけ」にするときに使う） */
+  unread: number;
   tasks: number;
   alerts: number;
 }
-const EMPTY_COUNTS: NavCounts = { inbox: 0, tasks: 0, alerts: 0 };
+const EMPTY_COUNTS: NavCounts = { inbox: 0, unread: 0, tasks: 0, alerts: 0 };
 /** メニュー項目に出す件数と色（Chatwork のように、対応が要るものの数を出す） */
 function navBadge(to: string, c: NavCounts): { n: number; tone: 'blue' | 'gray' | 'orange' } | null {
   if (to === '/inbox') return c.inbox > 0 ? { n: c.inbox, tone: 'blue' } : null;
