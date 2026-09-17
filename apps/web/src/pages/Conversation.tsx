@@ -9,7 +9,7 @@ import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { channelBadge, channelLabel, fmtDateTime, fmtBytes, fromLocalInput, toLocalInput, todayLocalInput } from '../lib/format';
 import { Icon } from '../lib/icons';
 import { DeadlineEditor, WaitDeadlineSelect } from '../lib/Deadline';
-import { SCHEDULING_KINDS, EVENT_KIND_LABEL, type EventKind } from '@lcm/shared';
+import { SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply, type EventKind } from '@lcm/shared';
 
 interface Attachment {
   id: number;
@@ -398,7 +398,7 @@ export default function Conversation() {
                     ↩ {m.replyTo.direction === 'out' ? '自分' : (m.replyTo.senderName ?? name)}: {m.replyTo.excerpt}
                   </button>
                 )}
-                <div className="whitespace-pre-wrap break-words">{m.body}</div>
+                <MessageBody body={m.body} channel={c.channel} mine={m.direction === 'out'} />
                 <div className={`mt-1 flex flex-wrap gap-2 text-[11px] ${m.direction === 'out' ? 'text-blue-100' : 'text-slate-500'}`}>
                   {c.channel === 'chatwork' && (
                     <button type="button" className="hover:underline" onClick={() => setReplyTo(m)} title="このメッセージへの返信として送ります（Chatwork の返信タグ付き）">
@@ -1114,6 +1114,35 @@ function TaskMini({ conversationId, clientId }: { conversationId: number; client
           追加
         </button>
       </div>
+    </div>
+  );
+}
+
+
+/**
+ * メールの本文。返信に付いてくる過去のやり取りの引用は、既定で折りたたむ。
+ * 引用が見つからないときは、そのまま全部出す。
+ */
+function MessageBody({ body, channel, mine }: { body: string; channel: string; mine: boolean }) {
+  const [open, setOpen] = useState(false);
+  // 引用が付いてくるのはメールだけ。LINE・Chatwork は本文をそのまま出す
+  const { main, quoted } = useMemo(() => (channel === 'gmail' ? splitQuotedReply(body) : { main: body, quoted: '' }), [body, channel]);
+  if (!quoted) return <div className="whitespace-pre-wrap break-words">{body}</div>;
+  const quotedLines = quoted.split('\n').filter((l) => l.trim()).length;
+  return (
+    <div>
+      <div className="whitespace-pre-wrap break-words">{main}</div>
+      <button
+        type="button"
+        className={`mt-1 rounded-full px-2 py-0.5 text-[11px] ${mine ? 'bg-white/15 text-blue-100 hover:bg-white/25' : 'bg-slate-200/70 text-slate-600 hover:bg-slate-300/70'}`}
+        onClick={() => setOpen(!open)}
+        title={open ? '引用を隠します' : 'この返信に付いてきた、過去のやり取りを出します'}
+      >
+        {open ? '▾ 引用を隠す' : `▸ 引用された過去のやり取り（${quotedLines} 行）`}
+      </button>
+      {open && (
+        <div className={`mt-1 max-h-96 overflow-auto whitespace-pre-wrap break-words border-l-2 pl-2 text-xs ${mine ? 'border-blue-300 text-blue-100' : 'border-slate-300 text-slate-500'}`}>{quoted}</div>
+      )}
     </div>
   );
 }
