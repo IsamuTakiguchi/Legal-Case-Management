@@ -12,6 +12,7 @@ import { findContactByIdentity, contactBriefs } from './contacts.js';
 import { maybeClassifyInBackground } from './caseClassify.js';
 import { getSetting } from './settings.js';
 import { NON_PRIMARY_CATEGORIES, type GmailCategory } from '../channels/gmail.js';
+import { stripQuotedReply } from '@lcm/shared';
 import { queueInboundPush } from './push.js';
 
 export type ConversationRow = typeof schema.conversations.$inferSelect;
@@ -222,6 +223,12 @@ export async function ingestMessage(
   return { message, conversation: { ...conv, ...patch } as ConversationRow, isNew: true };
 }
 
+/** 一覧に出す抜粋。メールに付いてくる過去のやり取りの引用は落とす */
+function previewOf(last: MessageRow) {
+  const body = last.channel === 'gmail' ? stripQuotedReply(last.body) : last.body;
+  return { body: body.slice(0, 600), truncated: body.length > 600, direction: last.direction, sentAt: last.sentAt, senderName: last.senderName };
+}
+
 export function listConversations(filter: {
   clientId?: number;
   channel?: string;
@@ -299,7 +306,7 @@ export function listConversations(filter: {
       // LINE のグループ・複数人トーク（送り先がグループになる会話）
       lineGroup: r.channel === 'line' && isLineGroupThread(r.externalThreadId),
       client: r.clientId ? (byId.get(r.clientId) ?? null) : null,
-      lastMessage: last ? { body: last.body.slice(0, 600), truncated: last.body.length > 600, direction: last.direction, sentAt: last.sentAt, senderName: last.senderName } : null,
+      lastMessage: last ? previewOf(last) : null,
     };
   });
 }
