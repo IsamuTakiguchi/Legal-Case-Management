@@ -142,10 +142,10 @@ export default function Calendar() {
     onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
   });
   const confirmHold = useMutation({
-    mutationFn: (v: { sessionId: number; eventId: number }) => api.post(`/calendar/holds/${v.sessionId}/confirm`, { eventId: v.eventId }),
-    onSuccess: () => {
+    mutationFn: (v: { sessionId: number; eventId: number }) => api.post<{ webText?: string }>(`/calendar/holds/${v.sessionId}/confirm`, { eventId: v.eventId }),
+    onSuccess: (r) => {
       invalidate();
-      setMsg({ kind: 'ok', text: '確定しました。ほかの候補の仮押さえは削除しました' });
+      setMsg({ kind: 'ok', text: `確定しました。ほかの候補の仮押さえは削除しました${r.webText ? `\n${r.webText}` : ''}` });
     },
     onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
   });
@@ -222,7 +222,7 @@ export default function Calendar() {
           <span className="ml-auto text-xs text-slate-500">Google 未接続のため、ここで登録した予定はアプリ内だけに保存されます（初期設定で接続すると Google カレンダーにも登録されます）</span>
         )}
       </div>
-      {msg && <div className={`fade-in rounded-md px-3 py-2 text-sm ${msg.kind === 'ok' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700'}`}>{msg.text}</div>}
+      {msg && <div className={`fade-in whitespace-pre-wrap break-words rounded-md px-3 py-2 text-sm ${msg.kind === 'ok' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700'}`}>{msg.text}</div>}
 
       {holdOpen && (
         <HoldForm

@@ -9,6 +9,7 @@ import { upsertAlert, resolveAlertsByKeyPrefix } from './alerts.js';
 import { addBusinessDays, familyName, formatJaDateTime, isJstWeekend, jstDate, toJstParts, type ConfirmSlotInput, type ProposeSlotsInput, type SchedulePreferences } from '@lcm/shared';
 import { isConfigured } from '../config.js';
 import { isGoogleConnected } from '../integrations/google.js';
+import { webMeetingProvider } from './webMeeting.js';
 
 export type SchedulingRow = typeof schema.schedulingSessions.$inferSelect;
 
@@ -199,16 +200,6 @@ export async function proposeSlots(input: ProposeSlotsInput): Promise<{ session:
 }
 
 /** 確定: 他の仮押さえを削除し確定イベントを作成、WEB なら Zoom 発行 */
-/** WEB 会議の提供元: zoom（設定済み）> meet（Google 接続済み）> なし */
-export function webMeetingProvider(): 'zoom' | 'meet' | 'none' {
-  const pref = getSetting('web_meeting_provider'); // auto | zoom | meet
-  if (pref === 'zoom') return isConfigured('zoom') ? 'zoom' : 'none';
-  if (pref === 'meet') return isGoogleConnected() ? 'meet' : 'none';
-  if (isConfigured('zoom')) return 'zoom';
-  if (isGoogleConnected()) return 'meet';
-  return 'none';
-}
-
 export async function confirmSlot(input: ConfirmSlotInput): Promise<{ session: SchedulingRow; event: cal.CalendarEventSummary; zoom: { id: string; joinUrl: string; password: string } | null; text: string; meetUrl?: string | null }> {
   const session = db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, input.sessionId)).get();
   if (!session) throw new Error('日程調整セッションが見つかりません');

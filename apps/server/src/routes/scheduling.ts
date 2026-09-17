@@ -74,6 +74,7 @@ schedulingRoutes.post('/conversations/:id/schedule/register', async (c) => {
       location: z.string().nullable().optional(),
       description: z.string().nullable().optional(),
       caseId: z.number().int().nullable().optional(),
+      web: z.boolean().optional(),
     })
     .parse(await c.req.json());
   return c.json(await registerScheduleFromConversation(Number(c.req.param('id')), body));

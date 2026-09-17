@@ -290,6 +290,8 @@ export const schedulingSessions = sqliteTable('scheduling_sessions', {
   /** 日程変更（リスケ）のとき、元の予定の calendar_events.id。確定するとその予定は削除する */
   rescheduleEventId: integer('reschedule_event_id'),
   zoom: text('zoom', { mode: 'json' }).$type<{ id: string; joinUrl: string; password: string } | null>(),
+  /** WEB 会議で行う予定か。仮押さえを確定したときに Zoom / Meet を発行する */
+  web: integer('web', { mode: 'boolean' }).notNull().default(false),
   proposedAt: text('proposed_at'),
   createdAt: text('created_at').notNull().default(now()),
   updatedAt: text('updated_at').notNull().default(now()),

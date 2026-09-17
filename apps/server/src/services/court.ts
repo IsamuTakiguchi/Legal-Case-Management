@@ -10,6 +10,7 @@ import { joinPath } from '../integrations/onedrive.js';
 import { logger } from '../logger.js';
 import { randomUUID } from 'node:crypto';
 import { isGoogleConnected } from '../integrations/google.js';
+import { issueZoomIfNeeded, webLocation, webMeetingProvider, webMeetingText, type WebMeeting } from './webMeeting.js';
 
 /** Google カレンダーを同期し、種別と依頼者を推定してキャッシュ */
 export async function syncCalendar(): Promise<{ synced: number }> {
@@ -248,6 +249,8 @@ export interface CalendarEventInput {
   location?: string | null;
   description?: string | null;
   tentative?: boolean;
+  /** Google Meet の会議リンクを作る（Google 接続時のみ） */
+  meet?: boolean;
 }
 
 function assertRange(startAt: string, endAt: string) {
@@ -278,21 +281,26 @@ export async function createCalendarEvent(input: CalendarEventInput) {
   let googleEventId = `local-${randomUUID()}`;
   let startAt = s.toISOString();
   let endAt = e.toISOString();
+  let meetUrl: string | null = null;
+  let description = input.description ?? null;
   if (isGoogleConnected()) {
-    const ev = await cal.createEvent({ title, startAt: s, endAt: e, location: input.location ?? null, description: input.description ?? null, tentative: input.tentative, tag });
+    const ev = await cal.createEvent({ title, startAt: s, endAt: e, location: input.location ?? null, description, tentative: input.tentative, meet: input.meet, tag });
     googleEventId = ev.id;
     startAt = ev.startAt;
     endAt = ev.endAt;
+    meetUrl = ev.meetUrl ?? null;
+    // アプリの画面でも会議 URL が見えるように、説明欄の先頭に入れる
+    if (meetUrl) description = [`Google Meet: ${meetUrl}`, description].filter(Boolean).join('\n');
   }
   const row = db()
     .insert(schema.calendarEvents)
-    .values({ googleEventId, clientId: tag.clientId, caseId: tag.caseId, kind: input.kind, title, startAt, endAt, location: input.location ?? null, description: input.description ?? null, status: input.tentative ? 'tentative' : 'confirmed' })
+    .values({ googleEventId, clientId: tag.clientId, caseId: tag.caseId, kind: input.kind, title, startAt, endAt, location: input.location ?? null, description, status: input.tentative ? 'tentative' : 'confirmed' })
     .returning()
     .get();
   refreshNextHearing(tag.caseId);
   if (input.kind === 'hearing') resolveAlertsByKeyPrefix('next_hearing_missing:');
-  logger.info({ id: row.id, google: !isLocalEventId(googleEventId) }, '予定を登録しました');
-  return row;
+  logger.info({ id: row.id, google: !isLocalEventId(googleEventId), meet: !!meetUrl }, '予定を登録しました');
+  return { ...row, meetUrl };
 }
 
 export async function editCalendarEvent(id: number, patch: Partial<CalendarEventInput>) {
@@ -347,6 +355,8 @@ export interface HoldSetInput {
   rescheduleEventId?: number | null;
   /** 件名をそのまま使う（日程変更で元の予定の件名を引き継ぐとき）。姓は付け足さない */
   exactTitle?: string | null;
+  /** WEB 会議で行う。確定したときに Zoom / Google Meet を発行する */
+  web?: boolean;
 }
 
 function holdSetTitle(input: HoldSetInput, clientName: string | null): { hold: string; confirmed: string } {
@@ -367,7 +377,7 @@ export async function createHoldSet(input: HoldSetInput) {
   for (const sl of sorted) assertRange(sl.startAt, sl.endAt);
   const session = db()
     .insert(schema.schedulingSessions)
-    .values({ clientId: client?.id ?? null, conversationId: null, kind: input.kind === 'hearing' ? '期日' : input.kind === 'consult' ? '面談' : '打合せ', state: 'proposing', candidates: [], rescheduleEventId: input.rescheduleEventId ?? null, proposedAt: new Date().toISOString() })
+    .values({ clientId: client?.id ?? null, conversationId: null, kind: input.kind === 'hearing' ? '期日' : input.kind === 'consult' ? '面談' : '打合せ', state: 'proposing', candidates: [], rescheduleEventId: input.rescheduleEventId ?? null, web: input.web ?? false, proposedAt: new Date().toISOString() })
     .returning()
     .get();
   const candidates: { startAt: string; endAt: string; eventId?: string }[] = [];
@@ -381,8 +391,9 @@ export async function createHoldSet(input: HoldSetInput) {
         kind: 'hold',
         clientId: client?.id ?? null,
         caseId: input.caseId ?? null,
-        location: input.location ?? null,
-        description: [input.description ?? '', `日程調整中（アプリで管理: セッション ${session.id}）`].filter(Boolean).join('\n'),
+        location: input.web ? webLocation(webMeetingProvider(), input.location) : (input.location ?? null),
+        // 候補の段階では会議 URL を作らない（1 つに決まってから発行する）
+        description: [input.description ?? '', input.web ? 'WEB 会議（確定したときに会議 URL を発行します）' : '', `日程調整中（アプリで管理: セッション ${session.id}）`].filter(Boolean).join('\n'),
         tentative: true,
       });
       candidates.push({ startAt: row.startAt, endAt: row.endAt, eventId: row.googleEventId });
@@ -427,8 +438,27 @@ export async function confirmHold(sessionId: number, eventId: number) {
   const meta = holdMeta.get(sessionId);
   const kind: EventKind = (original?.kind as EventKind | undefined) ?? meta?.kind ?? (session.kind === '期日' ? 'hearing' : session.kind === '面談' || session.kind === 'WEB' ? 'consult' : 'meeting');
   const title = original?.title ?? meta?.confirmedTitle ?? chosen.title.replace(/\s*仮$/, '');
-  const description = (chosen.description ?? '').replace(/\n?日程調整中（アプリで管理: セッション \d+）/, '').trim() || null;
+  let description =
+    (chosen.description ?? '')
+      .replace(/\n?日程調整中（アプリで管理: セッション \d+）/, '')
+      .replace(/\n?WEB 会議（確定したときに会議 URL を発行します）/, '')
+      .trim() || null;
+  // WEB 会議の予定は、確定したこの 1 件についてだけ会議 URL を発行する
+  let web: WebMeeting | null = null;
+  if (session.web) {
+    const provider = webMeetingProvider();
+    web = await issueZoomIfNeeded(provider, { topic: title, startAt: new Date(chosen.startAt), durationMinutes: Math.max(15, Math.round((new Date(chosen.endAt).getTime() - new Date(chosen.startAt).getTime()) / 60_000)) });
+    if (provider === 'meet' && isGoogleConnected() && !isLocalEventId(chosen.googleEventId)) {
+      const ev = await cal.updateEvent(chosen.googleEventId, { meet: true });
+      if (ev?.meetUrl) web = { provider: 'meet', url: ev.meetUrl, password: '', id: null };
+    }
+    const text = webMeetingText(web);
+    if (text) description = [text, description].filter(Boolean).join('\n');
+  }
   const updated = await editCalendarEvent(chosen.id, { title, kind, tentative: false, description });
+  if (web?.provider === 'zoom' && web.id) {
+    db().update(schema.schedulingSessions).set({ zoom: { id: web.id, joinUrl: web.url ?? '', password: web.password } }).where(eq(schema.schedulingSessions.id, sessionId)).run();
+  }
   // 日程変更のときは、元の予定をここで削除する（新しい日時に置き換わる）
   if (original) {
     await removeCalendarEvent(original.id);
@@ -441,7 +471,7 @@ export async function confirmHold(sessionId: number, eventId: number) {
     .run();
   holdMeta.delete(sessionId);
   resolveAlertsByKeyPrefix(`scheduling_stale:${sessionId}`);
-  return updated;
+  return { ...updated, web, webText: webMeetingText(web) };
 }
 
 /**
