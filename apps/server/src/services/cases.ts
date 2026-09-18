@@ -467,6 +467,26 @@ export function updateCaseNote(id: number, patch: Partial<Omit<CaseNoteInput, 'c
   return db().select().from(schema.caseNotes).where(eq(schema.caseNotes.id, id)).get()!;
 }
 
+/**
+ * 保存済みの記録を AI で整理し直す（保存はしない）。
+ * 画面で直したメモを渡せば、その内容で要旨・発言・決定事項・次のアクションを組み直す。
+ */
+export async function restructureNote(id: number, input: { rawText?: string; kind?: string; counterpart?: string | null; phone?: string | null }) {
+  const note = db().select().from(schema.caseNotes).where(eq(schema.caseNotes.id, id)).get();
+  if (!note) throw new Error('記録が見つかりません');
+  const rawText = (input.rawText ?? note.rawText ?? '').trim();
+  if (!rawText) throw new Error('整理するもとになるメモがありません');
+  const c = db().select().from(schema.cases).where(eq(schema.cases.id, note.caseId)).get();
+  const client = c ? db().select().from(schema.clients).where(eq(schema.clients.id, c.clientId)).get() : null;
+  return structureNote(rawText, {
+    caseTitle: c?.title,
+    clientName: client?.name,
+    kind: input.kind ?? note.kind,
+    counterpart: input.counterpart !== undefined ? input.counterpart : note.counterpart,
+    phone: input.phone !== undefined ? input.phone : note.phone,
+  });
+}
+
 export function deleteCaseNote(id: number) {
   db().delete(schema.caseNotes).where(eq(schema.caseNotes.id, id)).run();
 }
