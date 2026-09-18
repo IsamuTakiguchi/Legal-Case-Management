@@ -57,42 +57,56 @@ export function DeadlineEditor({ value, onChange, compact = false, label = '期�
   );
 }
 
-/** 返信待ちタスクを作るときの「いつまで待つか」の選択（既定は設定の営業日数） */
-export function WaitDeadlineSelect({ value, onChange }: { value: string | null; onChange: (iso: string | null) => void }) {
-  const [mode, setMode] = useState<'default' | 'quick' | 'custom'>('default');
+/**
+ * タスクを作るときの期限の選択。
+ * 返信待ちなら「いつまで待つか」（既定は設定の営業日数）、対応中なら「期日」（既定はなし）に使う。
+ * 値から選択中の項目を決めるので、作ったあとに親が null に戻せば表示も戻る。
+ */
+export function TaskDeadlineSelect({
+  value,
+  onChange,
+  label = '期限',
+  defaultLabel = '既定（設定の営業日数）',
+}: {
+  value: string | null;
+  onChange: (iso: string | null) => void;
+  /** 選択肢の頭に出す言葉（期限 / 期日） */
+  label?: string;
+  /** 何も選んでいないときの言い方 */
+  defaultLabel?: string;
+}) {
+  const quick = value ? DEADLINE_QUICK.find((q) => value === daysLater(q.days)) : null;
+  const selected = value === null ? 'default' : quick ? String(quick.days) : 'custom';
   return (
     <span className="inline-flex flex-wrap items-center gap-1 text-sm">
       <select
         className="input w-auto py-0.5 text-xs"
-        value={mode === 'default' ? 'default' : mode === 'custom' ? 'custom' : String(DEADLINE_QUICK.find((q) => value === daysLaterKey(q.days))?.days ?? 'custom')}
+        value={selected}
         onChange={(e) => {
           const v = e.target.value;
-          if (v === 'default') {
-            setMode('default');
-            onChange(null);
-          } else if (v === 'custom') {
-            setMode('custom');
-          } else {
-            setMode('quick');
-            onChange(daysLater(Number(v)));
-          }
+          // 「日時を指定」は、空欄ではなく明日 10:00 を入れてから直してもらう
+          onChange(v === 'default' ? null : daysLater(v === 'custom' ? 1 : Number(v)));
         }}
-        aria-label="いつまで待つか"
+        aria-label={label}
       >
-        <option value="default">期限: 既定（設定の営業日数）</option>
+        <option value="default">
+          {label}: {defaultLabel}
+        </option>
         {DEADLINE_QUICK.map((q) => (
           <option key={q.days} value={q.days}>
-            期限: {q.label}
+            {label}: {q.label}
           </option>
         ))}
-        <option value="custom">期限: 日時を指定</option>
+        <option value="custom">{label}: 日時を指定</option>
       </select>
-      {mode === 'custom' && <input type="datetime-local" className="input w-auto py-0.5 text-xs" value={toLocalInput(value)} onChange={(e) => onChange(e.target.value ? fromLocalInput(e.target.value) : null)} />}
+      {selected === 'custom' && (
+        <input type="datetime-local" className="input w-auto py-0.5 text-xs" value={toLocalInput(value)} onChange={(e) => onChange(e.target.value ? fromLocalInput(e.target.value) : null)} />
+      )}
     </span>
   );
 }
 
-// 候補ボタンで選んだ値かどうかの判定用（同じ日の 10:00 なら一致とみなす）
-function daysLaterKey(days: number): string {
-  return daysLater(days);
+/** 返信待ちタスクを作るときの「いつまで待つか」の選択（既定は設定の営業日数） */
+export function WaitDeadlineSelect({ value, onChange }: { value: string | null; onChange: (iso: string | null) => void }) {
+  return <TaskDeadlineSelect value={value} onChange={onChange} />;
 }

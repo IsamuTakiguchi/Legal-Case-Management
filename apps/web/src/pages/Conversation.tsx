@@ -8,7 +8,7 @@ import { ContactLinkForm } from '../lib/ContactLinkForm';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { channelBadge, channelLabel, fmtDateTime, fmtBytes, fromLocalInput, toLocalInput, todayLocalInput } from '../lib/format';
 import { Icon } from '../lib/icons';
-import { DeadlineEditor, WaitDeadlineSelect } from '../lib/Deadline';
+import { DeadlineEditor, TaskDeadlineSelect, WaitDeadlineSelect } from '../lib/Deadline';
 import { SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply, type EventKind } from '@lcm/shared';
 
 interface Attachment {
@@ -1069,10 +1069,13 @@ function TaskMini({ conversationId, clientId }: { conversationId: number; client
   const tasks = useQuery({ queryKey: ['tasks', 'conv', conversationId], queryFn: () => api.get<{ id: number; title: string; status: string; followUpAt: string | null; dueAt: string | null }[]>(`/tasks?conversationId=${conversationId}&status=active`) });
   const [title, setTitle] = useState('');
   const [status, setStatus] = useState('waiting_client');
+  const [newDeadline, setNewDeadline] = useState<string | null>(null);
+  const waiting = status !== 'open';
   const add = useMutation({
-    mutationFn: () => api.post('/tasks', { title, status, conversationId, clientId }),
+    mutationFn: () => api.post('/tasks', { title, status, conversationId, clientId, followUpAt: waiting ? newDeadline : null, dueAt: waiting ? null : newDeadline }),
     onSuccess: () => {
       setTitle('');
+      setNewDeadline(null);
       qc.invalidateQueries({ queryKey: ['tasks'] });
     },
   });
@@ -1103,13 +1106,14 @@ function TaskMini({ conversationId, clientId }: { conversationId: number; client
         ))}
         {tasks.data?.length === 0 && <li className="text-slate-500">なし</li>}
       </ul>
-      <div className="flex gap-1">
-        <input className="input" placeholder="タスクを追加" value={title} onChange={(e) => setTitle(e.target.value)} />
+      <div className="flex flex-wrap items-center gap-1">
+        <input className="input min-w-0 flex-1" placeholder="タスクを追加" value={title} onChange={(e) => setTitle(e.target.value)} />
         <select className="input w-auto" value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="open">対応中</option>
           <option value="waiting_client">依頼者待ち</option>
           <option value="waiting_other">相手方待ち</option>
         </select>
+        <TaskDeadlineSelect value={newDeadline} onChange={setNewDeadline} label={waiting ? '期限' : '期日'} defaultLabel={waiting ? '既定' : 'なし'} />
         <button className="btn btn-sm" onClick={() => add.mutate()} disabled={!title}>
           追加
         </button>
