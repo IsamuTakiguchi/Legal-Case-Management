@@ -23,7 +23,7 @@ import { resolveAllClientFolders, syncClientFolderNames } from '../services/clie
 import { refreshStyleProfiles } from '../services/style.js';
 import { runDueScheduled, recoverStuckScheduled } from '../services/scheduledSend.js';
 import { refreshUnlinkedAlerts } from '../services/identity.js';
-import { repairConversationTimes } from '../services/inbox.js';
+import { repairConversationTimes, repairUnreadAfterReply } from '../services/inbox.js';
 import { backfillLineFriends } from '../services/lineFriends.js';
 import { repairLineGroupConversations } from '../services/lineGroups.js';
 
@@ -156,6 +156,16 @@ export function startJobs() {
       .catch((err) => logger.warn({ err }, 'LINE グループの分け直しに失敗'));
   }
   // 一度だけの後始末: 過去分の取り込みで巻き戻っていた会話の最終日時を直す
+  // 自分が最後に送っているのに未読が残っている会話を直す（「未読だけ」のアイコンの数がふくらんでいた）
+  if (!getSyncState('cleanup:unread_after_reply')) {
+    try {
+      const n = repairUnreadAfterReply();
+      setSyncState('cleanup:unread_after_reply', new Date().toISOString());
+      if (n) logger.info({ n }, '返信済みの会話の未読を戻しました');
+    } catch (err) {
+      logger.warn({ err }, '返信済みの会話の未読の修復に失敗');
+    }
+  }
   if (!getSyncState('cleanup:conversation_times')) {
     try {
       const n = repairConversationTimes();

@@ -5,17 +5,15 @@ import { logger } from '../logger.js';
 import { getSetting, getSyncState, setSyncState } from './settings.js';
 import { CHANNEL_LABEL } from '@lcm/shared';
 import { openAlerts } from './alerts.js';
-import type { ConversationRow, MessageRow } from './inbox.js';
+import { inboxCounts, type ConversationRow, type MessageRow } from './inbox.js';
 
 /** 通知と一緒に送る「アイコンに出す件数」。設定（app_badge_source）に合わせて数える */
 export function badgeCountForPush(): number | undefined {
   const source = getSetting('app_badge_source') || 'inbox';
   if (source === 'off') return undefined;
-  const d = db();
-  if (source === 'inbox_unread') {
-    return d.select({ id: schema.conversations.id }).from(schema.conversations).where(and(gt(schema.conversations.unread, 0), eq(schema.conversations.archived, false))).all().length;
-  }
-  const inbox = d.select({ id: schema.conversations.id }).from(schema.conversations).where(and(eq(schema.conversations.needsReply, true), eq(schema.conversations.archived, false))).all().length;
+  // 画面のメニューと同じ数え方にそろえる（受信箱で隠している会話は数えない）
+  const { inbox, unread } = inboxCounts();
+  if (source === 'inbox_unread') return unread;
   return source === 'inbox_alerts' ? inbox + openAlerts().length : inbox;
 }
 
