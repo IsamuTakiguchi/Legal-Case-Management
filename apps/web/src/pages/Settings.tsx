@@ -12,7 +12,16 @@ interface Status {
   publicBaseUrl: string;
   storage: string;
   line: { configured: boolean; webhookUrl: string; quota: { used: number; limit: number } | null; lastWebhookAt: string | null; lastEventAt: string | null; lastError: string | null };
-  chatwork: { configured: boolean; webhookUrl: string; webhookTokenSet: boolean };
+  chatwork: {
+    configured: boolean;
+    webhookUrl: string;
+    webhookTokenSet: boolean;
+    scope: 'all' | 'to_me';
+    lastWebhookAt: string | null;
+    lastPollAt: string | null;
+    recent: { total: number; byReason: Record<string, number> };
+  };
+  version: { commit: string | null; message: string | null; startedAt: string };
   google: { configured: boolean; connected: boolean; account: string | null; redirectUri: string };
   microsoft: { configured: boolean; connected: boolean; account: string | null; redirectUri: string };
   zoom: { configured: boolean };
@@ -444,7 +453,13 @@ export default function Settings() {
       <h1 className="text-xl font-bold">設定</h1>
       {s && (
         <section className="card">
-          <h2 className="mb-3 font-semibold">接続状況</h2>
+          <div className="mb-3 flex flex-wrap items-baseline gap-2">
+            <h2 className="font-semibold">接続状況</h2>
+            <span className="text-xs text-slate-500" title={s.version.message ?? ''}>
+              動いている版: {s.version.commit ? <code>{s.version.commit.slice(0, 7)}</code> : '（不明）'}
+              {' ／ '}起動 {fmtDateTime(s.version.startedAt)}
+            </span>
+          </div>
           <div className="grid gap-3 text-sm md:grid-cols-2">
             <Conn ok={s.google.connected} label="Google（Gmail・カレンダー）" detail={s.google.connected ? s.google.account ?? '接続済' : s.google.configured ? '未接続' : '.env に GOOGLE_CLIENT_ID/SECRET を設定してください'}>
               {s.google.configured && !s.google.connected && (
@@ -492,6 +507,7 @@ export default function Settings() {
             </Conn>
             <Conn ok={s.chatwork.configured} label="Chatwork" detail={s.chatwork.configured ? (s.chatwork.webhookTokenSet ? 'API・Webhook 設定済' : 'Webhook トークン未設定（ポーリングのみ）') : '.env に CHATWORK_API_TOKEN を設定'}>
               <div className="text-xs text-slate-500">Webhook URL: {s.chatwork.webhookUrl}</div>
+              {s.chatwork.configured && <ChatworkIntake cw={s.chatwork} />}
             </Conn>
             <Conn ok={s.zoom.configured} label="Zoom" detail={s.zoom.configured ? 'Server-to-Server OAuth 設定済' : '.env に ZOOM_ACCOUNT_ID / CLIENT_ID / SECRET を設定'} />
             <Conn
@@ -1211,6 +1227,51 @@ function LineGroupRepair() {
       <span className="text-slate-500">
         {msg || '以前の取り込みでグループの発言が個人トークに混ざっている場合に、グループの会話へ移します'}
       </span>
+    </div>
+  );
+}
+
+const REASON_LABEL: Record<string, string> = {
+  all: '取込範囲「すべて」',
+  direct: 'ダイレクトチャット',
+  to: '[To] で自分が指定',
+  reply: '自分のメッセージへの返信',
+  toall: '全員宛（toall）',
+  task: '自分に振られたタスク',
+  'mine-direct': '自分の発言（ダイレクト）',
+  'mine-reply': '自分の発言（返信）',
+  none: '理由の記録なし（この版より前の取り込み）',
+};
+
+/**
+ * Chatwork の取り込み状況。「自分宛だけ」にしているのに範囲外が入るという報告を、推測でなく数字で見るためのもの。
+ * サーバーが見ている取込範囲・最後に動いた時刻・直近 24 時間に取り込んだ受信の理由別の数を出す
+ */
+function ChatworkIntake({ cw }: { cw: Status['chatwork'] }) {
+  const entries = Object.entries(cw.recent.byReason).sort((a, b) => b[1] - a[1]);
+  const unexpected = cw.scope === 'to_me' ? entries.filter(([k]) => k === 'all' || k === 'none') : [];
+  return (
+    <div className="mt-1 space-y-0.5 text-xs text-slate-500">
+      <div>
+        サーバーが見ている取込範囲: <span className="font-medium text-slate-700">{cw.scope === 'to_me' ? '自分宛だけ' : 'すべて'}</span>
+        {' ／ '}最後の Webhook: {cw.lastWebhookAt ? fmtDateTime(cw.lastWebhookAt) : 'まだ無し'}
+        {' ／ '}最後のポーリング: {cw.lastPollAt ? fmtDateTime(cw.lastPollAt) : 'まだ無し'}
+      </div>
+      <div>
+        直近 24 時間に取り込んだ受信: <span className="font-medium text-slate-700 tabular-nums">{cw.recent.total}</span> 件
+        {entries.length > 0 && (
+          <>
+            {'（'}
+            {entries.map(([k, n]) => `${REASON_LABEL[k] ?? k} ${n}`).join('、')}
+            {'）'}
+          </>
+        )}
+      </div>
+      {unexpected.length > 0 && (
+        <div className="text-amber-700">
+          「自分宛だけ」なのに理由が記録されていない受信があります。この版より前に取り込んだものなら、上の「取込済みの分を確認する」で片付きます。この版になってから増えるようなら、取り込んだメッセージを開いて「取込理由」を見てください。
+        </div>
+      )}
     </div>
   );
 }

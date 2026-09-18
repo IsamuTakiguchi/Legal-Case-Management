@@ -182,8 +182,11 @@ export async function pollChatwork(opts: { allRooms?: boolean } = {}): Promise<{
           .reduce((a, m) => Math.max(a, m.send_time), 0);
     const newestInBatch = newestSend ? new Date(newestSend * 1000).toISOString() : null;
     for (const m of msgs) {
-      if (!cw.chatworkInScope(sc, m, { myAccountId: me, roomType: room.type, taskMessageIds: taskIds, conversationExists: conversationExists(room.room_id), isReplyToKnownMessage })) continue;
+      const reason = cw.chatworkScopeReason(sc, m, { myAccountId: me, roomType: room.type, taskMessageIds: taskIds, conversationExists: conversationExists(room.room_id), isReplyToKnownMessage });
+      if (!reason) continue;
       const norm = cw.normalizeChatworkMessage(room.room_id, m, me);
+      // なぜ取り込んだかを残す（あとで受信箱の中身を確かめられるように）
+      norm.raw = { ...(norm.raw ?? {}), scopeReason: reason, via: 'poll' };
       if (norm.direction === 'in' && !norm.identity.displayName) norm.identity.displayName = room.name;
       // グループチャットは会話名をルーム名にする（発言者は伝言ごとに表示）
       if (room.type !== 'direct') norm.subject = room.name;
@@ -192,6 +195,7 @@ export async function pollChatwork(opts: { allRooms?: boolean } = {}): Promise<{
     }
   }
   setSyncState(KEY_ROOM_SEEN, JSON.stringify(seen));
+  setSyncState('chatwork_last_poll_at', new Date().toISOString());
   return { ingested, rooms: count, skipped };
 }
 
@@ -206,25 +210,23 @@ export async function ingestChatworkWebhook(body: cw.ChatworkWebhookBody): Promi
     logger.warn({ err }, 'Chatwork メッセージ再取得に失敗、webhook の本文で保存');
     msg = { message_id: ev.message_id, account: { account_id: ev.account_id, name: '' }, body: ev.body, send_time: ev.send_time, update_time: ev.update_time };
   }
-  // 取込範囲が「自分宛だけ」なら、To・全員宛・ダイレクト・自分宛タスク以外は取り込まない（mention_to_me は常に対象）
-  if (body.webhook_event_type !== 'mention_to_me') {
-    const sc = scope();
-    if (sc === 'to_me') {
-      let taskIds = taskMessageIds();
-      if (!taskIds.has(msg.message_id)) taskIds = await taskMessageIdsFresh();
-      if (
-        !cw.chatworkInScope(sc, msg, {
-          myAccountId: me,
-          roomType: roomTypes()[String(ev.room_id)] ?? null,
-          taskMessageIds: taskIds,
-          conversationExists: conversationExists(ev.room_id),
-          isReplyToKnownMessage,
-        })
-      )
-        return false;
-    }
-  }
+  setSyncState('chatwork_last_webhook_at', new Date().toISOString());
+  // 取込範囲が「自分宛だけ」なら、To・自分への返信・全員宛・ダイレクト・自分宛タスク以外は取り込まない。
+  // Chatwork 側の「自分宛メンション」(mention_to_me) は引用の中の [To:自分] でも発火することがあるため、
+  // それを信用せず、どのイベントでも同じ判定を通す
+  const sc = scope();
+  let taskIds = taskMessageIds();
+  if (sc === 'to_me' && !taskIds.has(msg.message_id)) taskIds = await taskMessageIdsFresh();
+  const reason = cw.chatworkScopeReason(sc, msg, {
+    myAccountId: me,
+    roomType: roomTypes()[String(ev.room_id)] ?? null,
+    taskMessageIds: taskIds,
+    conversationExists: conversationExists(ev.room_id),
+    isReplyToKnownMessage,
+  });
+  if (!reason) return false;
   const norm = cw.normalizeChatworkMessage(ev.room_id, msg, me);
+  norm.raw = { ...(norm.raw ?? {}), scopeReason: reason, via: `webhook:${body.webhook_event_type}` };
   const rn = roomNames()[String(ev.room_id)];
   if (rn && roomTypes()[String(ev.room_id)] !== 'direct') norm.subject = rn;
   if (!norm.senderName) norm.senderName = null;

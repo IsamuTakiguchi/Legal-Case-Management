@@ -374,6 +374,8 @@ export function getConversation(id: number) {
     messages: messages.map((m) => ({
       ...m,
       raw: undefined,
+      // Chatwork: なぜ受信箱に入ったか（取込範囲の確認用）
+      scopeReason: conv.channel === 'chatwork' ? ((m.raw as { scopeReason?: string } | null)?.scopeReason ?? null) : null,
       replyTo: replyTargetOf(m, messages),
       attachments: atts.filter((a) => a.messageId === m.id),
       clientName: m.clientId ? (msgClients.find((c) => c.id === m.clientId)?.name ?? null) : null,

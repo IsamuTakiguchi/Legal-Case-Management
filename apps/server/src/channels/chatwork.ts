@@ -318,27 +318,57 @@ export type ChatworkScope = 'all' | 'to_me';
  * グループチャットでは、すでに取り込んだメッセージへの返信（[rp ... to=ルーム-メッセージID]）だけ取り込む。
  * 関係のない打合せの発言まで拾わないようにするため、会話があるというだけでは取り込まない。
  */
+/**
+ * 取り込む理由。取込範囲に入らなければ null。
+ * 取り込んだメッセージにこの理由を残しておくと、あとから「なぜ受信箱に入ったのか」を確かめられる
+ */
+export type ChatworkScopeReason = 'all' | 'direct' | 'to' | 'reply' | 'toall' | 'task' | 'mine-direct' | 'mine-reply';
+
+export const CHATWORK_SCOPE_REASON_LABEL: Record<ChatworkScopeReason, string> = {
+  all: '取込範囲「すべて」',
+  direct: 'ダイレクトチャット',
+  to: '[To] で自分が指定',
+  reply: '自分のメッセージへの返信',
+  toall: '全員宛（toall）',
+  task: '自分に振られたタスク',
+  'mine-direct': '自分の発言（ダイレクト）',
+  'mine-reply': '自分の発言（取り込み済みへの返信）',
+};
+
+export interface ChatworkScopeContext {
+  myAccountId: number | null;
+  roomType?: string | null;
+  taskMessageIds?: Set<string>;
+  conversationExists?: boolean;
+  /** この本文が、すでに取り込み済みのメッセージへの返信かどうかを見る */
+  isReplyToKnownMessage?: (body: string) => boolean;
+}
+
+export function chatworkScopeReason(
+  scope: ChatworkScope,
+  m: { body: string; message_id: string; account: { account_id: number } },
+  ctx: ChatworkScopeContext,
+): ChatworkScopeReason | null {
+  if (scope !== 'to_me') return 'all';
+  const isMine = ctx.myAccountId !== null && m.account.account_id === ctx.myAccountId;
+  if (isMine) {
+    if (ctx.roomType === 'direct') return 'mine-direct';
+    if (!ctx.conversationExists) return null;
+    return ctx.isReplyToKnownMessage?.(m.body) ? 'mine-reply' : null;
+  }
+  if (ctx.roomType === 'direct') return 'direct';
+  const b = withoutQuotedText(m.body);
+  if (ctx.myAccountId !== null && new RegExp(`\\[To:${ctx.myAccountId}\\]`).test(b)) return 'to';
+  if (ctx.myAccountId !== null && new RegExp(`\\[rp aid=${ctx.myAccountId}\\b`).test(b)) return 'reply';
+  if (/\[toall\]/i.test(b)) return 'toall';
+  if (ctx.taskMessageIds?.has(m.message_id)) return 'task';
+  return null;
+}
+
 export function chatworkInScope(
   scope: ChatworkScope,
   m: { body: string; message_id: string; account: { account_id: number } },
-  ctx: {
-    myAccountId: number | null;
-    roomType?: string | null;
-    taskMessageIds?: Set<string>;
-    conversationExists?: boolean;
-    /** この本文が、すでに取り込み済みのメッセージへの返信かどうかを見る */
-    isReplyToKnownMessage?: (body: string) => boolean;
-  },
+  ctx: ChatworkScopeContext,
 ): boolean {
-  if (scope !== 'to_me') return true;
-  const isMine = ctx.myAccountId !== null && m.account.account_id === ctx.myAccountId;
-  if (isMine) {
-    if (ctx.roomType === 'direct') return true;
-    if (!ctx.conversationExists) return false;
-    return !!ctx.isReplyToKnownMessage?.(m.body);
-  }
-  if (ctx.roomType === 'direct') return true;
-  if (isAddressedToMe(m.body, ctx.myAccountId)) return true;
-  if (ctx.taskMessageIds?.has(m.message_id)) return true;
-  return false;
+  return chatworkScopeReason(scope, m, ctx) !== null;
 }

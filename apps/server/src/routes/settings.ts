@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { recheckChatworkScope } from '../services/chatworkRecheck.js';
 import { z } from 'zod';
-import { allSettings, setSetting, SETTING_DEFAULTS, getSyncState } from '../services/settings.js';
+import { allSettings, setSetting, getSetting, SETTING_DEFAULTS, getSyncState } from '../services/settings.js';
 import { listTemplates, saveTemplates } from '../services/templates.js';
 import { isConfigured, env } from '../config.js';
 import { isGoogleConnected, googleAccount } from '../integrations/google.js';
@@ -98,6 +98,27 @@ settingsRoutes.put('/settings/templates', async (c) => {
 });
 
 /** 接続状況 */
+const STARTED_AT = new Date().toISOString();
+
+/**
+ * 直近 N 時間に取り込んだ Chatwork の受信を、取り込んだ理由ごとに数える。
+ * 「自分宛だけ」なのに理由の無いものが増えていれば、どこかで判定を通さずに入っている
+ */
+function chatworkRecentByReason(hours: number): { total: number; byReason: Record<string, number> } {
+  const since = new Date(Date.now() - hours * 3600_000).toISOString();
+  const rows = db()
+    .select({ raw: schema.messages.raw, createdAt: schema.messages.createdAt })
+    .from(schema.messages)
+    .where(and(eq(schema.messages.channel, 'chatwork'), eq(schema.messages.direction, 'in'), gt(schema.messages.createdAt, since)))
+    .all();
+  const byReason: Record<string, number> = {};
+  for (const r of rows) {
+    const reason = (r.raw as { scopeReason?: string } | null)?.scopeReason ?? 'none';
+    byReason[reason] = (byReason[reason] ?? 0) + 1;
+  }
+  return { total: rows.length, byReason };
+}
+
 settingsRoutes.get('/status', async (c) => {
   const e = env();
   return c.json({
@@ -111,7 +132,18 @@ settingsRoutes.get('/status', async (c) => {
       lastEventAt: getSyncState('line_last_event_at'),
       lastError: getSyncState('line_last_webhook_error'),
     },
-    chatwork: { configured: isConfigured('chatwork'), webhookUrl: `${e.PUBLIC_BASE_URL}/webhooks/chatwork`, webhookTokenSet: !!e.CHATWORK_WEBHOOK_TOKEN },
+    chatwork: {
+      configured: isConfigured('chatwork'),
+      webhookUrl: `${e.PUBLIC_BASE_URL}/webhooks/chatwork`,
+      webhookTokenSet: !!e.CHATWORK_WEBHOOK_TOKEN,
+      // 取込範囲を、サーバーが実際に見ている値で返す（画面の設定と食い違っていないかの確認用）
+      scope: getSetting('chatwork_scope') === 'to_me' ? 'to_me' : 'all',
+      lastWebhookAt: getSyncState('chatwork_last_webhook_at'),
+      lastPollAt: getSyncState('chatwork_last_poll_at'),
+      recent: chatworkRecentByReason(24),
+    },
+    // 動いている版。Railway が起動時に入れる値。手元の main と見比べて、デプロイが反映されているかを確かめる
+    version: { commit: process.env.RAILWAY_GIT_COMMIT_SHA ?? null, message: process.env.RAILWAY_GIT_COMMIT_MESSAGE ?? null, startedAt: STARTED_AT },
     google: { configured: isConfigured('google'), connected: isGoogleConnected(), account: googleAccount(), redirectUri: `${e.PUBLIC_BASE_URL}/api/auth/google/callback` },
     microsoft: { configured: isConfigured('microsoft'), connected: await isMsConnected(), account: msAccount(), redirectUri: `${e.PUBLIC_BASE_URL}/api/auth/microsoft/callback` },
     zoom: { configured: isConfigured('zoom') },

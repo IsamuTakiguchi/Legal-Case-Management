@@ -11,6 +11,17 @@ import { Icon } from '../lib/icons';
 import { DeadlineEditor, TaskDeadlineSelect, WaitDeadlineSelect } from '../lib/Deadline';
 import { SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply, type EventKind } from '@lcm/shared';
 
+/** Chatwork の取込理由の表示名（設定画面の診断と同じ） */
+const SCOPE_REASON_LABEL: Record<string, string> = {
+  all: '取込範囲「すべて」',
+  direct: 'ダイレクトチャット',
+  to: '[To] で自分が指定',
+  reply: '自分への返信',
+  toall: '全員宛',
+  task: '自分に振られたタスク',
+  none: '記録なし（旧版で取り込み）',
+};
+
 interface Attachment {
   id: number;
   filename: string;
@@ -27,6 +38,8 @@ interface Message {
   attachments: Attachment[];
   /** 返信先（Chatwork の返信タグ、または自分の送信時に選んだ返信先） */
   replyTo?: { id: number; senderName: string | null; direction: string; excerpt: string } | null;
+  /** Chatwork: なぜ受信箱に入ったか（取込範囲の確認用） */
+  scopeReason?: string | null;
   clientId?: number | null;
   caseId?: number | null;
   clientName?: string | null;
@@ -392,6 +405,11 @@ export default function Conversation() {
               <div className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${m.direction === 'out' ? 'bg-blue-600 text-white' : 'bg-slate-100'}`}>
                 <div className={`mb-1 text-xs ${m.direction === 'out' ? 'text-blue-100' : 'text-slate-500'}`}>
                   {m.direction === 'out' ? '自分' : (m.senderName ?? name)} ・ {fmtDateTime(m.sentAt)}
+                  {c.channel === 'chatwork' && m.direction === 'in' && (
+                    <span className="ml-1 rounded bg-white/70 px-1 text-[10px] text-slate-500" title="取込範囲のどの条件で受信箱に入ったか">
+                      取込理由: {SCOPE_REASON_LABEL[m.scopeReason ?? 'none'] ?? m.scopeReason}
+                    </span>
+                  )}
                 </div>
                 {m.replyTo && (
                   <button
