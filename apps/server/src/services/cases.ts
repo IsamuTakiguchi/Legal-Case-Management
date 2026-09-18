@@ -126,7 +126,14 @@ export function caseTimeline(id: number, limit = 200) {
   type Item = { at: string; type: string; title: string; body?: string | null; ref?: Record<string, unknown> };
   const items: Item[] = [];
   for (const n of db().select().from(schema.caseNotes).where(eq(schema.caseNotes.caseId, id)).all()) {
-    items.push({ at: n.occurredAt, type: `note:${n.kind}`, title: `${CASE_NOTE_KIND_LABEL[n.kind as CaseNoteKind] ?? n.kind}${n.counterpart ? ` / ${n.counterpart}` : ''}`, body: n.gist ?? n.rawText, ref: { noteId: n.id } });
+    items.push({
+      at: n.occurredAt,
+      type: `note:${n.kind}`,
+      title: `${CASE_NOTE_KIND_LABEL[n.kind as CaseNoteKind] ?? n.kind}${n.counterpart ? ` / ${n.counterpart}` : ''}`,
+      body: n.gist ?? n.rawText,
+      // 「誰の回答待ちか」はタイムラインでも見えるようにする
+      ref: { noteId: n.id, waitingFor: n.waitingFor ?? null },
+    });
   }
   // 依頼者本人との会話（他の事件の関係者との会話は除く）と、この事件の関係者との会話
   const convs = db()

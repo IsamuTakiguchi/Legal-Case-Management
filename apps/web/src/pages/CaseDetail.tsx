@@ -9,7 +9,7 @@ import { LongText } from '../lib/LongText';
 import { TaskDeadlineSelect } from '../lib/Deadline';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { fmtDateTime, fmtDate, fmtYen, toLocalInput, fromLocalInput, channelLabel } from '../lib/format';
-import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
+import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
 
 interface Note {
@@ -1756,29 +1756,194 @@ function TimelineBody({ body, messageId, truncated }: { body: string; messageId:
   );
 }
 
+/**
+ * 進捗の型。押すと「誰に対する何か」と「誰の回答待ちか」が決まる。
+ * counterpart はタイムラインの見出しに出る（例: 進捗 / 依頼者に確認）
+ */
+const PROGRESS_PRESETS: { key: string; counterpart: string; waitingFor: WaitingFor; placeholder: string }[] = [
+  { key: 'client', counterpart: '依頼者に確認', waitingFor: 'client', placeholder: '例: 和解案の内容を説明し、受けるかどうか確認を依頼' },
+  { key: 'staff', counterpart: '担当事務局に確認', waitingFor: 'other', placeholder: '例: 登記簿の取寄せを依頼' },
+  { key: 'counterpart', counterpart: '相手方に照会', waitingFor: 'counterpart', placeholder: '例: 提示額の根拠を書面で照会' },
+  { key: 'court', counterpart: '裁判所に連絡', waitingFor: 'court', placeholder: '例: 次回期日の候補を打診' },
+  { key: 'filed', counterpart: '書面提出', waitingFor: 'none', placeholder: '例: 準備書面（2）と証拠説明書を提出' },
+  { key: 'received', counterpart: '資料受領', waitingFor: 'none', placeholder: '例: 診断書と施術証明書を受領' },
+  { key: 'other', counterpart: '', waitingFor: 'none', placeholder: '例: 事件の進み具合を書く' },
+];
+
+/** 日本時間の YYYY-MM-DD（期限は日付単位で渡す） */
+function jstDate(iso: string): string {
+  return new Date(new Date(iso).getTime() + 9 * 3600_000).toISOString().slice(0, 10);
+}
+
+/** タイムラインに進捗を書き足す（依頼者に確認・事務局に確認・回答待ちなど） */
+function ProgressForm({ caseId, onDone }: { caseId: number; onDone: () => void }) {
+  const [preset, setPreset] = useState(PROGRESS_PRESETS[0]!);
+  const [counterpart, setCounterpart] = useState('');
+  const [text, setText] = useState('');
+  const [waitingFor, setWaitingFor] = useState<WaitingFor>(PROGRESS_PRESETS[0]!.waitingFor);
+  const [deadline, setDeadline] = useState<string | null>(null);
+  const [makeTask, setMakeTask] = useState(true);
+  const [toStage, setToStage] = useState(false);
+  const [occurredAt, setOccurredAt] = useState('');
+  const [msg, setMsg] = useState('');
+  // 書きかけの内容はこの事件ごとに自動保存する
+  const draft = useDraft(`case:${caseId}:progress`, text, setText);
+  const waiting = waitingFor !== 'none';
+  const who = (preset.key === 'other' ? counterpart.trim() : preset.counterpart) || null;
+  const save = useMutation({
+    mutationFn: async () => {
+      const head = text.split('\n').find((l) => l.trim())?.trim() ?? '';
+      const body: Record<string, unknown> = {
+        kind: 'progress',
+        counterpart: who,
+        rawText: text,
+        gist: head,
+        waitingFor,
+        occurredAt: occurredAt ? fromLocalInput(occurredAt) : undefined,
+      };
+      if (waiting && makeTask) {
+        body.nextActions = [{ title: `${who ?? '回答'}の回答待ち: ${head}`.slice(0, 120), due: deadline ? jstDate(deadline) : null }];
+        body.createTasks = 'single';
+      }
+      await api.post(`/cases/${caseId}/notes`, body);
+      if (toStage && head) await api.put(`/cases/${caseId}`, { stage: head });
+    },
+    onSuccess: () => {
+      setText('');
+      setDeadline(null);
+      setOccurredAt('');
+      // 「現在の段階」は前の内容を置き換えるので、毎回選び直してもらう
+      setToStage(false);
+      draft.clear();
+      setMsg(waiting && makeTask ? '進捗を登録し、回答待ちのタスクも作りました' : '進捗を登録しました');
+      onDone();
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
+  const choose = (p: (typeof PROGRESS_PRESETS)[number]) => {
+    setPreset(p);
+    setWaitingFor(p.waitingFor);
+    setMsg('');
+  };
+  return (
+    <form
+      className="card space-y-2 text-sm"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (text.trim()) save.mutate();
+      }}
+    >
+      <h2 className="font-semibold">進捗を登録</h2>
+      <div className="flex flex-wrap gap-1">
+        {PROGRESS_PRESETS.map((p) => (
+          <button
+            key={p.key}
+            type="button"
+            className={`btn btn-sm ${preset.key === p.key ? 'btn-primary' : ''}`}
+            onClick={() => choose(p)}
+          >
+            {p.counterpart || 'その他'}
+          </button>
+        ))}
+      </div>
+      {preset.key === 'other' && (
+        <input className="input w-full md:w-64" value={counterpart} onChange={(e) => setCounterpart(e.target.value)} placeholder="相手・見出し（例: 保険会社に連絡）" />
+      )}
+      <div>
+        <textarea
+          className="input w-full resize-y"
+          rows={2}
+          placeholder={preset.placeholder}
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value);
+            setMsg('');
+          }}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && text.trim()) {
+              e.preventDefault();
+              save.mutate();
+            }
+          }}
+        />
+        <DraftHint handle={draft} />
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="flex items-center gap-1 text-xs">
+          回答待ち
+          <select className="input w-auto py-0.5 text-xs" value={waitingFor} onChange={(e) => setWaitingFor(e.target.value as WaitingFor)} aria-label="回答待ち">
+            {WAITING_FOR.map((w) => (
+              <option key={w} value={w}>
+                {WAITING_FOR_LABEL[w]}
+              </option>
+            ))}
+          </select>
+        </label>
+        {waiting && (
+          <>
+            <TaskDeadlineSelect value={deadline} onChange={setDeadline} label="期限" defaultLabel="既定（設定の営業日数）" />
+            <label className="flex items-center gap-1 text-xs" title="この事件の「回答待ち」タスクを作ります。期限を過ぎると催促の対象になります">
+              <input type="checkbox" checked={makeTask} onChange={(e) => setMakeTask(e.target.checked)} /> 回答待ちのタスクも作る
+            </label>
+          </>
+        )}
+        <label className="flex items-center gap-1 text-xs" title="事件の「現在の段階」を、この進捗の 1 行目で置き換えます">
+          <input type="checkbox" checked={toStage} onChange={(e) => setToStage(e.target.checked)} /> 「現在の段階」にも入れる
+        </label>
+        <label className="flex items-center gap-1 text-xs text-slate-500">
+          日時
+          <input type="datetime-local" className="input w-auto py-0.5 text-xs" value={occurredAt} onChange={(e) => setOccurredAt(e.target.value)} aria-label="日時" />
+        </label>
+        <button className="btn btn-sm btn-primary ml-auto" disabled={save.isPending || !text.trim()}>
+          {save.isPending ? '登録中…' : '登録'}
+        </button>
+      </div>
+      {msg && <div className="fade-in text-xs text-slate-600">{msg}</div>}
+      <p className="text-xs text-slate-400">日時を空にすると今の時刻で入ります。登録した進捗はタイムラインと記録に残り、AI 検索・進捗サマリーでも読みます。</p>
+    </form>
+  );
+}
+
 function Timeline({ caseId }: { caseId: number }) {
+  const qc = useQueryClient();
   const t = useQuery({ queryKey: ['timeline', caseId], queryFn: () => api.get<TimelineItem[]>(`/cases/${caseId}/timeline`) });
   return (
-    <div className="card">
-      <ul className="space-y-2 text-sm">
-        {t.data?.map((i, idx) => (
-          <li key={idx} className="flex gap-3 border-b border-slate-100 pb-2">
-            <span className="w-32 shrink-0 text-slate-500">{fmtDateTime(i.at)}</span>
-            <span className={`badge ${i.type.startsWith('message:in') ? 'badge-blue' : i.type.startsWith('message:out') ? 'badge-gray' : i.type.startsWith('event') ? 'badge-orange' : 'badge-gray'}`}>{typeLabel(i.type)}</span>
-            <div className="min-w-0">
-              {i.ref?.conversationId ? (
-                <Link to={`/inbox/${i.ref.conversationId}`} className="font-medium hover:underline">
-                  {i.title}
-                </Link>
-              ) : (
-                <div className="font-medium">{i.title}</div>
-              )}
-              {i.body && <TimelineBody body={i.body} messageId={typeof i.ref?.messageId === 'number' ? i.ref.messageId : null} truncated={i.ref?.truncated === true} />}
-            </div>
-          </li>
-        ))}
-        {t.data?.length === 0 && <li className="text-slate-500">記録がありません</li>}
-      </ul>
+    <div className="space-y-3">
+      <ProgressForm
+        caseId={caseId}
+        onDone={() => {
+          qc.invalidateQueries({ queryKey: ['timeline', caseId] });
+          qc.invalidateQueries({ queryKey: ['case', String(caseId)] });
+          qc.invalidateQueries({ queryKey: ['tasks'] });
+        }}
+      />
+      <div className="card">
+        <ul className="space-y-2 text-sm">
+          {t.data?.map((i, idx) => {
+            const wf = typeof i.ref?.waitingFor === 'string' && i.ref.waitingFor !== 'none' ? (i.ref.waitingFor as WaitingFor) : null;
+            return (
+              <li key={idx} className="flex gap-3 border-b border-slate-100 pb-2">
+                <span className="w-32 shrink-0 text-slate-500">{fmtDateTime(i.at)}</span>
+                <span className={`badge ${i.type.startsWith('message:in') ? 'badge-blue' : i.type.startsWith('message:out') ? 'badge-gray' : i.type.startsWith('event') ? 'badge-orange' : 'badge-gray'}`}>{typeLabel(i.type)}</span>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {i.ref?.conversationId ? (
+                      <Link to={`/inbox/${i.ref.conversationId}`} className="font-medium hover:underline">
+                        {i.title}
+                      </Link>
+                    ) : (
+                      <span className="font-medium">{i.title}</span>
+                    )}
+                    {wf && <span className="badge badge-orange">{WAITING_FOR_LABEL[wf]}の回答待ち</span>}
+                  </div>
+                  {i.body && <TimelineBody body={i.body} messageId={typeof i.ref?.messageId === 'number' ? i.ref.messageId : null} truncated={i.ref?.truncated === true} />}
+                </div>
+              </li>
+            );
+          })}
+          {t.data?.length === 0 && <li className="text-slate-500">記録がありません</li>}
+        </ul>
+      </div>
     </div>
   );
 }
