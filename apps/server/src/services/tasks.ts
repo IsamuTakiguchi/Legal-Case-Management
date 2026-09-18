@@ -18,12 +18,17 @@ export function defaultFollowUp(from = new Date()): Date {
 export async function createTask(input: TaskInput): Promise<TaskRow> {
   const now = new Date().toISOString();
   const waiting = input.status === 'waiting_client' || input.status === 'waiting_other';
+  // 事件だけ指定されたら（事件ページからの追加など）、その事件の依頼者に紐付ける
+  let clientId = input.clientId ?? null;
+  if (!clientId && input.caseId) {
+    clientId = db().select({ clientId: schema.cases.clientId }).from(schema.cases).where(eq(schema.cases.id, input.caseId)).get()?.clientId ?? null;
+  }
   const row = db()
     .insert(schema.tasks)
     .values({
       title: input.title,
       note: input.note ?? null,
-      clientId: input.clientId ?? null,
+      clientId,
       caseId: input.caseId ?? null,
       conversationId: input.conversationId ?? null,
       status: input.status,
