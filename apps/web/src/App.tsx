@@ -84,8 +84,8 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen">
-      <aside className="sidebar-surface sticky top-0 hidden h-screen w-[236px] shrink-0 flex-col border-r border-[var(--hairline)] md:flex">
-        <div className="flex items-center gap-3 px-4 pb-3 pt-5">
+      <aside className="sidebar-surface sticky top-0 hidden h-screen w-[236px] shrink-0 flex-col overflow-hidden border-r border-[var(--hairline)] md:flex">
+        <div className="flex shrink-0 items-center gap-3 px-4 pb-3 pt-5">
           <img src="/icon-192.png?v=4" alt="" className="h-9 w-9 rounded-[10px] shadow-[0_2px_6px_rgba(16,32,48,0.14)]" />
           <div className="min-w-0">
             <div className="truncate text-[15px] font-semibold tracking-[-0.02em]">T-Lex</div>
@@ -93,7 +93,7 @@ export default function App() {
           </div>
         </div>
         <SideNav counts={nav} />
-        <div className="mt-auto space-y-2 border-t border-[var(--hairline)] p-3">
+        <div className="shrink-0 space-y-2 border-t border-[var(--hairline)] p-3">
           <RefreshButtons />
           <BackupStatus />
           <ThemeSwitch />
@@ -161,9 +161,10 @@ function useLiquidPill(axis: 'x' | 'y', inset: { x: number; y: number }) {
     }
     const rb = root.getBoundingClientRect();
     const ab = active.getBoundingClientRect();
+    // メニューがスクロールできるときは、粒も中身と一緒に動かす
     const box = {
-      top: ab.top - rb.top + inset.y,
-      left: ab.left - rb.left + inset.x,
+      top: ab.top - rb.top + root.scrollTop + inset.y,
+      left: ab.left - rb.left + root.scrollLeft + inset.x,
       width: ab.width - inset.x * 2,
       height: ab.height - inset.y * 2,
     };
@@ -195,10 +196,22 @@ function useLiquidPill(axis: 'x' | 'y', inset: { x: number; y: number }) {
     }, 170);
   }, [loc.pathname, axis, inset.x, inset.y]);
   useEffect(() => () => window.clearTimeout(timer.current), []);
+  /** メニューをスクロールしたときに、粒の位置を測り直す */
+  const onScroll = useCallback(() => {
+    const root = ref.current;
+    const active = root?.querySelector<HTMLElement>('a[aria-current="page"]');
+    if (!root || !active) return;
+    const rb = root.getBoundingClientRect();
+    const ab = active.getBoundingClientRect();
+    const top = ab.top - rb.top + root.scrollTop + inset.y;
+    const left = ab.left - rb.left + root.scrollLeft + inset.x;
+    last.current = { top, left };
+    setPill((p) => (p ? { ...p, top, left, anim: false } : p));
+  }, [inset.x, inset.y]);
   const style = pill
     ? ({ top: pill.top, left: pill.left, width: pill.width, height: pill.height, opacity: pill.visible ? 1 : 0, '--lg-sx': pill.sx, '--lg-sy': pill.sy, '--lg-origin': pill.origin } as React.CSSProperties)
     : undefined;
-  return { ref, pill, style, className: `liquid-pill ${pill?.anim ? '' : 'no-anim'} ${moving ? 'is-moving' : ''}` };
+  return { ref, pill, style, onScroll, className: `liquid-pill ${pill?.anim ? '' : 'no-anim'} ${moving ? 'is-moving' : ''}` };
 }
 
 /** 左メニュー。選択中のガラスの粒は、別の項目を選ぶと伸びながら滑って移動する */
@@ -234,7 +247,11 @@ function useServiceWorkerMessages() {
 function SideNav({ counts }: { counts: NavCounts }) {
   const pill = useLiquidPill('y', SIDE_INSET);
   return (
-    <nav ref={pill.ref as React.RefObject<HTMLElement>} className="relative flex flex-col gap-px px-3 pt-2">
+    <nav
+      ref={pill.ref as React.RefObject<HTMLElement>}
+      onScroll={pill.onScroll}
+      className="relative flex min-h-0 flex-1 flex-col gap-px overflow-y-auto overscroll-contain px-3 pt-2"
+    >
       {pill.pill && <div className={`${pill.className} nav-pill`} style={pill.style} aria-hidden />}
       {NAV.map((n, i) => (
         <div key={n.to}>
