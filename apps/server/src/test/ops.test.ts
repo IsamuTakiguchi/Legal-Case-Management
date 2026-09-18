@@ -586,6 +586,27 @@ describe('Chatwork の取込範囲', () => {
     expect(isAddressedToMe('[qt][qtmeta aid=999 time=1]昔の話[/qt]\n[toall]共有です', me)).toBe(true);
   });
 
+  it('取り込む理由を返す（受信箱で「なぜ入ったか」を確かめるため）', async () => {
+    const { chatworkScopeReason } = await import('../channels/chatwork.js');
+    const me = 12345;
+    const other = { account_id: 999 };
+    const msg = (body: string, id = 'm') => ({ body, message_id: id, account: other });
+    const g = { myAccountId: me, roomType: 'group' as const };
+    expect(chatworkScopeReason('all', msg('雑談'), g)).toBe('all');
+    expect(chatworkScopeReason('to_me', msg('雑談'), g)).toBeNull();
+    expect(chatworkScopeReason('to_me', msg('[To:12345]瀧口さん'), g)).toBe('to');
+    expect(chatworkScopeReason('to_me', msg('[rp aid=12345 to=1-2][pname:12345]さん\n承知'), g)).toBe('reply');
+    expect(chatworkScopeReason('to_me', msg('[toall]お知らせ'), g)).toBe('toall');
+    expect(chatworkScopeReason('to_me', msg('タスク本文', 'task-1'), { ...g, taskMessageIds: new Set(['task-1']) })).toBe('task');
+    expect(chatworkScopeReason('to_me', msg('雑談'), { myAccountId: me, roomType: 'direct' })).toBe('direct');
+    // 引用の中だけの [To:自分] は理由にならない
+    expect(chatworkScopeReason('to_me', msg('[To:777]田中さん\n[qt][qtmeta aid=999 time=1][To:12345]瀧口さん[/qt]\nお願いします'), g)).toBeNull();
+    const mine = (body: string) => ({ body, message_id: 'x', account: { account_id: me } });
+    expect(chatworkScopeReason('to_me', mine('はい'), { myAccountId: me, roomType: 'direct', conversationExists: true })).toBe('mine-direct');
+    expect(chatworkScopeReason('to_me', mine('[rp aid=999 to=1-9999][pname:999]さん\n承知'), { ...g, conversationExists: true, isReplyToKnownMessage: () => true })).toBe('mine-reply');
+    expect(chatworkScopeReason('to_me', mine('雑談'), { ...g, conversationExists: true, isReplyToKnownMessage: () => false })).toBeNull();
+  });
+
   it('グループでの自分の発言は、取り込み済みのやり取りへの返信だけ取り込む', async () => {
     const { chatworkInScope } = await import('../channels/chatwork.js');
     const me = 12345;

@@ -26,11 +26,17 @@ vi.mock('../channels/chatwork.js', async (orig) => {
       return cwState.messages.get(roomId) ?? [];
     }),
     myTasks: vi.fn(async () => []),
+    fetchMessage: vi.fn(async (roomId: number, messageId: string) => {
+      const m = (cwState.messages.get(roomId) ?? []).find((x) => x.message_id === messageId);
+      if (!m) throw new Error('not found');
+      return m;
+    }),
   };
 });
 
 const { openTestDatabase, closeDatabase, db, schema } = await import('../db/index.js');
-const { pollChatwork } = await import('../jobs/chatworkPoll.js');
+const { pollChatwork, ingestChatworkWebhook } = await import('../jobs/chatworkPoll.js');
+const { getSyncState } = await import('../services/settings.js');
 const { setSetting, clearSettingsCache } = await import('../services/settings.js');
 
 beforeAll(() => openTestDatabase());
@@ -214,6 +220,16 @@ describe('Chatwork の取りこぼし', () => {
     expect(db().select().from(schema.conversations).all()[0]!.unread).toBe(3);
   });
 
+  it('取り込んだメッセージに理由が残り、ポーリングの最終時刻が控えられる', async () => {
+    cwState.rooms = [{ room_id: 980, name: 'グループ', type: 'group', unread_num: 0, last_update_time: 1_800_000_000 }];
+    cwState.messages.set(980, [msg('r-1', `[To:${ME}]瀧口 勇さん\n確認ください`)]);
+    await pollChatwork();
+    const saved = db().select().from(schema.messages).all()[0]!;
+    expect((saved.raw as { scopeReason?: string; via?: string }).scopeReason).toBe('to');
+    expect((saved.raw as { via?: string }).via).toBe('poll');
+    expect(getSyncState('chatwork_last_poll_at')).toBeTruthy();
+  });
+
   it('ルームが多いときは上限まで見て、残りは次回に回す', async () => {
     cwState.rooms = Array.from({ length: 70 }, (_, i) => ({ room_id: 1000 + i, name: `G${i}`, type: 'group' as const, unread_num: 0, last_update_time: 1_800_000_000 + i }));
     const r1 = await pollChatwork();
@@ -224,5 +240,56 @@ describe('Chatwork の取りこぼし', () => {
     const r2 = await pollChatwork();
     expect(r2.rooms).toBe(10);
     expect(r2.skipped).toBe(0);
+  });
+});
+
+describe('Chatwork の Webhook 経路', () => {
+  const webhook = (roomId: number, messageId: string, type: 'message_created' | 'mention_to_me' | 'message_updated', from = 222) =>
+    ingestChatworkWebhook({
+      webhook_setting_id: '1',
+      webhook_event_type: type,
+      webhook_event_time: 1_800_000_000,
+      webhook_event: { message_id: messageId, room_id: roomId, account_id: from, body: cwState.messages.get(roomId)!.find((m) => m.message_id === messageId)!.body, send_time: 1_800_000_000, update_time: 0 },
+    } as Parameters<typeof ingestChatworkWebhook>[0]);
+
+  beforeEach(async () => {
+    // ルームの種別の控えは、ポーリングが作る。先に一度ポーリングしておく
+    cwState.rooms = [{ room_id: 990, name: 'グループ', type: 'group', unread_num: 0, last_update_time: 1_800_000_000 }];
+    cwState.messages.set(990, []);
+    await pollChatwork();
+  });
+
+  it('[To:自分] は message_created でも取り込む', async () => {
+    cwState.messages.set(990, [msg('w-1', `[To:${ME}]瀧口 勇さん\n確認ください`)]);
+    expect(await webhook(990, 'w-1', 'message_created')).toBe(true);
+    const saved = db().select().from(schema.messages).all()[0]!;
+    expect((saved.raw as { scopeReason?: string; via?: string }).scopeReason).toBe('to');
+    expect((saved.raw as { via?: string }).via).toBe('webhook:message_created');
+    expect(getSyncState('chatwork_last_webhook_at')).toBeTruthy();
+  });
+
+  it('mention_to_me でも、引用の中だけの [To:自分] は取り込まない（Chatwork 側の判定を信用しない）', async () => {
+    cwState.messages.set(990, [msg('w-2', `[To:777]田中さん\n[qt][qtmeta aid=222 time=1][To:${ME}]瀧口さん ご確認ください[/qt]\nこの件お願いします`)]);
+    expect(await webhook(990, 'w-2', 'mention_to_me')).toBe(false);
+    expect(db().select().from(schema.messages).all().length).toBe(0);
+  });
+
+  it('mention_to_me で本当に自分宛なら取り込む', async () => {
+    cwState.messages.set(990, [msg('w-3', `[To:${ME}]瀧口 勇さん\n本題です`)]);
+    expect(await webhook(990, 'w-3', 'mention_to_me')).toBe(true);
+  });
+
+  it('グループの雑談は Webhook でも取り込まない', async () => {
+    cwState.messages.set(990, [msg('w-4', '雑談です')]);
+    expect(await webhook(990, 'w-4', 'message_created')).toBe(false);
+    expect(db().select().from(schema.messages).all().length).toBe(0);
+  });
+
+  it('取込範囲が「すべて」なら Webhook の雑談も取り込む', async () => {
+    setSetting('chatwork_scope', 'all');
+    cwState.messages.set(990, [msg('w-5', '雑談です')]);
+    expect(await webhook(990, 'w-5', 'message_created')).toBe(true);
+    const saved = db().select().from(schema.messages).all()[0]!;
+    expect((saved.raw as { scopeReason?: string }).scopeReason).toBe('all');
   });
 });
