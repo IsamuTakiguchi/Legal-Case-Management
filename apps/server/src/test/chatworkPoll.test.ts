@@ -158,6 +158,62 @@ describe('Chatwork の取りこぼし', () => {
     expect(r.ingested).toBe(2);
   });
 
+  it('取り込み済みの古いメッセージで、未紐付けの要確認が数え直されない', async () => {
+    const { openAlerts } = await import('../services/alerts.js');
+    const old = '2026-01-05T02:00:00.000Z';
+    cwState.rooms = [{ room_id: 950, name: '取引先グループ', type: 'group', unread_num: 0, last_update_time: 1_800_000_000 }];
+    cwState.messages.set(950, [{ message_id: 'old-1', account: { account_id: 222, name: '担当 太郎' }, body: `[To:${ME}]瀧口 勇さん\n以前の件です`, send_time: Math.floor(new Date(old).getTime() / 1000), update_time: 0 }]);
+    const r1 = await pollChatwork();
+    expect(r1.ingested).toBe(1);
+    const a1 = openAlerts().find((a) => a.type === 'unlinked_contact')!;
+    expect((a1.payload as { messageCount?: number }).messageCount).toBe(1);
+
+    // 同じルームをもう 2 回見に行く（Chatwork は毎回 直近のメッセージを返す）
+    await pollChatwork();
+    await pollChatwork();
+    expect(db().select().from(schema.messages).all().length).toBe(1);
+    const a2 = openAlerts().find((a) => a.type === 'unlinked_contact')!;
+    // 取り込み済みの同じメッセージなので、件数は増えないはず
+    expect((a2.payload as { messageCount?: number }).messageCount).toBe(1);
+  });
+
+  it('初めて見るルームの古いやり取りは、一番新しい 1 件だけを新着にする', async () => {
+    const base = new Date('2026-01-05T02:00:00.000Z').getTime();
+    cwState.rooms = [{ room_id: 960, name: '古いグループ', type: 'group', unread_num: 0, last_update_time: 1_800_000_000 }];
+    cwState.messages.set(
+      960,
+      Array.from({ length: 5 }, (_, i) => ({
+        message_id: `h-${i}`,
+        account: { account_id: 222, name: '担当 太郎' },
+        body: `[To:${ME}]瀧口 勇さん\n${i} 件目`,
+        send_time: Math.floor((base + i * 3600_000) / 1000),
+        update_time: 0,
+      })),
+    );
+    await pollChatwork();
+    const conv = db().select().from(schema.conversations).all()[0]!;
+    // 最新の 1 件だけが未読。過去分でメニューの数が跳ね上がらない
+    expect(conv.unread).toBe(1);
+  });
+
+  it('2 回目以降のルームでは、同じ回に届いた新着をどちらも未読にする', async () => {
+    const base = Math.floor(Date.now() / 1000) - 600;
+    cwState.rooms = [{ room_id: 970, name: 'グループ', type: 'group', unread_num: 0, last_update_time: 1_800_000_000 }];
+    cwState.messages.set(970, [{ message_id: 'n-0', account: { account_id: 222, name: '担当 太郎' }, body: `[To:${ME}]瀧口 勇さん\n1 通目`, send_time: base, update_time: 0 }]);
+    await pollChatwork();
+    expect(db().select().from(schema.conversations).all()[0]!.unread).toBe(1);
+
+    // 次のポーリングで 2 通まとめて届く（どちらも新着）
+    cwState.messages.set(970, [
+      ...cwState.messages.get(970)!,
+      { message_id: 'n-1', account: { account_id: 222, name: '担当 太郎' }, body: `[To:${ME}]瀧口 勇さん\n2 通目`, send_time: base + 60, update_time: 0 },
+      { message_id: 'n-2', account: { account_id: 222, name: '担当 太郎' }, body: `[To:${ME}]瀧口 勇さん\n3 通目`, send_time: base + 120, update_time: 0 },
+    ]);
+    const r = await pollChatwork();
+    expect(r.ingested).toBe(2);
+    expect(db().select().from(schema.conversations).all()[0]!.unread).toBe(3);
+  });
+
   it('ルームが多いときは上限まで見て、残りは次回に回す', async () => {
     cwState.rooms = Array.from({ length: 70 }, (_, i) => ({ room_id: 1000 + i, name: `G${i}`, type: 'group' as const, unread_num: 0, last_update_time: 1_800_000_000 + i }));
     const r1 = await pollChatwork();
