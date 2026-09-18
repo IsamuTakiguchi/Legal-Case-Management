@@ -6,7 +6,7 @@ import { LongText } from '../lib/LongText';
 import { useDraft, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
 import { fmtDate, fmtRelative } from '../lib/format';
-import { DeadlineEditor } from '../lib/Deadline';
+import { DeadlineEditor, TaskDeadlineSelect } from '../lib/Deadline';
 import { TASK_STATUSES, TASK_STATUS_LABEL, type TaskStatus } from '@lcm/shared';
 import { useSort, readingKey, type SortOption } from '../lib/sort';
 import { Icon } from '../lib/icons';
@@ -62,6 +62,8 @@ export default function Tasks() {
   const [status, setStatus] = useState<string>(() => new URLSearchParams(location.search).get('status') ?? 'active');
   const [title, setTitle] = useState('');
   const [newStatus, setNewStatus] = useState<TaskStatus>('open');
+  // 追加するときの期限。null は「対応中＝期日なし」「返信待ち＝設定の営業日数」
+  const [newDeadline, setNewDeadline] = useState<string | null>(null);
   const [sync, setSync] = useState(false);
   const list = useQuery({ queryKey: ['tasks', status], queryFn: () => api.get<Task[]>(`/tasks?status=${status}`), refetchInterval: 60_000 });
   const sort = useSort('tasks', TASK_SORTS, 'deadline');
@@ -98,13 +100,25 @@ export default function Tasks() {
     el.style.height = 'auto';
     el.style.height = `${Math.max(72, Math.min(el.scrollHeight, 260))}px`;
   }, [title]);
+  // 返信待ちのタスクは「いつまで待つか」、対応中のタスクは「期日」として入れる
+  const newWaiting = newStatus === 'waiting_client' || newStatus === 'waiting_other';
   const create = useMutation({
     mutationFn: () => {
       const { title: name, note } = splitTitleAndNote(title);
-      return api.post('/tasks', { title: name, note, status: newStatus, clientId: clientId ? Number(clientId) : null, caseId: caseId ? Number(caseId) : null, syncToChatwork: sync });
+      return api.post('/tasks', {
+        title: name,
+        note,
+        status: newStatus,
+        clientId: clientId ? Number(clientId) : null,
+        caseId: caseId ? Number(caseId) : null,
+        followUpAt: newWaiting ? newDeadline : null,
+        dueAt: newWaiting ? null : newDeadline,
+        syncToChatwork: sync,
+      });
     },
     onSuccess: () => {
       setTitle('');
+      setNewDeadline(null);
       titleDraft.clear();
       refresh();
     },
@@ -180,6 +194,12 @@ export default function Tasks() {
             </option>
           ))}
         </select>
+        <TaskDeadlineSelect
+          value={newDeadline}
+          onChange={setNewDeadline}
+          label={newWaiting ? '期限' : '期日'}
+          defaultLabel={newWaiting ? '既定（設定の営業日数）' : 'なし'}
+        />
         <label className="flex items-center gap-1 text-sm">
           <input type="checkbox" checked={sync} onChange={(e) => setSync(e.target.checked)} /> Chatwork にも作成
         </label>
