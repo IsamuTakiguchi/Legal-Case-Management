@@ -59,7 +59,7 @@ export function verifyChatworkSignature(rawBody: Buffer, signature: string | und
 
 let rateLimitResetAt = 0;
 
-async function cw<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function cw<T>(path: string, init: RequestInit = {}, opts: { nullOn404?: boolean } = {}): Promise<T> {
   if (!isConfigured('chatwork')) throw new Error('CHATWORK_API_TOKEN が設定されていません');
   if (rateLimitResetAt > Date.now()) {
     const wait = rateLimitResetAt - Date.now();
@@ -80,6 +80,8 @@ async function cw<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new Error('Chatwork API のレート制限に達しました');
   }
   if (res.status === 204) return [] as unknown as T;
+  // 消えたタスクなどは「無い」として扱いたいので、呼ぶ側の指定で null を返す
+  if (res.status === 404 && opts.nullOn404) return null as unknown as T;
   if (!res.ok) throw new Error(`Chatwork API エラー ${res.status} ${path}: ${await res.text()}`);
   return (await res.json()) as T;
 }
@@ -158,6 +160,11 @@ export async function createTask(roomId: number, body: string, toIds: number[], 
 
 export async function myTasks(status: 'open' | 'done' = 'open'): Promise<ChatworkTask[]> {
   return cw(`/my/tasks?status=${status}`);
+}
+
+/** ルームのタスク 1 件。消えていれば null（自分に振られていないタスクの状態を見るのに使う） */
+export async function roomTask(roomId: number, taskId: number): Promise<ChatworkTask | null> {
+  return cw<ChatworkTask | null>(`/rooms/${roomId}/tasks/${taskId}`, {}, { nullOn404: true });
 }
 
 export async function setTaskStatus(roomId: number, taskId: number, status: 'open' | 'done'): Promise<void> {
