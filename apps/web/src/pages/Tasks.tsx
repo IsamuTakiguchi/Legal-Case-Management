@@ -146,10 +146,16 @@ export default function Tasks() {
             </option>
           ))}
         </select>
-        <button className="btn btn-sm" onClick={() => importCw.mutate()} disabled={importCw.isPending}>
-          Chatwork のタスクを取込
+        <button className="btn btn-sm" onClick={() => importCw.mutate()} disabled={importCw.isPending} title="Chatwork のタスクは 10 分ごとに自動で取り込みます。待たずに取り込みたいときに押してください">
+          {importCw.isPending ? '取込中…' : 'Chatwork から今すぐ取込'}
         </button>
-        {importCw.data && <span className="text-xs text-slate-500">取込 {importCw.data.imported} / 完了反映 {importCw.data.completed}</span>}
+        {importCw.data ? (
+          <span className="text-xs text-slate-500">
+            取込 {importCw.data.imported} / 完了反映 {importCw.data.completed}
+          </span>
+        ) : (
+          <span className="text-xs text-slate-400">Chatwork のタスクは 10 分ごとに自動で取り込みます</span>
+        )}
       </div>
       <form
         className="card flex flex-wrap items-center gap-2"

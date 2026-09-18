@@ -231,6 +231,23 @@ export async function syncTaskToChatwork(taskId: number): Promise<void> {
   if (cwId) db().update(schema.tasks).set({ chatworkRoomId: roomId, chatworkTaskId: cwId }).where(eq(schema.tasks.id, taskId)).run();
 }
 
+/**
+ * Chatwork のタスク本文から題名を作る。
+ * 先頭が宛先だけの行（[To:123]瀧口 勇さん → 「@瀧口 勇さん」）なら飛ばして、次の行を題名にする。
+ * 宛先の行しか無ければ、それをそのまま使う（中身を失わないため）。
+ */
+export function chatworkTaskTitle(body: string): string {
+  const lines = cw
+    .stripChatworkMarkup(body)
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  // 「@」で始まる短い行は宛先とみなす（名前＋さん程度の長さ）
+  const isMention = (l: string) => l.startsWith('@') && l.length <= 20;
+  const head = lines.find((l) => !isMention(l)) ?? lines[0] ?? '';
+  return head.slice(0, 120) || '（無題のタスク）';
+}
+
 /** Chatwork の自分のタスクを取り込む（既存運用を壊さない） */
 export async function importChatworkTasks(): Promise<{ imported: number; completed: number }> {
   if (!isConfigured('chatwork')) return { imported: 0, completed: 0 };
@@ -244,7 +261,7 @@ export async function importChatworkTasks(): Promise<{ imported: number; complet
     db()
       .insert(schema.tasks)
       .values({
-        title: cw.stripChatworkMarkup(t.body).split('\n')[0].slice(0, 120),
+        title: chatworkTaskTitle(t.body),
         note: cw.stripChatworkMarkup(t.body),
         clientId: client?.id ?? null,
         status: 'open',
@@ -255,16 +272,34 @@ export async function importChatworkTasks(): Promise<{ imported: number; complet
       .run();
     imported++;
   }
-  // Chatwork 側で完了したものを反映
+  // Chatwork 側で完了したものを反映。
+  // /my/tasks は「自分に振られたタスク」しか返さないので、載っていない＝完了とは限らない
+  // （事件の担当事務局に振ったタスクは載らない）。載っていないものはルームから 1 件ずつ確かめる
   let completed = 0;
   const mine = db().select().from(schema.tasks).where(and(isNotNull(schema.tasks.chatworkTaskId), inArray(schema.tasks.status, ['open', 'waiting_client', 'waiting_other']))).all();
   for (const t of mine) {
-    if (t.chatworkTaskId && !openIds.has(t.chatworkTaskId)) {
-      db().update(schema.tasks).set({ status: 'done', completedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }).where(eq(schema.tasks.id, t.id)).run();
-      completed++;
-    }
+    if (!t.chatworkTaskId || openIds.has(t.chatworkTaskId)) continue;
+    if (!(await isChatworkTaskDone(t.chatworkRoomId, t.chatworkTaskId))) continue;
+    db().update(schema.tasks).set({ status: 'done', completedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }).where(eq(schema.tasks.id, t.id)).run();
+    completed++;
   }
   return { imported, completed };
+}
+
+/**
+ * Chatwork 側でそのタスクが終わっているか。
+ * 消えていれば終わったものとして扱う。ルームが分からない・確かめられなかったときは触らない
+ * （自動取込で、他の人に振ったタスクを勝手に完了にしないため）。
+ */
+async function isChatworkTaskDone(roomId: number | null, taskId: number): Promise<boolean> {
+  if (!roomId) return false;
+  try {
+    const task = await cw.roomTask(roomId, taskId);
+    return task === null || task.status === 'done';
+  } catch (err) {
+    logger.warn({ err, roomId, taskId }, 'Chatwork タスクの状態を確かめられませんでした');
+    return false;
+  }
 }
 
 const waitingJudgeSchema = z.object({
