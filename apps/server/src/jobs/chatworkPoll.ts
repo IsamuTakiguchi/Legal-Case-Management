@@ -67,6 +67,21 @@ function conversationExists(roomId: number): boolean {
     .get();
 }
 
+/**
+ * その本文が「すでに取り込み済みのメッセージへの返信」かどうか。
+ * 取込範囲が to_me のとき、グループでの自分の発言をこれで絞る
+ * （自分が追っているやり取りへの返信だけ入れ、関係ない発言は入れない）。
+ */
+function isReplyToKnownMessage(body: string): boolean {
+  const target = cw.parseChatworkReplyTo(body);
+  if (!target) return false;
+  return !!db()
+    .select({ id: schema.messages.id })
+    .from(schema.messages)
+    .where(and(eq(schema.messages.channel, 'chatwork'), eq(schema.messages.externalId, target.messageId)))
+    .get();
+}
+
 /** Webhook ごとにタスク一覧を取りに行かないよう、控えの更新は 1 分に 1 回まで */
 let taskIdsRefreshedAt = 0;
 async function taskMessageIdsFresh(): Promise<Set<string>> {
@@ -155,7 +170,7 @@ export async function pollChatwork(opts: { allRooms?: boolean } = {}): Promise<{
     // 取れたときだけ控えを進める（失敗したルームは次回もう一度見る）
     seen[String(room.room_id)] = room.last_update_time ?? Math.floor(Date.now() / 1000);
     for (const m of msgs) {
-      if (!cw.chatworkInScope(sc, m, { myAccountId: me, roomType: room.type, taskMessageIds: taskIds, conversationExists: conversationExists(room.room_id) })) continue;
+      if (!cw.chatworkInScope(sc, m, { myAccountId: me, roomType: room.type, taskMessageIds: taskIds, conversationExists: conversationExists(room.room_id), isReplyToKnownMessage })) continue;
       const norm = cw.normalizeChatworkMessage(room.room_id, m, me);
       if (norm.direction === 'in' && !norm.identity.displayName) norm.identity.displayName = room.name;
       // グループチャットは会話名をルーム名にする（発言者は伝言ごとに表示）
@@ -185,7 +200,16 @@ export async function ingestChatworkWebhook(body: cw.ChatworkWebhookBody): Promi
     if (sc === 'to_me') {
       let taskIds = taskMessageIds();
       if (!taskIds.has(msg.message_id)) taskIds = await taskMessageIdsFresh();
-      if (!cw.chatworkInScope(sc, msg, { myAccountId: me, roomType: roomTypes()[String(ev.room_id)] ?? null, taskMessageIds: taskIds, conversationExists: conversationExists(ev.room_id) })) return false;
+      if (
+        !cw.chatworkInScope(sc, msg, {
+          myAccountId: me,
+          roomType: roomTypes()[String(ev.room_id)] ?? null,
+          taskMessageIds: taskIds,
+          conversationExists: conversationExists(ev.room_id),
+          isReplyToKnownMessage,
+        })
+      )
+        return false;
     }
   }
   const norm = cw.normalizeChatworkMessage(ev.room_id, msg, me);

@@ -287,13 +287,25 @@ export const chatworkAdapter: ChannelAdapter = {
 
 export const CHATWORK_FILE_LIMIT = 5 * 1024 * 1024;
 
-/** 本文が自分宛か（[To:自分]、自分への返信 [rp aid=自分 ...]、または [toall]） */
+/**
+ * 引用ブロック（[qt][qtmeta ...]…[/qt]）を取り除いた本文。
+ *
+ * Chatwork では、ほかの人へのメッセージに過去のやり取りを引用することがよくある。
+ * 引用の中に昔の [To:自分] や [rp aid=自分] が残っていると、自分宛でないメッセージまで
+ * 「自分宛」と判定してしまうため、宛先を見るときは引用を外してから見る。
+ */
+export function withoutQuotedText(body: string): string {
+  return body.replace(/\[qt\](?:\[qtmeta[^\]]*\])?[\s\S]*?\[\/qt\]/g, ' ');
+}
+
+/** 本文が自分宛か（[To:自分]、自分への返信 [rp aid=自分 ...]、または [toall]）。引用の中は見ない */
 export function isAddressedToMe(body: string, myAccountId: number | null): boolean {
-  if (/\[toall\]/i.test(body)) return true;
+  const b = withoutQuotedText(body);
+  if (/\[toall\]/i.test(b)) return true;
   if (myAccountId === null) return false;
-  if (new RegExp(`\\[To:${myAccountId}\\]`).test(body)) return true;
+  if (new RegExp(`\\[To:${myAccountId}\\]`).test(b)) return true;
   // 返信（re）: [rp aid=12345 to=roomid-messageid]
-  return new RegExp(`\\[rp aid=${myAccountId}\\b`).test(body);
+  return new RegExp(`\\[rp aid=${myAccountId}\\b`).test(b);
 }
 
 export type ChatworkScope = 'all' | 'to_me';
@@ -301,16 +313,30 @@ export type ChatworkScope = 'all' | 'to_me';
 /**
  * 取込範囲の判定。
  * to_me のときは、自分宛の To・自分への返信（re）・全員宛・ダイレクトチャット・自分に振られたタスクのメッセージだけ取り込む。
- * 自分の発言は、すでに取り込んでいる会話への返信として文脈が要るので、会話が存在する場合だけ取り込む。
+ *
+ * 自分の発言は、ダイレクトチャットならそのまま取り込む。
+ * グループチャットでは、すでに取り込んだメッセージへの返信（[rp ... to=ルーム-メッセージID]）だけ取り込む。
+ * 関係のない打合せの発言まで拾わないようにするため、会話があるというだけでは取り込まない。
  */
 export function chatworkInScope(
   scope: ChatworkScope,
   m: { body: string; message_id: string; account: { account_id: number } },
-  ctx: { myAccountId: number | null; roomType?: string | null; taskMessageIds?: Set<string>; conversationExists?: boolean },
+  ctx: {
+    myAccountId: number | null;
+    roomType?: string | null;
+    taskMessageIds?: Set<string>;
+    conversationExists?: boolean;
+    /** この本文が、すでに取り込み済みのメッセージへの返信かどうかを見る */
+    isReplyToKnownMessage?: (body: string) => boolean;
+  },
 ): boolean {
   if (scope !== 'to_me') return true;
   const isMine = ctx.myAccountId !== null && m.account.account_id === ctx.myAccountId;
-  if (isMine) return !!ctx.conversationExists;
+  if (isMine) {
+    if (ctx.roomType === 'direct') return true;
+    if (!ctx.conversationExists) return false;
+    return !!ctx.isReplyToKnownMessage?.(m.body);
+  }
   if (ctx.roomType === 'direct') return true;
   if (isAddressedToMe(m.body, ctx.myAccountId)) return true;
   if (ctx.taskMessageIds?.has(m.message_id)) return true;
