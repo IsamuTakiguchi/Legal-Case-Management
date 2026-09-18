@@ -81,6 +81,8 @@ export const JOBS: JobDef[] = [
   // Gmail は毎分見に行く（LINE・Chatwork は webhook なので届いた時点で入る）
   { name: 'gmailPoll', label: 'Gmail 受信', cron: '* * * * *', run: pollGmail, enabled: () => isGoogleConnected(), quiet: true },
   { name: 'chatworkPoll', label: 'Chatwork 受信（ポーリング）', cron: '*/5 * * * *', run: () => pollChatwork(), enabled: () => isConfigured('chatwork') },
+  // 取りこぼしの拾い直し。参加ルームをすべて見る（「今すぐ実行」でいつでも回せる）
+  { name: 'chatworkSweep', label: 'Chatwork 全ルームの取りこぼし拾い（毎晩）', cron: '20 18 * * *', run: () => pollChatwork({ allRooms: true }), enabled: () => isConfigured('chatwork') },
   { name: 'calendarSync', label: 'カレンダー同期', cron: '*/15 * * * *', run: syncCalendar, enabled: () => isGoogleConnected() },
   { name: 'postEventCheck', label: '期日終了後の次回期日確認', cron: '5,20,35,50 * * * *', run: async () => ({ alerts: checkPostEvents() }), enabled: () => true },
   { name: 'waitingCheck', label: '返信待ちの期限確認', cron: '10 * * * *', run: async () => ({ overdue: checkOverdueWaitingTasks(), stale: checkStaleSessions(), creditors: checkCreditorOverdue() }), enabled: () => true },
