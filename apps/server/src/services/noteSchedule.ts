@@ -4,7 +4,9 @@ import { db, schema } from '../db/index.js';
 import { generateStructured } from '../integrations/anthropic.js';
 import { findFreeSlots, type Slot } from './scheduling.js';
 import { businessHours, fmtHm, getSettingInt } from './settings.js';
-import { CASE_NOTE_KIND_LABEL, formatJaDateTime, toJstParts, type CaseNoteKind, type EventKind, type SchedulePreferences } from '@lcm/shared';
+import { createCalendarEvent, createHoldSet } from './court.js';
+import { issueZoomIfNeeded, webLocation, webMeetingProvider, webMeetingText } from './webMeeting.js';
+import { CASE_NOTE_KIND_LABEL, familyName, formatJaDateTime, toJstParts, type CaseNoteKind, type EventKind, type SchedulePreferences } from '@lcm/shared';
 
 /**
  * 記録（電話・打合せ・期日メモ）から、次に決めるべき予定を読み取って候補日時まで出す。
@@ -34,7 +36,29 @@ const noteScheduleSchema = z.object({
     .describe('記録の中で具体的に挙がっている候補日時。過ぎたものは除く'),
   quote: z.string().describe('日程の話だと判断した、記録の中の一節（短く）。読み取れなければ空'),
   note: z.string().describe('読み取った内容の要約を日本語で 1〜2 文（例: 次回打合せは来週の午後を希望。9/25 は不可）'),
+  fixed: z
+    .array(
+      z.object({
+        startAt: z.string().describe('ISO 8601（+09:00）。時刻が書かれていなければ 10:00 を仮置き'),
+        timeKnown: z.boolean().describe('時刻が記録に書かれていたか。書かれていなければ false'),
+        content: z.string().describe('その予定の内容を短く（例: 第3回弁論準備、打合せ、和解期日）'),
+        kind: z.enum(['meeting', 'consult', 'hearing', 'other']).describe('meeting=打合せ / consult=相談 / hearing=裁判所の期日 / other=その他'),
+        durationMinutes: z.number().int().nullable().describe('所要時間（分）。書かれていなければ null'),
+        quote: z.string().describe('根拠となった記録の一節（短く）'),
+      }),
+    )
+    .describe('記録の中で日時がすでに決まっている予定（「次回期日は 10 月 11 日 13 時 30 分に指定」「次回打合せは 10/5 14 時で確定」など）。これから調整するものは入れない。無ければ空'),
 });
+
+/** 記録に書かれていた、もう決まっている予定 */
+export interface FixedEvent {
+  startAt: string;
+  endAt: string;
+  timeKnown: boolean;
+  content: string;
+  kind: EventKind;
+  quote: string;
+}
 
 export interface NoteScheduleProposal {
   noteId: number;
@@ -61,6 +85,8 @@ export interface NoteScheduleProposal {
   slots: Slot[];
   /** 候補が出せなかった理由（あれば） */
   blocked: string | null;
+  /** 記録にもう書かれている日時（そのまま予定に登録できる） */
+  fixed: FixedEvent[];
 }
 
 /** 記録の中身を、読み取りに渡す 1 つの文章にする */
@@ -106,8 +132,9 @@ export async function proposeScheduleFromNote(
       `今日は ${today} です。「来週」「月末」「再来週の火曜」などの相対表現は今日を基準に日本時間の日付に直してください。年が無ければ今日以降で最も近い日付とします。`,
       `事務所の営業時間は ${fmtHm(bh.startMin)}〜${fmtHm(bh.endMin)} です。時間帯の希望はこの範囲で具体化してください。`,
       '記録に書かれていることだけを使います。書かれていない希望を作らないでください。',
-      '日時がすでに確定していて調整の必要がないもの（「次回期日は 10 月 11 日 13 時 30 分に決まった」など）は found=false にします。これから決めるもの（「次回の打合せは来週の午後で調整」「改めて日程を相談」など）だけ found=true にします。',
-      '読み取れなければ found=false にし、ほかは空・null にしてください。',
+      '日時がすでに確定していて調整の必要がないもの（「次回期日は 10 月 11 日 13 時 30 分に決まった」など）は found=false にし、代わりに fixed に入れてください。これから決めるもの（「次回の打合せは来週の午後で調整」「改めて日程を相談」など）だけ found=true にします。',
+      'fixed には、記録の中で日時がもう決まっている予定だけを入れます。過ぎた日時や、これから調整するものは入れません。',
+      '読み取れなければ found=false・fixed=空 にし、ほかは空・null にしてください。',
     ].join('\n'),
     user: `依頼者: ${client?.name ?? '（不明）'}\n事件: ${kase?.title ?? '（不明）'}\n\n--- 記録 ---\n${noteText(n)}`,
     schema: noteScheduleSchema,
@@ -157,6 +184,24 @@ export async function proposeScheduleFromNote(
     }
   }
 
+  // 記録にもう書かれている日時。過ぎたものは出さない（見返した古い記録から予定を作らないため）
+  const defaultMinutes = getSettingInt('default_meeting_minutes', 60);
+  const fixed: FixedEvent[] = r.fixed
+    .filter((f) => isoOk(f.startAt) && new Date(f.startAt).getTime() > now)
+    .map((f) => {
+      const startAt = new Date(f.startAt);
+      const minutes = Math.min(480, Math.max(15, f.durationMinutes ?? defaultMinutes));
+      return {
+        startAt: startAt.toISOString(),
+        endAt: new Date(startAt.getTime() + minutes * 60_000).toISOString(),
+        timeKnown: f.timeKnown,
+        content: f.content.trim() || (f.kind === 'hearing' ? '期日' : '打合せ'),
+        kind: (f.kind === 'other' ? 'meeting' : f.kind) as EventKind,
+        quote: f.quote,
+      };
+    })
+    .sort((a, b) => a.startAt.localeCompare(b.startAt));
+
   return {
     noteId: n.id,
     caseId: n.caseId,
@@ -175,5 +220,64 @@ export async function proposeScheduleFromNote(
     window: { from: from.toISOString(), to: to.toISOString() },
     slots,
     blocked,
+    fixed,
   };
+}
+
+export interface RegisterNoteScheduleInput {
+  mode: 'confirmed' | 'holds';
+  title: string;
+  kind: EventKind;
+  slots: { startAt: string; endAt: string }[];
+  location?: string | null;
+  /** WEB 会議で行う。確定なら Zoom / Meet をその場で発行し、仮押さえなら確定時に発行する */
+  web?: boolean;
+}
+
+/** 記録から読み取った（画面で直した）日時を、そのまま予定に登録する */
+export async function registerScheduleFromNote(noteId: number, input: RegisterNoteScheduleInput) {
+  const d = db();
+  const n = d.select().from(schema.caseNotes).where(eq(schema.caseNotes.id, noteId)).get();
+  if (!n) throw new Error('記録が見つかりません');
+  if (!input.slots.length) throw new Error('日時がありません');
+  const kase = d.select().from(schema.cases).where(eq(schema.cases.id, n.caseId)).get();
+  const clientId = n.clientId ?? kase?.clientId ?? null;
+  const client = clientId ? (d.select().from(schema.clients).where(eq(schema.clients.id, clientId)).get() ?? null) : null;
+  const kind: EventKind = input.kind === 'hold' ? 'meeting' : input.kind;
+  const description = [`記録から登録（${CASE_NOTE_KIND_LABEL[n.kind as CaseNoteKind] ?? n.kind}・${formatJaDateTime(new Date(n.occurredAt))}）`, n.gist ?? ''].filter(Boolean).join('\n');
+  const provider = input.web ? webMeetingProvider() : 'none';
+  if (input.mode === 'confirmed') {
+    const sl = input.slots[0]!;
+    const minutes = Math.max(15, Math.round((new Date(sl.endAt).getTime() - new Date(sl.startAt).getTime()) / 60_000));
+    // Zoom はここで発行する。Google Meet は予定を作るときに Google 側が発行する
+    const zoom = await issueZoomIfNeeded(provider, { topic: input.title, startAt: new Date(sl.startAt), durationMinutes: minutes });
+    const row = await createCalendarEvent({
+      title: input.title,
+      startAt: sl.startAt,
+      endAt: sl.endAt,
+      kind,
+      clientId,
+      caseId: n.caseId,
+      location: input.web ? webLocation(provider, input.location) : (input.location ?? null),
+      description: [webMeetingText(zoom), description].filter(Boolean).join('\n'),
+      meet: provider === 'meet',
+    });
+    const web = zoom ?? (row.meetUrl ? { provider: 'meet' as const, url: row.meetUrl, password: '', id: null } : null);
+    return { mode: 'confirmed' as const, events: [row], web, webText: webMeetingText(web) };
+  }
+  const who = client ? familyName(client.name) : '';
+  const content = input.title.replace(new RegExp(`^${who.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`), '').replace(/\s*仮$/, '').trim() || input.title;
+  const r = await createHoldSet({
+    title: content,
+    kind,
+    clientId,
+    caseId: n.caseId,
+    counterpartName: client ? null : (n.counterpart ?? null),
+    location: input.location ?? null,
+    description,
+    slots: input.slots,
+    web: input.web ?? false,
+  });
+  // 仮押さえの段階では会議 URL を作らない（どれか 1 つに確定したときに発行する）
+  return { mode: 'holds' as const, sessionId: r.sessionId, events: r.events, web: null, webText: '' };
 }

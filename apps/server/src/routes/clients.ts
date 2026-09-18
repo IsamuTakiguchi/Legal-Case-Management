@@ -5,11 +5,11 @@ import { isConfigured } from '../config.js';
 import { z } from 'zod';
 import { eq, desc } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { clientInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputSchema, creditorEventInputSchema, CREDITOR_IMPORT_FIELDS, caseContactInputSchema, staffAskDraftSchema, staffAskSendSchema, TASK_STATUSES } from '@lcm/shared';
+import { clientInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputSchema, creditorEventInputSchema, CREDITOR_IMPORT_FIELDS, caseContactInputSchema, staffAskDraftSchema, staffAskSendSchema, TASK_STATUSES, EVENT_KINDS } from '@lcm/shared';
 import { searchClients } from '../services/identity.js';
 import { storage, FolderNotFoundError } from '../integrations/storage.js';
 import { clientFolder } from '../services/attachments.js';
-import { proposeScheduleFromNote } from '../services/noteSchedule.js';
+import { proposeScheduleFromNote, registerScheduleFromNote } from '../services/noteSchedule.js';
 import { staffAskContext, draftStaffAsk, sendStaffAsk, type StaffAskSource } from '../services/staffAsk.js';
 import { listCaseTypes, upsertCaseType, createCase, updateCase, listCases, getCase, caseTimeline, addCaseNote, updateCaseNote, deleteCaseNote, generateCaseSummary, structureNote, restructureNote, createTasksFromNote, suggestNoteTasks } from '../services/cases.js';
 import * as creditors from '../services/creditors.js';
@@ -329,6 +329,21 @@ clientRoutes.post('/case-notes/:id/schedule', async (c) => {
     })
     .parse(await c.req.json().catch(() => ({})));
   return c.json(await proposeScheduleFromNote(Number(c.req.param('id')), body));
+});
+
+/** 記録から読み取った（画面で直した）日時を、そのまま予定に登録する */
+clientRoutes.post('/case-notes/:id/schedule/register', async (c) => {
+  const body = z
+    .object({
+      mode: z.enum(['confirmed', 'holds']),
+      title: z.string().min(1),
+      kind: z.enum(EVENT_KINDS).default('meeting'),
+      slots: z.array(z.object({ startAt: z.string(), endAt: z.string() })).min(1).max(10),
+      location: z.string().nullable().optional(),
+      web: z.boolean().optional(),
+    })
+    .parse(await c.req.json());
+  return c.json(await registerScheduleFromNote(Number(c.req.param('id')), body));
 });
 
 /** 保存済みの記録をタスクにする（AI の案・次のアクション・題名から） */
