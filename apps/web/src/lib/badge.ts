@@ -55,6 +55,18 @@ export function badgeCount(counts: { inbox: number; unread?: number; alerts: num
 }
 
 /**
+ * アイコンに書く数を決める。まだ書いてはいけないときは null を返す。
+ *
+ * 件数と設定の両方がそろうまでは書かない。読み込み中に書いてしまうと、
+ * 設定が「表示しない」や「未読だけ」でも、既定（未返信）の数を一瞬出してしまい、
+ * そこでアプリを閉じるとその数がアイコンに残ってしまう。
+ */
+export function badgeToApply(counts: { inbox: number; unread?: number; alerts: number } | undefined, settingsLoaded: boolean, source: BadgeSource): number | null {
+  if (!counts || !settingsLoaded) return null;
+  return badgeCount(counts, source);
+}
+
+/**
  * アイコンの数を更新する。0 なら消す。
  * 使えない端末や、許可されていない場合も、画面が止まらないよう黙って何もしない。
  */

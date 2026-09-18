@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { badgeCount, badgeSource } from './badge';
+import { badgeCount, badgeSource, badgeToApply } from './badge';
 
 describe('アイコンに出す件数', () => {
   it('設定に応じて数を決める', () => {
@@ -26,5 +26,29 @@ describe('アイコンに出す件数', () => {
 
   it('0 件のときは 0（呼び出し側で消す）', () => {
     expect(badgeCount({ inbox: 0, unread: 0, alerts: 0 }, 'inbox_alerts')).toBe(0);
+  });
+});
+
+describe('アイコンに書くかどうか', () => {
+  const counts = { inbox: 3, unread: 2, alerts: 5 };
+
+  it('件数がまだ来ていないときは書かない', () => {
+    expect(badgeToApply(undefined, true, 'inbox')).toBeNull();
+  });
+
+  it('設定がまだ来ていないときは書かない（「表示しない」なのに数を出さないため）', () => {
+    expect(badgeToApply(counts, false, 'inbox')).toBeNull();
+    // 既定の inbox で 3 を書いてしまうと、そこでアプリを閉じたときに 3 が残る
+    expect(badgeToApply(counts, false, 'off')).toBeNull();
+    expect(badgeToApply(counts, false, 'inbox_unread')).toBeNull();
+  });
+
+  it('両方そろったら、設定どおりの数を書く', () => {
+    expect(badgeToApply(counts, true, 'inbox')).toBe(3);
+    expect(badgeToApply(counts, true, 'inbox_unread')).toBe(2);
+    expect(badgeToApply(counts, true, 'inbox_alerts')).toBe(8);
+    // 0 も「書かない」ではなく「消す」なので null にはしない
+    expect(badgeToApply(counts, true, 'off')).toBe(0);
+    expect(badgeToApply({ inbox: 0, unread: 0, alerts: 0 }, true, 'inbox')).toBe(0);
   });
 });
