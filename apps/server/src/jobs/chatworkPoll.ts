@@ -10,6 +10,10 @@ const KEY_ME = 'chatwork:myAccountId';
 const KEY_ROOM_TYPES = 'chatwork:roomTypes';
 const KEY_ROOM_NAMES = 'chatwork:roomNames';
 const KEY_TASK_MSGS = 'chatwork:taskMessageIds';
+/** ルームごとに、どこまでの更新を見たか（last_update_time）。既読にしても取りこぼさないために使う */
+const KEY_ROOM_SEEN = 'chatwork:roomSeen';
+/** 1 回のポーリングで見に行くルームの上限（Chatwork は 5 分 300 リクエストまで） */
+const MAX_ROOMS_PER_POLL = 60;
 
 function scope(): cw.ChatworkScope {
   return getSetting('chatwork_scope') === 'to_me' ? 'to_me' : 'all';
@@ -26,6 +30,14 @@ function roomTypes(): Record<string, string> {
 function roomNames(): Record<string, string> {
   try {
     return JSON.parse(getSyncState(KEY_ROOM_NAMES) ?? '{}') as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function roomSeen(): Record<string, number> {
+  try {
+    return JSON.parse(getSyncState(KEY_ROOM_SEEN) ?? '{}') as Record<string, number>;
   } catch {
     return {};
   }
@@ -78,10 +90,12 @@ export async function chatworkMyAccountId(): Promise<number | null> {
 
 /**
  * Webhook の取りこぼしを補うポーリング。
- * 依頼者に紐付いたルーム＋未読のあるルームを対象に force=1 で取得し、message_id で重複排除する。
+ * 依頼者に紐付いたルーム・すでに取り込んだルーム・未読のあるルームに加えて、
+ * 前回より動きのあったルーム（last_update_time が進んだもの）も見る。
+ * 取得は force=1 で、message_id で重複排除する。
  */
-export async function pollChatwork(opts: { allRooms?: boolean } = {}): Promise<{ ingested: number; rooms: number }> {
-  if (!isConfigured('chatwork')) return { ingested: 0, rooms: 0 };
+export async function pollChatwork(opts: { allRooms?: boolean } = {}): Promise<{ ingested: number; rooms: number; skipped: number }> {
+  if (!isConfigured('chatwork')) return { ingested: 0, rooms: 0, skipped: 0 };
   const me = await chatworkMyAccountId();
   const rooms = await cw.listRooms();
   const linked = new Set(
@@ -112,12 +126,24 @@ export async function pollChatwork(opts: { allRooms?: boolean } = {}): Promise<{
       taskIds = taskMessageIds();
     }
   }
-  let ingested = 0;
-  let count = 0;
+  // 見に行くルームを決める。
+  // 未読の数だけで決めていると、Chatwork 側で先に読んでしまった [To:自分] を取りこぼすので、
+  // ルーム一覧が返す last_update_time が前回より進んでいるルームも対象にする。
+  const seen = roomSeen();
+  const chosen: { room: (typeof rooms)[number]; important: boolean }[] = [];
   for (const room of rooms) {
     if (room.type === 'my') continue;
-    const target = opts.allRooms || linked.has(room.room_id) || known.has(room.room_id) || (room.unread_num ?? 0) > 0;
-    if (!target) continue;
+    const important = !!opts.allRooms || linked.has(room.room_id) || known.has(room.room_id) || (room.unread_num ?? 0) > 0;
+    const advanced = (room.last_update_time ?? 0) > (seen[String(room.room_id)] ?? 0);
+    if (important || advanced) chosen.push({ room, important });
+  }
+  // 上限を超えるときは、大事なルーム → 動きの新しいルームの順に。残りは次回に回す（控えを更新しないので次も対象になる）
+  chosen.sort((a, b) => Number(b.important) - Number(a.important) || (b.room.last_update_time ?? 0) - (a.room.last_update_time ?? 0));
+  const skipped = Math.max(0, chosen.length - MAX_ROOMS_PER_POLL);
+  if (skipped) logger.info({ skipped, limit: MAX_ROOMS_PER_POLL }, 'Chatwork: 見るルームが多いので一部は次回に回します');
+  let ingested = 0;
+  let count = 0;
+  for (const { room } of chosen.slice(0, MAX_ROOMS_PER_POLL)) {
     count++;
     let msgs: cw.ChatworkMessage[] = [];
     try {
@@ -126,6 +152,8 @@ export async function pollChatwork(opts: { allRooms?: boolean } = {}): Promise<{
       logger.warn({ err, room: room.room_id }, 'Chatwork ルーム取得に失敗');
       continue;
     }
+    // 取れたときだけ控えを進める（失敗したルームは次回もう一度見る）
+    seen[String(room.room_id)] = room.last_update_time ?? Math.floor(Date.now() / 1000);
     for (const m of msgs) {
       if (!cw.chatworkInScope(sc, m, { myAccountId: me, roomType: room.type, taskMessageIds: taskIds, conversationExists: conversationExists(room.room_id) })) continue;
       const norm = cw.normalizeChatworkMessage(room.room_id, m, me);
@@ -136,7 +164,8 @@ export async function pollChatwork(opts: { allRooms?: boolean } = {}): Promise<{
       if (r.isNew) ingested++;
     }
   }
-  return { ingested, rooms: count };
+  setSyncState(KEY_ROOM_SEEN, JSON.stringify(seen));
+  return { ingested, rooms: count, skipped };
 }
 
 /** Webhook 受信時: 本文は webhook に含まれるが、名前と添付のため API で取り直す */
