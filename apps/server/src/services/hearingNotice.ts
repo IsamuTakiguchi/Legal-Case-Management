@@ -59,7 +59,8 @@ export interface HearingNotice {
   hearingAt: string;
   nextHearingAt: string | null;
   nextHearingText: string;
-  docs: { name: string; path: string; itemId?: string; modifiedAt?: string; size?: number }[];
+  /** 添付の候補（事件フォルダの更新が新しい順）。suggested は期日の前後に更新された＝その期日で出した可能性が高いもの */
+  docs: { name: string; path: string; itemId?: string; modifiedAt?: string; size?: number; suggested: boolean }[];
   channels: { channel: Channel; to: string }[];
 }
 
@@ -99,12 +100,22 @@ export async function prepareHearingNotice(noteId: number, opts: { channel?: Cha
   const nextActions = note.nextActions.map((a) => `・${a.title}${a.due ? `（${a.due}まで）` : ''}`);
   const resultText = resultLines.join('\n');
 
+  // 添付の候補は事件フォルダの更新履歴から。期日の前日以降に更新したものは「その期日で出した書面」とみて既定で選ぶ
   let docs: HearingNotice['docs'] = [];
+  const suggestFrom = new Date(new Date(hearingAt).getTime() - 86400_000).toISOString();
   try {
-    docs = (await listCourtDocs(client.id, { days: 14 })).slice(0, 10).map((x) => ({ name: x.name, path: x.path, itemId: x.itemId, modifiedAt: x.modifiedAt, size: x.size }));
+    docs = (await listCourtDocs(client.id, { days: 60 })).slice(0, 20).map((x) => ({
+      name: x.name,
+      path: x.path,
+      itemId: x.itemId,
+      modifiedAt: x.modifiedAt,
+      size: x.size,
+      suggested: !!x.modifiedAt && x.modifiedAt >= suggestFrom,
+    }));
   } catch (err) {
     logger.debug({ err }, '提出書面の一覧をスキップ');
   }
+  const suggestedCount = docs.filter((d) => d.suggested).length;
 
   const surname = familyName(client.name);
   const template = listTemplates().find((t) => t.key === 'hearing_report');
@@ -115,7 +126,7 @@ export async function prepareHearingNotice(noteId: number, opts: { channel?: Cha
     `結果・決定事項:\n${resultText || '（記録の本文のとおり）'}`,
     nextActions.length ? `今後の対応:\n${nextActions.join('\n')}` : '',
     `次回期日: ${nextHearingText}`,
-    docs.length ? '提出した書面を添付（LINE ならリンクまたは別途送付）する前提で触れる。' : '書面の添付には触れない。',
+    suggestedCount ? '提出した書面を添付（LINE ならリンクまたは別途送付）する前提で触れる。' : '書面の添付には触れない。',
     '依頼者が読んで分かる言葉で、今後の流れを一言添える。事実の創作はしない。',
   ]
     .filter(Boolean)

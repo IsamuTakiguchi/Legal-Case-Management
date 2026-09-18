@@ -164,6 +164,45 @@ export async function listCourtDocs(clientId: number, opts: { days?: number } = 
     .sort((a, b) => (b.modifiedAt ?? '').localeCompare(a.modifiedAt ?? ''));
 }
 
+export interface ClientFolderListing {
+  /** 依頼者フォルダから見た今の場所（'' はフォルダ直下） */
+  sub: string;
+  /** 1 つ上（今が直下なら null） */
+  parent: string | null;
+  folders: { name: string; path: string; sub: string }[];
+  files: { name: string; path: string; itemId?: string; modifiedAt?: string; size?: number }[];
+}
+
+/** 添付に選べるファイルの種類 */
+const ATTACHABLE = /\.(pdf|docx?|xlsx?|pptx?|jpe?g|png|gif|txt|csv|zip)$/i;
+
+/**
+ * 依頼者（事件）フォルダの中を見る。手でファイルを選ぶときに使う。
+ * sub は依頼者フォルダからの相対パス。上の階層へは出られない。
+ */
+export async function listClientFolder(clientId: number, sub = ''): Promise<ClientFolderListing> {
+  const client = db().select().from(schema.clients).where(eq(schema.clients.id, clientId)).get();
+  if (!client) throw new Error('依頼者が見つかりません');
+  // 「..」や先頭の「/」で依頼者フォルダの外に出られないようにする
+  const parts = sub.split('/').map((x) => x.trim()).filter((x) => x && x !== '.' && x !== '..');
+  const rel = parts.join('/');
+  const base = clientFolder(client);
+  const here = rel ? joinPath(base, rel) : base;
+  const items = await storage().list(here);
+  return {
+    sub: rel,
+    parent: parts.length ? parts.slice(0, -1).join('/') : null,
+    folders: items
+      .filter((i) => i.isFolder)
+      .map((i) => ({ name: i.name, path: i.path, sub: parts.concat(i.name).join('/') }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'ja')),
+    files: items
+      .filter((i) => !i.isFolder && ATTACHABLE.test(i.name))
+      .map((i) => ({ name: i.name, path: i.path, itemId: i.itemId, modifiedAt: i.modifiedAt, size: i.size }))
+      .sort((a, b) => (b.modifiedAt ?? '').localeCompare(a.modifiedAt ?? '')),
+  };
+}
+
 export function upcomingEvents(days = 14) {
   const now = new Date();
   const to = new Date(now.getTime() + days * 86400_000);

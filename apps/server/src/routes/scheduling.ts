@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { proposeSlotsSchema, confirmSlotSchema, nextHearingInputSchema, EVENT_KINDS, schedulePreferencesSchema } from '@lcm/shared';
 import { proposeSlots, confirmSlot, cancelSession, listSessions, findFreeSlots, extractChosenSlot } from '../services/scheduling.js';
-import { syncCalendar, checkPostEvents, resolveNextHearing, listCourtDocs, upcomingEvents, relinkEvent, listCalendarEvents, createCalendarEvent, editCalendarEvent, removeCalendarEvent, createHoldSet, confirmHold, cancelHoldSet, startReschedule } from '../services/court.js';
+import { syncCalendar, checkPostEvents, resolveNextHearing, listCourtDocs, listClientFolder, upcomingEvents, relinkEvent, listCalendarEvents, createCalendarEvent, editCalendarEvent, removeCalendarEvent, createHoldSet, confirmHold, cancelHoldSet, startReschedule } from '../services/court.js';
 import { createZoomMeeting } from '../integrations/zoom.js';
 import { extractScheduleFromConversation, registerScheduleFromConversation, extractSchedulePreferences } from '../services/scheduleExtract.js';
 import { holdProposalContext, draftHoldProposal, sendHoldProposal } from '../services/holdProposal.js';
@@ -195,3 +195,6 @@ schedulingRoutes.delete('/calendar/events/:id', async (c) => {
 schedulingRoutes.post('/court/next-hearing', async (c) => c.json(await resolveNextHearing(nextHearingInputSchema.parse(await c.req.json()))));
 
 schedulingRoutes.get('/court/docs/:clientId', async (c) => c.json(await listCourtDocs(Number(c.req.param('clientId')), { days: c.req.query('days') ? Number(c.req.query('days')) : undefined })));
+
+/** 依頼者（事件）フォルダの中身。手で添付を選ぶときに使う。sub は依頼者フォルダからの相対パス */
+schedulingRoutes.get('/clients/:clientId/folder', async (c) => c.json(await listClientFolder(Number(c.req.param('clientId')), c.req.query('sub') ?? '')));
