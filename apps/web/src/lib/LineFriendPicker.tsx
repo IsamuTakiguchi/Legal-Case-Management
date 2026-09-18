@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import { fmtDate } from './format';
+import { LineInvitePanel } from './LineInvite';
 
 export interface LineFriend {
   userId: string;
@@ -23,10 +24,23 @@ export function friendLabel(f: LineFriend): string {
  * 依頼者の LINE を「友だち一覧から選ぶ」部品。ID を手で調べなくてよい。
  * 友だち追加の通知・受信・友だち一覧 API から蓄積した相手を名前で選ぶ
  */
-export function LineFriendPicker({ value, onChange, clientId }: { value: string | null; onChange: (userId: string | null) => void; clientId?: number | null }) {
+export function LineFriendPicker({
+  value,
+  onChange,
+  clientId,
+  invitedAt,
+  onInviteChanged,
+}: {
+  value: string | null;
+  onChange: (userId: string | null) => void;
+  clientId?: number | null;
+  invitedAt?: string | null;
+  onInviteChanged?: () => void;
+}) {
   const qc = useQueryClient();
   const friends = useQuery({ queryKey: ['line-friends'], queryFn: () => api.get<LineFriend[]>('/line/friends') });
   const [manual, setManual] = useState(false);
+  const [invite, setInvite] = useState(false);
   const [msg, setMsg] = useState('');
   const sync = useMutation({
     mutationFn: () => api.post<{ ok: boolean; total: number; added: number; reason?: string }>('/line/friends/sync'),
@@ -67,11 +81,17 @@ export function LineFriendPicker({ value, onChange, clientId }: { value: string 
         <button type="button" className="btn btn-sm" onClick={() => sync.mutate()} disabled={sync.isPending} title="LINE の友だち一覧 API から取り込みます（認証済／プレミアムアカウントのみ）">
           {sync.isPending ? '取り込み中…' : '友だち一覧を取り込む'}
         </button>
+        <button type="button" className="btn btn-sm" onClick={() => setInvite(!invite)} title="友だち追加の URL と QR コードを出します。相手の ID が分からなくても、ここから登録に進めます">
+          {invite ? '友だち追加の案内を閉じる' : '友だち追加をお願いする'}
+        </button>
         <button type="button" className="hover:underline" onClick={() => setManual(!manual)}>
           {manual ? '一覧から選ぶ' : 'ID を直接入力'}
         </button>
-        {friends.data && list.length === 0 && !manual && <span>候補がありません。依頼者が友だち追加すると「要確認」に通知が出て、そこから紐付けできます</span>}
+        {friends.data && list.length === 0 && !manual && !invite && (
+          <span>候補がありません。「友だち追加をお願いする」から URL・QR を渡すと、追加された時点で紐付けられます</span>
+        )}
       </div>
+      {invite && <LineInvitePanel clientId={clientId ?? null} invitedAt={invitedAt ?? null} onChanged={onInviteChanged} />}
       {msg && <div className="fade-in text-xs text-slate-600">{msg}</div>}
     </div>
   );

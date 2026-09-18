@@ -10,6 +10,8 @@ export const clients = sqliteTable('clients', {
   aliases: text('aliases', { mode: 'json' }).$type<string[]>().notNull().default([]),
   emails: text('emails', { mode: 'json' }).$type<string[]>().notNull().default([]),
   lineUserId: text('line_user_id'),
+  // 友だち追加をお願いした日時。lineUserId が空のままなら「LINE 連携待ち」
+  lineInvitedAt: text('line_invited_at'),
   chatworkRoomId: integer('chatwork_room_id'),
   chatworkAccountId: integer('chatwork_account_id'),
   onedriveFolderPath: text('onedrive_folder_path'),

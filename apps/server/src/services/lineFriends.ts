@@ -1,7 +1,7 @@
-import { eq, isNull, and } from 'drizzle-orm';
+import { eq, isNull, isNotNull, and } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { getLineFollowerIds, getLineProfile, lineProfileStatus, lineGroupStatus, isLineGroupThread } from '../channels/line.js';
-import { linkConversationToClient, cleanDisplayName } from './identity.js';
+import { linkConversationToClient, cleanDisplayName, suggestClients } from './identity.js';
 import { upsertAlert, resolveAlertsByKeyPrefix } from './alerts.js';
 import { isConfigured } from '../config.js';
 import { logger } from '../logger.js';
@@ -42,19 +42,50 @@ export function markLineUnfollowed(userId: string) {
   resolveAlertsByKeyPrefix(`line_followed:${userId}`);
 }
 
+/** 友だち追加をお願いしたまま、まだ LINE が紐付いていない依頼者 */
+export function listLineWaitingClients(): { id: number; name: string; invitedAt: string | null }[] {
+  return db()
+    .select({ id: schema.clients.id, name: schema.clients.name, invitedAt: schema.clients.lineInvitedAt })
+    .from(schema.clients)
+    .where(and(eq(schema.clients.archived, false), isNull(schema.clients.lineUserId), isNotNull(schema.clients.lineInvitedAt)))
+    .all()
+    .sort((a, b) => (b.invitedAt ?? '').localeCompare(a.invitedAt ?? ''));
+}
+
 /** 友だち追加の通知を要確認に出す（すでに依頼者に紐付いている ID なら出さない） */
 export function raiseLineFollowed(userId: string, displayName: string | null) {
   const linked = db().select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients).where(eq(schema.clients.lineUserId, userId)).get();
   if (linked) return;
   const name = cleanDisplayName(displayName);
+  // 「友だち追加をお願い中」の依頼者を候補に出す。名前が似ている順に並べ、その中でも依頼した順を保つ
+  const waiting = listLineWaitingClients();
+  const byName = new Map(suggestClients(name, 20).map((c, i) => [c.id, i]));
+  const candidates = [...waiting].sort((a, b) => (byName.get(a.id) ?? 99) - (byName.get(b.id) ?? 99)).slice(0, 5);
+  const hint = candidates.length
+    ? `友だち追加をお願いしている依頼者: ${candidates.map((c) => c.name).join('・')}。下のボタンで紐付けられます。`
+    : '依頼者に紐付けると、この相手からの LINE が最初から依頼者のやり取りとして届きます。まだメッセージが無くても紐付けできます。';
   upsertAlert({
     type: 'line_followed',
     dedupeKey: `line_followed:${userId}`,
     title: `LINE 友だち追加: ${name ?? `名前が取得できない相手（ID 末尾 …${userId.slice(-6)}）`}`,
-    body: '依頼者に紐付けると、この相手からの LINE が最初から依頼者のやり取りとして届きます。まだメッセージが無くても紐付けできます。',
-    payload: { lineUserId: userId, displayName: name },
+    body: hint,
+    payload: { lineUserId: userId, displayName: name, waiting: candidates.map((c) => ({ id: c.id, name: c.name })) },
     refresh: true,
   });
+}
+
+/**
+ * 依頼者に「友だち追加をお願いした」印を付ける。
+ * これ以降にその依頼者が友だち追加すると、要確認の通知にその依頼者がワンタップの候補として出る。
+ */
+export function markClientLineInvited(clientId: number, invited: boolean) {
+  const d = db();
+  const client = d.select().from(schema.clients).where(eq(schema.clients.id, clientId)).get();
+  if (!client) throw new Error('依頼者が見つかりません');
+  if (invited && client.lineUserId) throw new Error('この依頼者にはすでに LINE が紐付いています');
+  const now = new Date().toISOString();
+  d.update(schema.clients).set({ lineInvitedAt: invited ? now : null, updatedAt: now }).where(eq(schema.clients.id, clientId)).run();
+  return { clientId, invitedAt: invited ? now : null };
 }
 
 export interface LineFriendRow {
@@ -147,7 +178,7 @@ export function linkLineFriendToClient(userId: string, clientId: number) {
   const client = d.select().from(schema.clients).where(eq(schema.clients.id, clientId)).get();
   if (!client) throw new Error('依頼者が見つかりません');
   assertLineFriendFree(userId, clientId);
-  d.update(schema.clients).set({ lineUserId: userId, preferredChannel: client.preferredChannel ?? 'line', updatedAt: new Date().toISOString() }).where(eq(schema.clients.id, clientId)).run();
+  d.update(schema.clients).set({ lineUserId: userId, lineInvitedAt: null, preferredChannel: client.preferredChannel ?? 'line', updatedAt: new Date().toISOString() }).where(eq(schema.clients.id, clientId)).run();
   const conv = d.select().from(schema.conversations).where(and(eq(schema.conversations.channel, 'line'), eq(schema.conversations.externalThreadId, userId))).get();
   if (conv && conv.clientId !== clientId) linkConversationToClient(conv.id, clientId);
   resolveAlertsByKeyPrefix(`line_followed:${userId}`);

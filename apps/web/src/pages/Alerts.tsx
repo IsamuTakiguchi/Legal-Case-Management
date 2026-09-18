@@ -116,12 +116,28 @@ function LineFollowAction({ alert, onDone }: { alert: Alert; onDone: () => void 
   const [err, setErr] = useState('');
   const userId = String(alert.payload.lineUserId ?? '');
   const name = String(alert.payload.displayName ?? '');
-  const link = useMutation({ mutationFn: () => api.post(`/line/friends/${encodeURIComponent(userId)}/link`, { clientId: Number(id) }), onSuccess: onDone, onError: (e) => setErr((e as Error).message) });
+  // 友だち追加をお願いしていた依頼者。名前が似ている順にサーバが並べてくれる
+  const waiting = Array.isArray(alert.payload.waiting) ? (alert.payload.waiting as { id: number; name: string }[]) : [];
+  const link = useMutation({
+    mutationFn: (clientId: number) => api.post(`/line/friends/${encodeURIComponent(userId)}/link`, { clientId }),
+    onSuccess: onDone,
+    onError: (e) => setErr((e as Error).message),
+  });
   return (
     <div className="space-y-1">
+      {waiting.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-slate-500">友だち追加をお願い中:</span>
+          {waiting.map((w) => (
+            <button key={w.id} className="btn btn-primary btn-sm" disabled={link.isPending} onClick={() => link.mutate(w.id)} title={`${w.name}に紐付けます`}>
+              {w.name}に紐付ける
+            </button>
+          ))}
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         <ClientPicker value={id} onChange={setId} emptyLabel="依頼者に紐付け…" />
-        <button className="btn btn-primary btn-sm" disabled={!id || link.isPending} onClick={() => link.mutate()}>
+        <button className="btn btn-primary btn-sm" disabled={!id || link.isPending} onClick={() => link.mutate(Number(id))}>
           紐付ける
         </button>
         <Link to={`/clients?new=${encodeURIComponent(name)}&line=${encodeURIComponent(userId)}`} className="btn btn-sm">
@@ -158,7 +174,7 @@ function LinkAction({ alert, onLink, onContactLinked, label = '依頼者に紐�
             <button className="btn btn-primary btn-sm" disabled={!id} onClick={() => onLink(Number(id))}>
               紐付ける
             </button>
-            <Link to={`/clients?new=${encodeURIComponent(String(alert.payload.displayName ?? ''))}`} className="btn btn-sm">
+            <Link to={`/clients?new=${encodeURIComponent(String(alert.payload.displayName ?? ''))}${newClientEmail(alert)}`} className="btn btn-sm">
               新規依頼者を登録
             </Link>
           </div>
@@ -179,11 +195,17 @@ function LinkAction({ alert, onLink, onContactLinked, label = '依頼者に紐�
           会話を開く
         </Link>
       ) : null}
-      <Link to={`/clients?new=${encodeURIComponent(String(alert.payload.displayName ?? ''))}`} className="btn btn-sm">
+      <Link to={`/clients?new=${encodeURIComponent(String(alert.payload.displayName ?? ''))}${newClientEmail(alert)}`} className="btn btn-sm">
         新規依頼者を登録
       </Link>
     </div>
   );
+}
+
+/** 未紐付けが Gmail なら、そのアドレスを新規依頼者フォームに引き継ぐ（手で打ち直さなくてよい） */
+function newClientEmail(alert: Alert): string {
+  const identity = alert.payload.identity as { channel?: string; email?: string } | undefined;
+  return identity?.channel === 'gmail' && identity.email ? `&email=${encodeURIComponent(identity.email)}` : '';
 }
 
 function NextHearing({ alert, onDone }: { alert: Alert; onDone: () => void }) {
