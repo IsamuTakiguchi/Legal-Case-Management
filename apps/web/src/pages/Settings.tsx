@@ -341,6 +341,31 @@ export default function Settings() {
     },
     onError: (e) => setMsg((e as Error).message),
   });
+  // Chatwork: 取込済みの分にも、いまの取込範囲を当て直す
+  interface Recheck { scope: string; conversations: number; messages: number; outOfScope: number; removed: number; emptied: number; skipped: number; dryRun: boolean; reason: string | null }
+  const [recheckPreview, setRecheckPreview] = useState<Recheck | null>(null);
+  const recheckChatwork = useMutation({
+    mutationFn: (apply: boolean) => api.post<Recheck>(`/chatwork/recheck-scope${apply ? '?apply=1' : ''}`),
+    onSuccess: (r) => {
+      if (r.reason) {
+        setRecheckPreview(null);
+        setMsg(r.reason);
+        return;
+      }
+      if (r.dryRun) {
+        setRecheckPreview(r);
+        setMsg(r.outOfScope === 0 ? '取込範囲の外のメッセージはありませんでした' : '');
+        return;
+      }
+      setRecheckPreview(null);
+      setMsg(`範囲外の受信 ${r.removed} 件を外しました（受信箱から外した会話 ${r.emptied} 件）`);
+      qc.invalidateQueries({ queryKey: ['conversations'] });
+      qc.invalidateQueries({ queryKey: ['nav-counts'] });
+      qc.invalidateQueries({ queryKey: ['alerts'] });
+      qc.invalidateQueries({ queryKey: ['stale-unanswered'] });
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
   const styleAction = useMutation({
     mutationFn: (v: { url: string; body?: unknown }) => api.post<{ imported?: number; profile?: string }>(v.url, v.body),
     onSuccess: (r) => {
@@ -558,6 +583,38 @@ export default function Settings() {
                       </option>
                     ))}
                   </select>
+                  {f.key === 'chatwork_scope' && (
+                    <div className="mt-1 space-y-1 text-xs text-slate-500">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button type="button" className="btn btn-sm" onClick={() => recheckChatwork.mutate(false)} disabled={recheckChatwork.isPending}>
+                          {recheckChatwork.isPending ? '確認中…' : '取込済みの分を確認する'}
+                        </button>
+                        <span>設定より前に取り込んだ Chatwork にも、いまの取込範囲を当て直します</span>
+                      </div>
+                      {recheckPreview && recheckPreview.outOfScope > 0 && (
+                        <div className="fade-in rounded border border-amber-200 bg-amber-50/50 p-2 text-slate-700">
+                          <div>
+                            取込済み {recheckPreview.messages} 件のうち、<span className="font-semibold tabular-nums">{recheckPreview.outOfScope}</span> 件が
+                            いまの取込範囲の外です（受信が 1 件も残らない会話 {recheckPreview.emptied} 件は受信箱から外れます）。
+                          </div>
+                          {recheckPreview.skipped > 0 && <div>ルームの種別が分からない会話 {recheckPreview.skipped} 件は触りません。</div>}
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-primary"
+                              disabled={recheckChatwork.isPending}
+                              onClick={() => {
+                                if (window.confirm(`範囲外の受信 ${recheckPreview.outOfScope} 件を受信箱から外します。自分が送った分は残ります。よろしいですか？`)) recheckChatwork.mutate(true);
+                              }}
+                            >
+                              範囲外の受信を外す
+                            </button>
+                            <span>外すのは相手からの受信だけで、自分が送った分は残ります</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {f.key === 'gmail_categories' && (
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                       <button type="button" className="btn btn-sm" onClick={() => recategorize.mutate()} disabled={recategorize.isPending}>

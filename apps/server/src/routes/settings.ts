@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { recheckChatworkScope } from '../services/chatworkRecheck.js';
 import { z } from 'zod';
 import { allSettings, setSetting, SETTING_DEFAULTS, getSyncState } from '../services/settings.js';
 import { listTemplates, saveTemplates } from '../services/templates.js';
@@ -54,6 +55,11 @@ settingsRoutes.put('/settings', async (c) => {
   if (body.gmail_categories === 'primary' && before.gmail_categories !== 'primary') {
     setImmediate(() => recategorizeConversations().catch((err) => logger.warn({ err }, 'Gmail 会話の再判定に失敗')));
   }
+  // Chatwork を「自分宛だけ」に切り替えたら、取込済みの分にも当て直す
+  // （これが無いと、範囲外のやり取りが受信箱と要確認に残り続ける）
+  if (body.chatwork_scope === 'to_me' && before.chatwork_scope !== 'to_me') {
+    setImmediate(() => recheckChatworkScope({ apply: true }).catch((err) => logger.warn({ err }, 'Chatwork の取込範囲の当て直しに失敗')));
+  }
   return c.json({ ok: true });
 });
 
@@ -74,6 +80,12 @@ settingsRoutes.get('/gmail/my-addresses', async (c) => {
     return c.json({ addresses: configured, googleConnected: true });
   }
 });
+
+/**
+ * 取込済みの Chatwork に、いまの取込範囲を当て直す。
+ * ?apply=1 で実際に片付ける（付けなければ件数を数えるだけ）
+ */
+settingsRoutes.post('/chatwork/recheck-scope', async (c) => c.json(await recheckChatworkScope({ apply: c.req.query('apply') === '1' })));
 
 /** 取込済みの Gmail 会話の区分（メイン／プロモーション等）を判定し直す */
 settingsRoutes.post('/gmail/recategorize', async (c) => c.json(await recategorizeConversations({ all: c.req.query('all') === '1' })));
