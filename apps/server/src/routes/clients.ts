@@ -21,7 +21,9 @@ import { prepareHearingNotice } from '../services/hearingNotice.js';
 import { listCaseHolds, attachHoldSetToCase } from '../services/court.js';
 import { joinPath, getItemByPath } from '../integrations/onedrive.js';
 
-import { listLineFriends, syncLineFollowers, linkLineFriendToClient, assertLineFriendFree } from '../services/lineFriends.js';
+import { listLineFriends, syncLineFollowers, linkLineFriendToClient, assertLineFriendFree, markClientLineInvited, listLineWaitingClients } from '../services/lineFriends.js';
+import { lineInvite, lineInviteMessage } from '../services/lineInvite.js';
+import { getSetting } from '../services/settings.js';
 import { repairLineGroupConversations } from '../services/lineGroups.js';
 import { classifyClientMessages, classifyMessageCase } from '../services/caseClassify.js';
 
@@ -36,10 +38,15 @@ clientRoutes.get('/clients', (c) => {
   return c.json(rows);
 });
 
+/** メールアドレスは前後の空白を落とし、小文字にして重複を除く（同じ相手を 2 度登録しないため） */
+function normalizeEmails(emails: string[]): string[] {
+  return [...new Set(emails.map((e) => e.trim().toLowerCase()).filter(Boolean))];
+}
+
 clientRoutes.post('/clients', async (c) => {
   const input = clientInputSchema.parse(await c.req.json());
   if (input.lineUserId) assertLineFriendFree(input.lineUserId, null);
-  const row = db().insert(schema.clients).values({ ...input, emails: input.emails.map((e) => e.toLowerCase()) }).returning().get();
+  const row = db().insert(schema.clients).values({ ...input, emails: normalizeEmails(input.emails) }).returning().get();
   // LINE の友だちを選んで登録したら、既存の会話を付け、友だち追加の通知を消す
   if (input.lineUserId) linkLineFriendToClient(input.lineUserId, row.id);
   return c.json(db().select().from(schema.clients).where(eq(schema.clients.id, row.id)).get());
@@ -89,12 +96,33 @@ clientRoutes.post('/line/friends/:userId/link', async (c) => {
   return c.json(linkLineFriendToClient(c.req.param('userId'), body.clientId));
 });
 
+/**
+ * 友だち追加の案内（URL・QR）。
+ * LINE では相手の ID を先に知ることができないので、この URL を依頼者に送って追加してもらう。
+ */
+clientRoutes.get('/line/invite', async (c) => {
+  const r = await lineInvite({ refresh: c.req.query('refresh') === '1' });
+  const clientId = c.req.query('clientId') ? Number(c.req.query('clientId')) : null;
+  const client = clientId ? (db().select().from(schema.clients).where(eq(schema.clients.id, clientId)).get() ?? null) : null;
+  return c.json({
+    ...r,
+    message: r.addUrl ? lineInviteMessage(client?.name ?? null, r.addUrl, getSetting('office_name')) : null,
+    waiting: listLineWaitingClients(),
+  });
+});
+
+/** この依頼者を「友だち追加をお願い中」にする（解除は invited: false） */
+clientRoutes.post('/clients/:id/line-invite', async (c) => {
+  const body = z.object({ invited: z.boolean().default(true) }).parse(await c.req.json().catch(() => ({})));
+  return c.json(markClientLineInvited(Number(c.req.param('id')), body.invited));
+});
+
 clientRoutes.put('/clients/:id', async (c) => {
   const id = Number(c.req.param('id'));
   const input = clientInputSchema.partial().parse(await c.req.json());
   if (input.lineUserId) assertLineFriendFree(input.lineUserId, id);
   db().update(schema.clients)
-    .set({ ...input, ...(input.emails ? { emails: input.emails.map((e) => e.toLowerCase()) } : {}), updatedAt: new Date().toISOString() })
+    .set({ ...input, ...(input.emails ? { emails: normalizeEmails(input.emails) } : {}), updatedAt: new Date().toISOString() })
     .where(eq(schema.clients.id, id))
     .run();
   if (input.lineUserId) linkLineFriendToClient(input.lineUserId, id);

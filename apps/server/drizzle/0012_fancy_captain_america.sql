@@ -1,0 +1,1 @@
+ALTER TABLE `clients` ADD `line_invited_at` text;

@@ -21,6 +21,8 @@ export interface ClientRow {
   aliases: string[];
   emails: string[];
   lineUserId: string | null;
+  /** 友だち追加をお願いした日時。lineUserId が空のままなら「LINE 連携待ち」 */
+  lineInvitedAt?: string | null;
   chatworkRoomId: number | null;
   chatworkAccountId: number | null;
   onedriveFolderPath: string | null;
@@ -172,7 +174,20 @@ export default function Clients() {
 /** 新規・編集フォームの下書きキー（保存できたら親から clearDraft で消す） */
 export const clientFormDraftKey = (id?: number | null) => `client:${id ?? 'new'}:form`;
 
-export function ClientForm({ initial, onSubmit, onCancel, busy }: { initial: Partial<ClientRow>; onSubmit: (b: Partial<ClientRow>) => void; onCancel: () => void; busy?: boolean }) {
+export function ClientForm({
+  initial,
+  onSubmit,
+  onCancel,
+  busy,
+  onInviteChanged,
+}: {
+  initial: Partial<ClientRow>;
+  onSubmit: (b: Partial<ClientRow>) => void;
+  onCancel: () => void;
+  busy?: boolean;
+  /** LINE の「連携待ち」を切り替えたときに呼ばれる（親が依頼者を読み直す） */
+  onInviteChanged?: () => void;
+}) {
   const base = { aliases: [], emails: [], ...initial } as Partial<ClientRow>;
   const [f, setF] = useState<Partial<ClientRow>>(base);
   // 入力途中の内容を自動保存する（保存前に画面を離れても消えない）
@@ -209,7 +224,7 @@ export function ClientForm({ initial, onSubmit, onCancel, busy }: { initial: Par
       </div>
       <div>
         <label className="label">LINE公式の友だち（一覧から選ぶ。受信があれば自動でも紐付きます）</label>
-        <LineFriendPicker value={f.lineUserId ?? null} onChange={(v) => set('lineUserId', v)} clientId={f.id ?? null} />
+        <LineFriendPicker value={f.lineUserId ?? null} onChange={(v) => set('lineUserId', v)} clientId={f.id ?? null} invitedAt={f.lineInvitedAt ?? null} onInviteChanged={onInviteChanged} />
       </div>
       <div>
         <label className="label">依頼者フォルダ（OneDrive の依頼者ルート配下。空なら氏名と同名）</label>

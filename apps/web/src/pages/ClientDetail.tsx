@@ -7,6 +7,7 @@ import { channelBadge, channelLabel, fmtDateTime, fmtBytes } from '../lib/format
 import { ClientForm, clientFormDraftKey, type ClientRow } from './Clients';
 import { EVENT_KIND_LABEL, TASK_STATUS_LABEL, type EventKind, type TaskStatus, CASE_STATUSES, CASE_STATUS_LABEL } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
+import { LineInvitePanel } from '../lib/LineInvite';
 
 interface Detail extends ClientRow {
   folder: string;
@@ -85,7 +86,16 @@ export default function ClientDetail() {
           削除
         </button>
       </div>
-      {edit && <ClientForm initial={c} onSubmit={(b) => update.mutate(b)} onCancel={() => setEdit(false)} busy={update.isPending} />}
+      {edit && (
+        <ClientForm
+          initial={c}
+          onSubmit={(b) => update.mutate(b)}
+          onCancel={() => setEdit(false)}
+          busy={update.isPending}
+          onInviteChanged={() => qc.invalidateQueries({ queryKey: ['client', id] })}
+        />
+      )}
+      <ContactCard c={c} onEdit={() => setEdit(true)} />
       <div className="grid gap-4 md:grid-cols-2">
         <section className="card">
           <div className="mb-2 flex items-center">
@@ -250,5 +260,56 @@ export default function ClientDetail() {
         </section>
       </div>
     </div>
+  );
+}
+
+/**
+ * この依頼者の連絡先。受信がまだ無くても、ここで何が登録済みかが分かる。
+ * LINE は相手の ID を先に知ることができないので、未登録なら友だち追加の案内をその場で開ける。
+ */
+function ContactCard({ c, onEdit }: { c: Detail; onEdit: () => void }) {
+  const [invite, setInvite] = useState(false);
+  const qc = useQueryClient();
+  const waiting = !c.lineUserId && !!c.lineInvitedAt;
+  return (
+    <section className="card">
+      <div className="mb-2 flex items-center">
+        <h2 className="font-semibold">連絡先</h2>
+        <button className="btn btn-sm ml-auto" onClick={onEdit}>
+          連絡先を登録・変更
+        </button>
+      </div>
+      <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[6rem_1fr]">
+        <dt className="text-slate-500">メール</dt>
+        <dd>{c.emails.length ? c.emails.join('、') : <span className="text-slate-400">未登録（登録すると、そのアドレスからのメールが自動でこの依頼者に入ります）</span>}</dd>
+        <dt className="text-slate-500">Chatwork</dt>
+        <dd>{c.chatworkRoomId ? `ルーム ${c.chatworkRoomId}` : <span className="text-slate-400">未登録</span>}</dd>
+        <dt className="text-slate-500">LINE</dt>
+        <dd className="flex flex-wrap items-center gap-2">
+          {c.lineUserId ? (
+            <span>紐付け済み（ID 末尾 …{c.lineUserId.slice(-6)}）</span>
+          ) : waiting ? (
+            <>
+              <span className="rounded bg-amber-100 px-1 text-xs text-amber-800">連携待ち</span>
+              <span className="text-slate-500">友だち追加されると「要確認」から紐付けられます</span>
+            </>
+          ) : (
+            <span className="text-slate-400">未登録</span>
+          )}
+          {!c.lineUserId && (
+            <button className="text-xs text-blue-700 hover:underline" onClick={() => setInvite(!invite)}>
+              {invite ? '閉じる' : '友だち追加をお願いする'}
+            </button>
+          )}
+        </dd>
+        <dt className="text-slate-500">主な連絡手段</dt>
+        <dd>{c.preferredChannel ? channelLabel(c.preferredChannel) : <span className="text-slate-400">未設定</span>}</dd>
+      </dl>
+      {invite && (
+        <div className="mt-2">
+          <LineInvitePanel clientId={c.id} invitedAt={c.lineInvitedAt ?? null} onChanged={() => qc.invalidateQueries({ queryKey: ['client', String(c.id)] })} />
+        </div>
+      )}
+    </section>
   );
 }
