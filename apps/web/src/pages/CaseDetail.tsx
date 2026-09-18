@@ -8,7 +8,7 @@ import { HoldForm, fmtEventRange, type RescheduleTarget } from '../lib/HoldForm'
 import { LongText } from '../lib/LongText';
 import { TaskDeadlineSelect } from '../lib/Deadline';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
-import { fmtDateTime, fmtDate, fmtYen, toLocalInput, fromLocalInput, channelLabel } from '../lib/format';
+import { fmtDateTime, fmtDate, fmtYen, fmtBytes, toLocalInput, fromLocalInput, channelLabel } from '../lib/format';
 import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
 
@@ -852,6 +852,7 @@ function ContactForm({ form, setForm, onSave, onCancel, busy }: { form: typeof E
 
 interface HearingNotice {
   noteId: number;
+  clientId: number;
   clientName: string;
   channel: string;
   channelLabel: string;
@@ -862,10 +863,75 @@ interface HearingNotice {
   hearingAt: string;
   nextHearingAt: string | null;
   nextHearingText: string;
-  docs: { name: string; path: string; itemId?: string; modifiedAt?: string; size?: number }[];
+  docs: DriveDoc[];
   channels: { channel: string; to: string }[];
 }
+interface DriveDoc {
+  name: string;
+  path: string;
+  itemId?: string;
+  modifiedAt?: string;
+  size?: number;
+  /** 期日の前後に更新された＝その期日で出した可能性が高い */
+  suggested?: boolean;
+}
+interface FolderListing {
+  sub: string;
+  parent: string | null;
+  folders: { name: string; path: string; sub: string }[];
+  files: DriveDoc[];
+}
 const CHANNEL_JA: Record<string, string> = { gmail: 'Gmail', line: 'LINE公式', chatwork: 'Chatwork' };
+
+/** 依頼者（事件）フォルダの中を見て、添付するファイルを手で選ぶ */
+function FolderBrowser({ clientId, isPicked, onToggle }: { clientId: number; isPicked: (path: string) => boolean; onToggle: (f: DriveDoc) => void }) {
+  const [sub, setSub] = useState('');
+  const q = useQuery({
+    queryKey: ['client-folder', clientId, sub],
+    queryFn: () => api.get<FolderListing>(`/clients/${clientId}/folder?sub=${encodeURIComponent(sub)}`),
+    retry: false,
+  });
+  return (
+    <div className="rounded border border-slate-200 bg-white p-2 text-xs">
+      <div className="mb-1 flex flex-wrap items-center gap-1">
+        <button type="button" className="btn btn-sm" onClick={() => setSub('')} disabled={!sub}>
+          依頼者フォルダ
+        </button>
+        {sub && (
+          <>
+            <span className="text-slate-400">/</span>
+            <span className="truncate text-slate-600">{sub}</span>
+            <button type="button" className="btn btn-sm ml-1" onClick={() => setSub(q.data?.parent ?? '')}>
+              ↑ 上へ
+            </button>
+          </>
+        )}
+      </div>
+      {q.isLoading && <div className="text-slate-500">フォルダを読み込み中…</div>}
+      {q.error && <div className="text-red-600">{(q.error as Error).message}</div>}
+      {q.data && (
+        <div className="max-h-56 overflow-y-auto">
+          {q.data.folders.map((f) => (
+            <button key={f.sub} type="button" className="flex w-full items-center gap-2 px-1 py-0.5 text-left hover:bg-slate-50" onClick={() => setSub(f.sub)}>
+              <span>📁</span>
+              <span className="truncate">{f.name}</span>
+            </button>
+          ))}
+          {q.data.files.map((f) => (
+            <label key={f.path} className="flex cursor-pointer items-center gap-2 px-1 py-0.5 hover:bg-slate-50">
+              <input type="checkbox" checked={isPicked(f.path)} onChange={() => onToggle(f)} />
+              <span className="truncate">{f.name}</span>
+              <span className="ml-auto shrink-0 text-slate-400">
+                {fmtBytes(f.size)} {f.modifiedAt ? fmtDate(f.modifiedAt) : ''}
+              </span>
+            </label>
+          ))}
+          {q.data.folders.length === 0 && q.data.files.length === 0 && <div className="text-slate-500">このフォルダにファイルはありません</div>}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /**
  * 期日の記録から依頼者への期日連絡を送る。
@@ -874,7 +940,9 @@ const CHANNEL_JA: Record<string, string> = { gmail: 'Gmail', line: 'LINE公式',
 function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClose: () => void; onSent: () => void }) {
   const [channel, setChannel] = useState<string | undefined>(undefined);
   const [text, setText] = useState('');
-  const [docs, setDocs] = useState<Set<string>>(new Set());
+  // 添付に選んだファイル（候補からでも、フォルダから探した分でも同じ入れ物に入れる）
+  const [picked, setPicked] = useState<Map<string, DriveDoc>>(new Map());
+  const [browse, setBrowse] = useState(false);
   const [msg, setMsg] = useState('');
   const prep = useQuery({
     queryKey: ['hearing-notice', noteId, channel ?? ''],
@@ -885,9 +953,17 @@ function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClo
   useEffect(() => {
     if (prep.data) {
       setText(prep.data.text);
-      setDocs(new Set());
+      // 期日の前後に更新された書面は、はじめから選んでおく（外せます）
+      setPicked(new Map(prep.data.docs.filter((d) => d.suggested).map((d) => [d.path, d])));
     }
   }, [prep.data]);
+  const toggleDoc = (f: DriveDoc) =>
+    setPicked((prev) => {
+      const next = new Map(prev);
+      if (next.has(f.path)) next.delete(f.path);
+      else next.set(f.path, f);
+      return next;
+    });
   const n = prep.data;
   // 下書きを直した内容を自動保存する（AI の下書きが変わったら戻さない）
   const noticeDraft = useDraft(n ? `note:${noteId}:hearing-notice` : null, text, setText, n?.text ?? '');
@@ -896,7 +972,7 @@ function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClo
       api.post<{ note?: string; links: { name: string }[]; manualFiles: string[] }>(`/conversations/${n!.conversationId}/send`, {
         text,
         attachmentIds: [],
-        driveFiles: n!.docs.filter((d) => docs.has(d.path)).map((d) => ({ itemId: d.itemId, name: d.name, path: d.path })),
+        driveFiles: [...picked.values()].map((d) => ({ itemId: d.itemId, name: d.name, path: d.path })),
         draftId: n!.draftId,
         createWaitingTask: false,
       }),
@@ -943,32 +1019,50 @@ function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClo
         <>
           <textarea className="input min-h-44 text-sm" value={text} onChange={(e) => setText(e.target.value)} disabled={prep.isFetching} />
           <DraftHint handle={noticeDraft} />
-          {n.docs.length > 0 && (
-            <div className="text-sm">
-              <div className="mb-1 text-xs text-slate-500">
-                添付する提出書面（直近 2 週間に更新したファイル）
-                {n.channel === 'line' && '。LINE にはファイルを直接送れないため、共有リンクまたは手動送付になります'}
-              </div>
+          <div className="text-sm">
+            <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+              <span>
+                添付するファイル
+                {n.channel === 'line' && '（LINE にはファイルを直接送れないため、共有リンクまたは手動送付になります）'}
+              </span>
+              <button type="button" className="btn btn-sm ml-auto" onClick={() => setBrowse(!browse)}>
+                {browse ? 'フォルダを閉じる' : '📁 フォルダから選ぶ'}
+              </button>
+            </div>
+            {n.docs.length > 0 ? (
               <div className="flex flex-wrap gap-2">
                 {n.docs.map((d) => (
-                  <label key={d.path} className="flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1 text-xs">
-                    <input
-                      type="checkbox"
-                      checked={docs.has(d.path)}
-                      onChange={(e) => {
-                        const next = new Set(docs);
-                        if (e.target.checked) next.add(d.path);
-                        else next.delete(d.path);
-                        setDocs(next);
-                      }}
-                    />
+                  <label
+                    key={d.path}
+                    className={`flex items-center gap-1 rounded border px-2 py-1 text-xs ${d.suggested ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white'}`}
+                    title={d.suggested ? '期日の前後に更新されたファイルです' : undefined}
+                  >
+                    <input type="checkbox" checked={picked.has(d.path)} onChange={() => toggleDoc(d)} />
                     {d.name}
                     {d.modifiedAt && <span className="text-slate-400">{fmtDate(d.modifiedAt)}</span>}
+                    {d.suggested && <span className="badge badge-blue">期日の前後</span>}
                   </label>
                 ))}
               </div>
-            </div>
-          )}
+            ) : (
+              <div className="text-xs text-slate-500">事件フォルダに最近更新したファイルがありません。「フォルダから選ぶ」で探せます</div>
+            )}
+            {browse && (
+              <div className="mt-2">
+                <FolderBrowser clientId={n.clientId} isPicked={(path) => picked.has(path)} onToggle={toggleDoc} />
+              </div>
+            )}
+            {picked.size > 0 && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-slate-500">添付 {picked.size} 件:</span>
+                {[...picked.values()].map((d) => (
+                  <button key={d.path} type="button" className="rounded-full bg-slate-100 px-2 py-0.5 hover:bg-slate-200" onClick={() => toggleDoc(d)} title="外す">
+                    {d.name} ×
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <button className="btn btn-primary" onClick={() => send.mutate()} disabled={send.isPending || prep.isFetching || !text.trim()}>
               {send.isPending ? '送信中…' : `${n.channelLabel} で送信`}
