@@ -1282,6 +1282,35 @@ describe('未紐付けの連絡先の表示', () => {
     expect(fixed.body).toContain('「写真を送ります」');
     expect(refreshUnlinkedAlerts()).toBe(0);
   });
+
+  it('ふくらんだ受信件数は起動時に数え直される（同じメッセージで数えていた分を戻す）', async () => {
+    const { refreshUnlinkedAlerts } = await import('../services/identity.js');
+    const { upsertAlert } = await import('../services/alerts.js');
+    const { ingestMessage } = await import('../services/inbox.js');
+    const base = {
+      channel: 'chatwork' as const,
+      externalThreadId: '787878',
+      attachments: [],
+      identity: { channel: 'chatwork' as const, chatworkRoomId: 787878, chatworkAccountId: 4242, displayName: '取引先 次郎' },
+      senderName: '取引先 次郎',
+      subject: '取引先ルーム',
+      direction: 'in' as const,
+    };
+    await ingestMessage({ ...base, externalId: 'infl-1', body: '以前の件です', sentAt: '2026-02-01T01:00:00.000Z' });
+    const conv = (await ingestMessage({ ...base, externalId: 'infl-2', body: 'その後いかがでしょうか', sentAt: '2026-02-02T01:00:00.000Z' })).conversation;
+    // 以前の不具合で、同じメッセージを見るたびに件数が増えていた状態を作る
+    const a = db().select().from(schema.alerts).all().find((x) => x.dedupeKey === 'unlinked:chatwork:787878')!;
+    db().update(schema.alerts).set({ payload: { ...(a.payload as Record<string, unknown>), messageCount: 137 } }).where(eq(schema.alerts.id, a.id)).run();
+
+    expect(refreshUnlinkedAlerts()).toBe(1);
+    const fixed = db().select().from(schema.alerts).where(eq(schema.alerts.id, a.id)).get()!;
+    // 実際に届いている 2 件に戻り、抜粋も最新の受信になる
+    expect((fixed.payload as { messageCount: number }).messageCount).toBe(2);
+    expect(fixed.body).toContain('この相手からの受信 2 件');
+    expect(fixed.body).toContain('「その後いかがでしょうか」');
+    // 正しい件数になったら、もう書き換えない
+    expect(refreshUnlinkedAlerts()).toBe(0);
+  });
 });
 
 describe('会話の最終日時', () => {

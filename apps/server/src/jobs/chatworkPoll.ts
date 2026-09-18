@@ -169,13 +169,25 @@ export async function pollChatwork(opts: { allRooms?: boolean } = {}): Promise<{
     }
     // 取れたときだけ控えを進める（失敗したルームは次回もう一度見る）
     seen[String(room.room_id)] = room.last_update_time ?? Math.floor(Date.now() / 1000);
+    // 初めて見るルームは、Chatwork が返す直近 100 件がまるごと「新着」になってしまう。
+    // そのままだと何か月も前のやり取りが未読・要返信・通知になって受信箱が埋まるので、
+    // 一番新しい 1 件だけを新着として扱い、それより古いものは過去分にする。
+    // 2 回目以降のルームはこれまでどおり（会話の最終受信日時より古いものだけ過去分）。
+    // 自分の発言は未読を動かさないので数に入れない
+    // （取込範囲の判定に会話の有無を使うのは自分の発言だけなので、ここでは判定がぶれない）。
+    const newestSend = conversationExists(room.room_id)
+      ? 0
+      : msgs
+          .filter((m) => m.account.account_id !== me && cw.chatworkInScope(sc, m, { myAccountId: me, roomType: room.type, taskMessageIds: taskIds }))
+          .reduce((a, m) => Math.max(a, m.send_time), 0);
+    const newestInBatch = newestSend ? new Date(newestSend * 1000).toISOString() : null;
     for (const m of msgs) {
       if (!cw.chatworkInScope(sc, m, { myAccountId: me, roomType: room.type, taskMessageIds: taskIds, conversationExists: conversationExists(room.room_id), isReplyToKnownMessage })) continue;
       const norm = cw.normalizeChatworkMessage(room.room_id, m, me);
       if (norm.direction === 'in' && !norm.identity.displayName) norm.identity.displayName = room.name;
       // グループチャットは会話名をルーム名にする（発言者は伝言ごとに表示）
       if (room.type !== 'direct') norm.subject = room.name;
-      const r = await ingestMessage(norm);
+      const r = await ingestMessage(norm, { newestInBatch });
       if (r.isNew) ingested++;
     }
   }

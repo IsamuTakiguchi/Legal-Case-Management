@@ -21,9 +21,21 @@ export type MessageRow = typeof schema.messages.$inferSelect;
 /** 受信メッセージを保存。重複は無視。添付は即時ダウンロード→保存 */
 export async function ingestMessage(
   m: InboundMessage,
-  opts: { processAttachments?: boolean } = {},
+  opts: { processAttachments?: boolean; newestInBatch?: string | null } = {},
 ): Promise<{ message: MessageRow; conversation: ConversationRow; isNew: boolean }> {
   const d = db();
+  // すでに取り込み済みなら、ここで終わりにする。
+  // Chatwork のポーリングは毎回そのルームの直近メッセージを返すので、ここで止めないと、
+  // 同じ古い発言のたびに「未紐付けの連絡先」の件数が数え直され、要確認に出続けてしまう。
+  const already = d
+    .select()
+    .from(schema.messages)
+    .where(and(eq(schema.messages.channel, m.channel), eq(schema.messages.externalId, m.externalId)))
+    .get();
+  if (already) {
+    const prev = d.select().from(schema.conversations).where(eq(schema.conversations.id, already.conversationId)).get();
+    if (prev) return { message: already, conversation: prev, isNew: false };
+  }
   let conv = d
     .select()
     .from(schema.conversations)
@@ -141,8 +153,10 @@ export async function ingestMessage(
     .get();
 
   // 過去分の取り込み（Chatwork のポーリングが後からさかのぼって拾った古い発言など）は、
-  // 会話の「最終受信日時」を巻き戻さず、未読・要返信・アーカイブ解除もしない
-  const backfill = !!conv.lastMessageAt && m.sentAt < conv.lastMessageAt;
+  // 会話の「最終受信日時」を巻き戻さず、未読・要返信・アーカイブ解除もしない。
+  // newestInBatch（今回そのルームで取れた中で一番新しい受信）より古いものも過去分として扱う。
+  // これが無いと、初めて見るルームの古いやり取りがまとめて未読になり、受信箱が埋まってしまう。
+  const backfill = (!!conv.lastMessageAt && m.sentAt < conv.lastMessageAt) || (!!opts.newestInBatch && m.sentAt < opts.newestInBatch);
   const patch: Partial<typeof schema.conversations.$inferInsert> = {};
   if (!backfill) patch.lastMessageAt = m.sentAt;
   if (m.direction === 'in') {

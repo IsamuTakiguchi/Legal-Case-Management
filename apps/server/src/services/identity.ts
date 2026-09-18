@@ -122,10 +122,32 @@ export function refreshUnlinkedAlerts(): number {
   const open = d.select().from(schema.alerts).where(and(eq(schema.alerts.status, 'open'), eq(schema.alerts.type, 'unlinked_contact'))).all();
   let n = 0;
   for (const a of open) {
-    const p = a.payload as { conversationId?: number; identity?: IdentityHint; displayName?: string | null; preview?: string };
-    if (p.preview !== undefined || !p.conversationId) continue;
+    const p = a.payload as { conversationId?: number; identity?: IdentityHint; displayName?: string | null; preview?: string; messageCount?: number };
+    if (!p.conversationId) continue;
     const conv = d.select().from(schema.conversations).where(eq(schema.conversations.id, p.conversationId)).get();
     if (!conv) continue;
+    // すでに新しい表示になっているものは、受信件数が実際より多くなっていたときだけ数え直す。
+    // 以前は、取り込み済みの同じメッセージでも警告を出し直していたため、件数がふくらんでいた
+    if (p.preview !== undefined) {
+      const actual = d
+        .select()
+        .from(schema.messages)
+        .where(and(eq(schema.messages.conversationId, conv.id), eq(schema.messages.direction, 'in')))
+        .all().length;
+      if (!p.messageCount || p.messageCount <= actual) continue;
+      const last = d
+        .select()
+        .from(schema.messages)
+        .where(and(eq(schema.messages.conversationId, conv.id), eq(schema.messages.direction, 'in')))
+        .orderBy(desc(schema.messages.sentAt))
+        .limit(1)
+        .get();
+      const identity = p.identity ?? { channel: conv.channel as IdentityHint['channel'] };
+      const rebuilt = buildUnlinkedAlert(conv.id, identity, conv.counterpartName ?? p.displayName, { body: last?.body ?? null, sentAt: last?.sentAt ?? null, subject: conv.subject }, Math.max(1, actual));
+      d.update(schema.alerts).set({ title: rebuilt.title, body: rebuilt.body, payload: { ...p, ...rebuilt.payload } }).where(eq(schema.alerts.id, a.id)).run();
+      n++;
+      continue;
+    }
     // 識別子が無い古い警告は会話から補う
     const identity: IdentityHint = p.identity ?? {
       channel: conv.channel as IdentityHint['channel'],
