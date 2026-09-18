@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { StaleUnanswered } from '../lib/StaleUnanswered';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AI_MODELS, aiModelLabel } from '@lcm/shared';
 import { api } from '../lib/api';
@@ -622,6 +623,12 @@ export default function Settings() {
           <option value="off">表示しない</option>
         </select>
         <AppBadgeStatus source={form.app_badge_source ?? 'inbox'} />
+        {(form.app_badge_source ?? 'inbox') !== 'off' && (
+          <div className="mt-2">
+            <div className="label">いまの内訳（数が思ったより多いとき）</div>
+            <StaleUnanswered />
+          </div>
+        )}
         <div className="mt-3 flex items-center gap-2">
           <button className="btn btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>
             保存

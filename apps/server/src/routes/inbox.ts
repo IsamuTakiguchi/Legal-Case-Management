@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { eq, desc } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { listConversations, getConversation, markRead, setNeedsReply, archiveConversation, bulkUpdateConversations, linkMessage, setMessageDirection } from '../services/inbox.js';
+import { listConversations, getConversation, markRead, setNeedsReply, archiveConversation, bulkUpdateConversations, linkMessage, setMessageDirection, staleUnanswered, clearStaleUnanswered } from '../services/inbox.js';
 import { createTask } from '../services/tasks.js';
 import { linkConversationToClient, suggestClients } from '../services/identity.js';
 import { linkConversationToContact, unlinkConversation, createContact, getContact } from '../services/contacts.js';
@@ -77,6 +77,19 @@ inboxRoutes.post('/messages/:id/task', async (c) => {
     syncToChatwork: body.syncToChatwork,
   });
   return c.json(task);
+});
+
+/** 未返信の内訳（アイコンやメニューの数が大きいときに、何が効いているかを見る） */
+inboxRoutes.get('/conversations/stale', (c) => {
+  const days = Math.min(3650, Math.max(1, Number(c.req.query('days') ?? 30) || 30));
+  const { ids, ...rest } = staleUnanswered(days);
+  return c.json({ days, ...rest, sample: ids.slice(0, 5) });
+});
+
+/** しばらく動きのない未返信をまとめて片付ける */
+inboxRoutes.post('/conversations/stale/clear', async (c) => {
+  const body = z.object({ days: z.number().int().min(1).max(3650), action: z.enum(['resolve', 'archive']).default('resolve') }).parse(await c.req.json());
+  return c.json({ updated: clearStaleUnanswered(body.days, body.action) });
 });
 
 inboxRoutes.post('/conversations/bulk', async (c) => {

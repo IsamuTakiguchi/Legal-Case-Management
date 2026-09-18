@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { StaleUnanswered } from '../lib/StaleUnanswered';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
@@ -117,6 +118,7 @@ export default function Inbox() {
           </form>
         </div>
       </div>
+      <StaleUnanswered compact />
       {(query.data?.length ?? 0) > 0 && (
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <label className="flex items-center gap-1">

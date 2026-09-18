@@ -438,6 +438,44 @@ export function bulkUpdateConversations(ids: number[], action: BulkConversationA
 
 
 /**
+ * 「しばらく動きのない未返信」を数える。
+ *
+ * アイコンやメニューに出る数は、未返信（＝相手からの連絡が最後で、まだ返していない）の会話の数。
+ * 取り込みの不具合などで古いやり取りがまとめて未返信になっていると、この数が実態と合わなくなる。
+ * 何がその数を作っているのかを見て、まとめて片付けられるようにする。
+ */
+export function staleUnanswered(days: number): { total: number; stale: number; byChannel: Record<string, number>; oldest: string | null; ids: number[] } {
+  const d = db();
+  const rows = d
+    .select()
+    .from(schema.conversations)
+    .where(and(eq(schema.conversations.needsReply, true), eq(schema.conversations.archived, false)))
+    .all();
+  const cutoff = new Date(Date.now() - Math.max(0, days) * 86400_000).toISOString();
+  const byChannel: Record<string, number> = {};
+  const ids: number[] = [];
+  let oldest: string | null = null;
+  for (const c of rows) {
+    // 未返信は「相手からの連絡」に対するものなので、最後の受信日時で古さを見る
+    const at = c.lastInboundAt ?? c.lastMessageAt;
+    if (!at || at >= cutoff) continue;
+    ids.push(c.id);
+    byChannel[c.channel] = (byChannel[c.channel] ?? 0) + 1;
+    if (!oldest || at < oldest) oldest = at;
+  }
+  return { total: rows.length, stale: ids.length, byChannel, oldest, ids };
+}
+
+/** しばらく動きのない未返信をまとめて片付ける。対象は staleUnanswered と同じ */
+export function clearStaleUnanswered(days: number, action: 'resolve' | 'archive'): number {
+  const { ids } = staleUnanswered(days);
+  let done = 0;
+  // 一度に触る件数が多くなりすぎないよう、分けて実行する
+  for (let i = 0; i < ids.length; i += 200) done += bulkUpdateConversations(ids.slice(i, i + 200), action);
+  return done;
+}
+
+/**
  * 会話の最終日時をメッセージから計算し直す（過去分の取り込みで巻き戻っていたものを直す）。
  * 起動時に一度だけ呼ぶ。未読・要返信は手で変えていることがあるので触らない
  */
