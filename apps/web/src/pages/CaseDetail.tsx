@@ -1158,6 +1158,9 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
   // 古い記録に想定外の値が入っていても保存できるよう、選べる値に丸める
   const [waitingFor, setWaitingFor] = useState<string>(n.waitingFor && (WAITING as readonly string[]).includes(n.waitingFor) ? n.waitingFor : 'none');
   const [err, setErr] = useState('');
+  const [aiMsg, setAiMsg] = useState('');
+  // AI で整理する前の内容。押し間違えても戻せるようにしておく
+  const [beforeAi, setBeforeAi] = useState<{ gist: string; theirSaid: string; ourSaid: string; decisions: string; nextActions: string; waitingFor: string; counterpart: string; phone: string } | null>(null);
   // 編集途中の内容を自動保存する。元の記録が変わっていたら戻さない
   const editDraft = useDraftGroup(`note:${n.id}:edit`, {
     counterpart: { value: counterpart, set: setCounterpart, base: n.counterpart ?? '' },
@@ -1168,6 +1171,45 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
     ourSaid: { value: ourSaid, set: setOurSaid, base: joinLines(n.ourSaid) },
     decisions: { value: decisions, set: setDecisions, base: joinLines(n.decisions) },
   });
+  /** いま画面に入っているメモを AI に渡して、要旨・発言・決定事項・次のアクションに整理し直す（保存はしない） */
+  const organize = useMutation({
+    mutationFn: () =>
+      api.post<{ gist: string; theirSaid: string[]; ourSaid: string[]; decisions: string[]; nextActions: { title: string; due: string | null }[]; waitingFor: string; counterpart: string | null; phone: string | null }>(
+        `/case-notes/${n.id}/structure`,
+        { rawText, kind, counterpart: counterpart || null, phone: phone || null },
+      ),
+    onSuccess: (r) => {
+      setBeforeAi({ gist, theirSaid, ourSaid, decisions, nextActions, waitingFor, counterpart, phone });
+      setGist(r.gist);
+      setTheirSaid(joinLines(r.theirSaid));
+      setOurSaid(joinLines(r.ourSaid));
+      setDecisions(joinLines(r.decisions));
+      setNextActions(r.nextActions.map((a) => `・${a.title}${dateOf(a.due) ? ` | ${dateOf(a.due)}` : ''}`).join('\n'));
+      if ((WAITING as readonly string[]).includes(r.waitingFor)) setWaitingFor(r.waitingFor);
+      // 相手・電話番号は、こちらで入れていなければ AI の読み取りで埋める
+      if (!counterpart.trim() && r.counterpart) setCounterpart(r.counterpart);
+      if (!phone.trim() && r.phone) setPhone(r.phone);
+      setErr('');
+      setAiMsg('AI が整理しました。直してから「保存」を押してください（まだ保存していません）');
+    },
+    onError: (e) => {
+      setAiMsg('');
+      setErr((e as Error).message);
+    },
+  });
+  const undoAi = () => {
+    if (!beforeAi) return;
+    setGist(beforeAi.gist);
+    setTheirSaid(beforeAi.theirSaid);
+    setOurSaid(beforeAi.ourSaid);
+    setDecisions(beforeAi.decisions);
+    setNextActions(beforeAi.nextActions);
+    setWaitingFor(beforeAi.waitingFor);
+    setCounterpart(beforeAi.counterpart);
+    setPhone(beforeAi.phone);
+    setBeforeAi(null);
+    setAiMsg('AI の整理を取り消しました');
+  };
   const save = useMutation({
     mutationFn: () =>
       api.put(`/case-notes/${n.id}`, {
@@ -1240,6 +1282,23 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
       <div>
         <label className="label">元メモ</label>
         <textarea className="input min-h-16 text-sm" value={rawText} onChange={(e) => setRawText(e.target.value)} />
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => organize.mutate()}
+            disabled={organize.isPending || !rawText.trim()}
+            title="上の元メモの内容から、要旨・相手が言ったこと・こちらが言ったこと・決定事項・次のアクションを AI が作り直します。保存はしません"
+          >
+            {organize.isPending ? '整理中…' : '✨ AI で要旨・発言・決定事項・次のアクションに整理'}
+          </button>
+          {beforeAi && (
+            <button type="button" className="btn btn-sm" onClick={undoAi}>
+              AI の整理を取り消す
+            </button>
+          )}
+          {aiMsg && <span className="fade-in text-xs text-slate-600">{aiMsg}</span>}
+        </div>
       </div>
       {err && <div className="fade-in text-xs text-red-600">{err}</div>}
       <div className="flex gap-2">

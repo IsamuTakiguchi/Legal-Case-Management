@@ -11,7 +11,7 @@ import { storage, FolderNotFoundError } from '../integrations/storage.js';
 import { clientFolder } from '../services/attachments.js';
 import { proposeScheduleFromNote } from '../services/noteSchedule.js';
 import { staffAskContext, draftStaffAsk, sendStaffAsk, type StaffAskSource } from '../services/staffAsk.js';
-import { listCaseTypes, upsertCaseType, createCase, updateCase, listCases, getCase, caseTimeline, addCaseNote, updateCaseNote, deleteCaseNote, generateCaseSummary, structureNote, createTasksFromNote, suggestNoteTasks } from '../services/cases.js';
+import { listCaseTypes, upsertCaseType, createCase, updateCase, listCases, getCase, caseTimeline, addCaseNote, updateCaseNote, deleteCaseNote, generateCaseSummary, structureNote, restructureNote, createTasksFromNote, suggestNoteTasks } from '../services/cases.js';
 import * as creditors from '../services/creditors.js';
 import { onedriveCandidates, chatworkCandidates, applyImport, deleteClient } from '../services/clientImport.js';
 import { findDuplicateClients, mergeClients } from '../services/clientMerge.js';
@@ -354,6 +354,14 @@ clientRoutes.post('/case-notes/:id/tasks', async (c) => {
 clientRoutes.post('/case-notes/:id/hearing-notice', async (c) => {
   const body = z.object({ channel: z.enum(['gmail', 'line', 'chatwork']).optional() }).parse(await c.req.json().catch(() => ({})));
   return c.json(await prepareHearingNotice(Number(c.req.param('id')), { channel: body.channel }));
+});
+
+/** 保存済みの記録を AI で整理し直す（結果を返すだけ。保存は PUT で） */
+clientRoutes.post('/case-notes/:id/structure', async (c) => {
+  const body = z
+    .object({ rawText: z.string().optional(), kind: z.string().optional(), counterpart: z.string().nullable().optional(), phone: z.string().nullable().optional() })
+    .parse(await c.req.json().catch(() => ({})));
+  return c.json(await restructureNote(Number(c.req.param('id')), body));
 });
 
 clientRoutes.put('/case-notes/:id', async (c) => {
