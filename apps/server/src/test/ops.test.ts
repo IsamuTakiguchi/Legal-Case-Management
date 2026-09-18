@@ -560,7 +560,49 @@ describe('Chatwork の取込範囲', () => {
     // 自分の発言は、既に取り込んだ会話がある場合だけ
     const mine = { body: '返信です', message_id: 'x', account: { account_id: me } };
     expect(chatworkInScope('to_me', mine, { myAccountId: me, roomType: 'group', conversationExists: false })).toBe(false);
-    expect(chatworkInScope('to_me', mine, { myAccountId: me, roomType: 'group', conversationExists: true })).toBe(true);
+  });
+
+  it('引用の中の [To:自分] は自分宛と見ない（ほかの人あてのメッセージを取り込まない）', async () => {
+    const { chatworkInScope, isAddressedToMe, withoutQuotedText } = await import('../channels/chatwork.js');
+    const me = 12345;
+    const other = { account_id: 999 };
+    const msg = (body: string) => ({ body, message_id: 'm', account: other });
+
+    // 田中さん宛のメッセージに、昔の [To:自分] を引用している
+    const quoted = '[To:777]田中さん\n[qt][qtmeta aid=999 time=1700000000][To:12345]瀧口さん ご確認ください[/qt]\nこの件、対応をお願いします';
+    expect(withoutQuotedText(quoted)).not.toContain('[To:12345]');
+    expect(isAddressedToMe(quoted, me)).toBe(false);
+    expect(chatworkInScope('to_me', msg(quoted), { myAccountId: me, roomType: 'group' })).toBe(false);
+
+    // 自分の発言を引用しつつ、別の人に返信している
+    const quotedReply = '[rp aid=999 to=100-200][pname:999]さん\n[qt][qtmeta aid=12345 time=1700000000]前にお伝えしたとおりです[/qt]\n了解です';
+    expect(chatworkInScope('to_me', msg(quotedReply), { myAccountId: me, roomType: 'group' })).toBe(false);
+
+    // 引用の外に自分宛が書いてあれば、これまでどおり取り込む
+    const quotedAndToMe = '[qt][qtmeta aid=999 time=1700000000]以前の話です[/qt]\n[To:12345]瀧口さん いかがでしょうか';
+    expect(chatworkInScope('to_me', msg(quotedAndToMe), { myAccountId: me, roomType: 'group' })).toBe(true);
+    // 引用の外の [toall] も残る
+    expect(isAddressedToMe('[qt][qtmeta aid=999 time=1]昔の[toall][/qt]\n共有です', me)).toBe(false);
+    expect(isAddressedToMe('[qt][qtmeta aid=999 time=1]昔の話[/qt]\n[toall]共有です', me)).toBe(true);
+  });
+
+  it('グループでの自分の発言は、取り込み済みのやり取りへの返信だけ取り込む', async () => {
+    const { chatworkInScope } = await import('../channels/chatwork.js');
+    const me = 12345;
+    const mine = (body: string) => ({ body, message_id: 'x', account: { account_id: me } });
+    // 取り込み済みのメッセージ ID は 9999 だけ
+    const isReplyToKnownMessage = (b: string) => /\[rp aid=\d+ to=\d+-9999\]/.test(b);
+    const ctx = { myAccountId: me, roomType: 'group', conversationExists: true, isReplyToKnownMessage };
+
+    // 関係のない自分の発言は入れない（会話があるというだけでは入れない）
+    expect(chatworkInScope('to_me', mine('ありがとうございます'), ctx)).toBe(false);
+    expect(chatworkInScope('to_me', mine('[To:777]田中さん お願いします'), ctx)).toBe(false);
+    // 追っているやり取りへの返信は入れる
+    expect(chatworkInScope('to_me', mine('[rp aid=999 to=100-9999][pname:999]さん\n承知しました'), ctx)).toBe(true);
+    // 取り込んでいないメッセージへの返信は入れない
+    expect(chatworkInScope('to_me', mine('[rp aid=999 to=100-5555][pname:999]さん\n別件です'), ctx)).toBe(false);
+    // ダイレクトチャットは自分の発言もそのまま入れる
+    expect(chatworkInScope('to_me', mine('はい'), { myAccountId: me, roomType: 'direct', conversationExists: true })).toBe(true);
   });
 });
 

@@ -110,6 +110,54 @@ describe('Chatwork の取りこぼし', () => {
     expect(cwState.fetched).toEqual([]);
   });
 
+  it('ほかの人あてのメッセージは、自分宛を引用していても取り込まない', async () => {
+    cwState.rooms = [{ room_id: 910, name: '事務所グループ', type: 'group', unread_num: 0, last_update_time: 1_800_000_000 }];
+    cwState.messages.set(910, [
+      // 田中さん宛。昔の [To:自分] を引用しているだけで、自分への用件ではない
+      msg('q-1', `[To:777]田中さん\n[qt][qtmeta aid=222 time=1700000000][To:${ME}]瀧口 勇さん ご確認ください[/qt]\nこの件お願いします`),
+      // 引用の中に自分への返信タグが残っているだけのもの
+      msg('q-2', `[rp aid=222 to=910-500][pname:222]さん\n[qt][qtmeta aid=${ME} time=1700000000]お伝えしたとおりです[/qt]\n了解です`),
+      // これは本当に自分宛
+      msg('q-3', `[To:${ME}]瀧口 勇さん\n本題です`),
+    ]);
+    const r = await pollChatwork();
+    expect(r.ingested).toBe(1);
+    expect(db().select().from(schema.messages).all().map((m) => m.externalId)).toEqual(['q-3']);
+  });
+
+  it('グループでの自分の発言は、取り込み済みのやり取りへの返信だけ取り込む', async () => {
+    cwState.rooms = [{ room_id: 920, name: '事務所グループ', type: 'group', unread_num: 0, last_update_time: 1_800_000_000 }];
+    cwState.messages.set(920, [
+      msg('1001', `[To:${ME}]瀧口 勇さん\n書面の件どうしますか`),
+      // 自分の返信（取り込み済みの 1001 宛）→ 入れる
+      msg('1002', '[rp aid=222 to=920-1001][pname:222]さん\n明日までに出します', ME),
+      // 自分の関係ない発言 → 入れない
+      msg('1003', 'ありがとうございました', ME),
+      // 自分が別の人に振った発言 → 入れない
+      msg('1004', '[To:777]田中さん こちらお願いします', ME),
+      // 取り込んでいないメッセージへの自分の返信 → 入れない
+      msg('1005', '[rp aid=222 to=920-9999][pname:222]さん\n別件です', ME),
+    ]);
+    const r = await pollChatwork();
+    expect(r.ingested).toBe(2);
+    expect(db().select().from(schema.messages).all().map((m) => m.externalId).sort()).toEqual(['1001', '1002']);
+  });
+
+  it('ダイレクトチャットは自分の発言もそのまま取り込む', async () => {
+    cwState.rooms = [{ room_id: 930, name: '山田 花子', type: 'direct', unread_num: 0, last_update_time: 1_800_000_000 }];
+    cwState.messages.set(930, [msg('d-1', 'お世話になります'), msg('d-2', '承知しました', ME)]);
+    const r = await pollChatwork();
+    expect(r.ingested).toBe(2);
+  });
+
+  it('取込範囲が「すべて」なら、これまでどおり全部取り込む', async () => {
+    setSetting('chatwork_scope', 'all');
+    cwState.rooms = [{ room_id: 940, name: '事務所グループ', type: 'group', unread_num: 0, last_update_time: 1_800_000_000 }];
+    cwState.messages.set(940, [msg('a-1', '雑談です'), msg('a-2', 'こちらこそ', ME)]);
+    const r = await pollChatwork();
+    expect(r.ingested).toBe(2);
+  });
+
   it('ルームが多いときは上限まで見て、残りは次回に回す', async () => {
     cwState.rooms = Array.from({ length: 70 }, (_, i) => ({ room_id: 1000 + i, name: `G${i}`, type: 'group' as const, unread_num: 0, last_update_time: 1_800_000_000 + i }));
     const r1 = await pollChatwork();
