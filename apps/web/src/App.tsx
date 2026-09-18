@@ -2,7 +2,7 @@ import { Routes, Route, NavLink, Navigate, useLocation, useNavigate } from 'reac
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './lib/api';
-import { applyAppBadge, badgeCount, badgeSource } from './lib/badge';
+import { applyAppBadge, badgeSource, badgeToApply } from './lib/badge';
 import { useTheme, THEME_CHOICES, THEME_LABEL } from './lib/theme';
 import { fmtDateTime } from './lib/format';
 import { Icon, type IconName } from './lib/icons';
@@ -66,10 +66,14 @@ export default function App() {
   const officeName = settings.data?.office_name?.trim();
   // ホーム画面・タスクバーのアイコンにも件数を出す（対応している端末だけ）
   const source = badgeSource(settings.data?.app_badge_source);
+  // 件数と設定がそろうまでは null（＝アイコンに書かない）
+  const badgeValue = badgeToApply(counts.data, settings.data !== undefined, source);
   useEffect(() => {
-    if (me.data?.authenticated !== true) return;
-    applyAppBadge(badgeCount(nav, source));
-  }, [me.data?.authenticated, nav, source]);
+    if (me.data?.authenticated !== true || badgeValue === null) return;
+    applyAppBadge(badgeValue);
+  }, [me.data?.authenticated, badgeValue]);
+  // アプリに戻ってきたときに数を取り直す（スマホでは裏に回ると 1 分ごとの取り直しが止まるため）
+  useNavCountsRefreshOnReturn(me.data?.authenticated === true);
   useEffect(() => {
     // ログアウトしたら数も消す
     if (me.data?.authenticated === false) applyAppBadge(0);
@@ -223,6 +227,28 @@ const TAB_INSET = { x: 8, y: 4 };
  * inbound = 新しい受信があった → 件数と受信箱を取り直す
  * navigate = 通知を押して開いた → その会話へ移動する
  */
+/**
+ * アプリに戻ってきたとき（別のアプリから切り替えた・タブに戻った）に件数を取り直す。
+ * 裏に回っている間は 1 分ごとの取り直しが止まるので、戻った直後の数が古いままになり、
+ * アイコンの数字も古いまま残ってしまう。
+ */
+function useNavCountsRefreshOnReturn(authenticated: boolean) {
+  const qc = useQueryClient();
+  useEffect(() => {
+    if (!authenticated) return;
+    const refresh = () => {
+      if (document.visibilityState !== 'visible') return;
+      qc.invalidateQueries({ queryKey: ['nav-counts'] });
+    };
+    document.addEventListener('visibilitychange', refresh);
+    window.addEventListener('focus', refresh);
+    return () => {
+      document.removeEventListener('visibilitychange', refresh);
+      window.removeEventListener('focus', refresh);
+    };
+  }, [authenticated, qc]);
+}
+
 function useServiceWorkerMessages() {
   const qc = useQueryClient();
   const navigate = useNavigate();

@@ -229,7 +229,12 @@ export default function Conversation() {
   // 開いた時点の未読数を覚えておく（サーバーは開いた瞬間に既読にするので、取り直すと 0 になる）
   const [unreadMark, setUnreadMark] = useState<{ id: number; count: number } | null>(null);
   useEffect(() => {
-    if (c && unreadMark?.id !== c.id) setUnreadMark({ id: c.id, count: c.unread ?? 0 });
+    if (c && unreadMark?.id !== c.id) {
+      setUnreadMark({ id: c.id, count: c.unread ?? 0 });
+      // 開いた時点でサーバー側は既読になる。会話を開くのは（操作ではなく）読み込みなので、
+      // ここで件数を取り直さないと、メニューとアイコンの数字が未読のまま残る
+      if ((c.unread ?? 0) > 0) qc.invalidateQueries({ queryKey: ['nav-counts'] });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [c?.id]);
   // 「ここから未読」を入れる位置 = 相手からの直近 N 件の先頭
