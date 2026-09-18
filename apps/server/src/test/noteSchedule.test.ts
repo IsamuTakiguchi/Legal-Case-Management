@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { eq } from 'drizzle-orm';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lcm-noteschedule-'));
 process.env.SESSION_SECRET = 'test-session-secret';
@@ -21,7 +22,7 @@ vi.mock('../integrations/anthropic.js', () => ({
 vi.mock('../integrations/calendar.js', () => ({ listEvents: async () => [] }));
 
 const { openTestDatabase, closeDatabase, db, schema } = await import('../db/index.js');
-const { proposeScheduleFromNote } = await import('../services/noteSchedule.js');
+const { proposeScheduleFromNote, registerScheduleFromNote } = await import('../services/noteSchedule.js');
 const { setSetting } = await import('../services/settings.js');
 
 beforeAll(() => {
@@ -48,6 +49,7 @@ function extraction(patch: Record<string, unknown> = {}) {
     requested: [],
     quote: '',
     note: '',
+    fixed: [],
     ...patch,
   };
 }
@@ -112,15 +114,51 @@ describe('記録から日程調整', () => {
     }
   });
 
-  it('日時が決まっている記録では候補を出さない', async () => {
+  it('日時が決まっている記録では候補を出さず、決まっている日時を fixed で返す', async () => {
     const { note } = seedNote({ decisions: ['次回期日は 10 月 11 日 13 時 30 分に決まった'] });
-    extracted = extraction({ found: false, content: '', quote: '', note: '日時は確定済み' });
+    extracted = extraction({
+      found: false,
+      content: '',
+      quote: '',
+      note: '日時は確定済み',
+      fixed: [{ startAt: '2099-10-11T13:30:00+09:00', timeKnown: true, content: '第3回弁論準備', kind: 'hearing', durationMinutes: 30, quote: '次回期日は 10 月 11 日 13 時 30 分' }],
+    });
     const r = await proposeScheduleFromNote(note.id);
     expect(r.found).toBe(false);
     expect(r.slots).toEqual([]);
     expect(r.blocked).toBeNull();
     // 件名は空でも既定を入れて、手で仮押さえできるようにする
     expect(r.content).toBe('打合せ');
+    // 決まっている日時はそのまま予定にできる形で返る
+    expect(r.fixed).toEqual([
+      {
+        startAt: new Date('2099-10-11T13:30:00+09:00').toISOString(),
+        endAt: new Date('2099-10-11T14:00:00+09:00').toISOString(),
+        timeKnown: true,
+        content: '第3回弁論準備',
+        kind: 'hearing',
+        quote: '次回期日は 10 月 11 日 13 時 30 分',
+      },
+    ]);
+  });
+
+  it('決まっている日時は、過ぎたものを捨てて早い順に返し、所要が無ければ既定の長さにする', async () => {
+    const { note } = seedNote();
+    extracted = extraction({
+      found: false,
+      fixed: [
+        { startAt: '2099-12-01T15:00:00+09:00', timeKnown: true, content: '判決', kind: 'hearing', durationMinutes: null, quote: '12/1 15 時' },
+        { startAt: '2020-03-03T10:00:00+09:00', timeKnown: true, content: '去年の期日', kind: 'hearing', durationMinutes: null, quote: '過去' },
+        { startAt: '2099-10-05T10:00:00+09:00', timeKnown: false, content: '', kind: 'other', durationMinutes: null, quote: '10/5' },
+        { startAt: 'あした', timeKnown: false, content: '打合せ', kind: 'meeting', durationMinutes: null, quote: '' },
+      ],
+    });
+    const r = await proposeScheduleFromNote(note.id);
+    expect(r.fixed.map((f) => f.quote)).toEqual(['10/5', '12/1 15 時']);
+    // 種別 other は打合せに寄せ、内容が空なら既定を入れる
+    expect(r.fixed[0]).toMatchObject({ kind: 'meeting', content: '打合せ', timeKnown: false });
+    // 所要の言及が無いので既定の 60 分
+    expect(new Date(r.fixed[0]!.endAt).getTime() - new Date(r.fixed[0]!.startAt).getTime()).toBe(60 * 60_000);
   });
 
   it('所要時間は 記録の言及 → 画面の指定 の順で使い、過ぎた希望日時は捨てる', async () => {
@@ -166,5 +204,75 @@ describe('記録から日程調整', () => {
     expect(r.slots).toEqual([]);
     expect(r.blocked).toContain('Google に接続されていません');
     spy.mockRestore();
+  });
+});
+
+describe('記録から予定を登録', () => {
+  it('決まっている日時をそのまま予定にする（依頼者・事件が付き、記録の出どころが説明に残る）', async () => {
+    const { note, kase, client } = seedNote({ gist: '次回期日を 10/11 13:30 と指定された' });
+    const startAt = '2099-10-11T13:30:00+09:00';
+    const endAt = '2099-10-11T14:00:00+09:00';
+    const r = await registerScheduleFromNote(note.id, {
+      mode: 'confirmed',
+      title: '山田 第3回弁論準備',
+      kind: 'hearing',
+      slots: [{ startAt, endAt }],
+    });
+    expect(r.mode).toBe('confirmed');
+    expect(r.events).toHaveLength(1);
+    const ev = r.events[0]!;
+    expect(ev).toMatchObject({ title: '山田 第3回弁論準備', kind: 'hearing', clientId: client.id, caseId: kase.id, status: 'confirmed' });
+    expect(ev.startAt).toBe(new Date(startAt).toISOString());
+    expect(ev.endAt).toBe(new Date(endAt).toISOString());
+    // どの記録から作ったかが説明に残る
+    expect(ev.description).toContain('記録から登録');
+    expect(ev.description).toContain('電話');
+    expect(ev.description).toContain('次回期日を 10/11 13:30 と指定された');
+    // 事件の次回期日にも反映される
+    expect(db().select().from(schema.cases).where(eq(schema.cases.id, kase.id)).get()?.nextHearingAt).toBe(new Date(startAt).toISOString());
+    // Zoom も Google も未接続なので会議 URL は付かない
+    expect(r.web).toBeNull();
+    expect(r.webText).toBe('');
+  });
+
+  it('WEB を選ぶと、会議 URL が無くても場所に WEB 会議と入る', async () => {
+    const { note } = seedNote();
+    const r = await registerScheduleFromNote(note.id, {
+      mode: 'confirmed',
+      title: '山田 打合せ',
+      kind: 'meeting',
+      web: true,
+      slots: [{ startAt: '2099-11-04T10:00:00+09:00', endAt: '2099-11-04T11:00:00+09:00' }],
+    });
+    expect(r.events[0]!.location).toBe('WEB会議');
+  });
+
+  it('候補が複数あるときは仮押さえにし、件名は「姓 内容 仮」になる', async () => {
+    const { note, kase, client } = seedNote();
+    const r = await registerScheduleFromNote(note.id, {
+      mode: 'holds',
+      title: '山田 打合せ',
+      kind: 'meeting',
+      slots: [
+        { startAt: '2099-11-05T14:00:00+09:00', endAt: '2099-11-05T15:00:00+09:00' },
+        { startAt: '2099-11-04T10:00:00+09:00', endAt: '2099-11-04T11:00:00+09:00' },
+      ],
+    });
+    expect(r.mode).toBe('holds');
+    expect(r.sessionId).toBeGreaterThan(0);
+    expect(r.events).toHaveLength(2);
+    // 件名に姓を二重に付けない
+    for (const ev of r.events) {
+      expect(ev.title).toBe('山田 打合せ 仮');
+      expect(ev.status).toBe('tentative');
+      expect(ev).toMatchObject({ kind: 'hold', clientId: client.id, caseId: kase.id });
+    }
+    // 早い順に並ぶ
+    expect(r.events[0]!.startAt).toBe(new Date('2099-11-04T10:00:00+09:00').toISOString());
+  });
+
+  it('日時が無ければ登録しない', async () => {
+    const { note } = seedNote();
+    await expect(registerScheduleFromNote(note.id, { mode: 'confirmed', title: '打合せ', kind: 'meeting', slots: [] })).rejects.toThrow('日時がありません');
   });
 });

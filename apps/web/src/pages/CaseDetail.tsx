@@ -1434,6 +1434,19 @@ interface NoteScheduleProposal {
   window: { from: string; to: string };
   slots: { startAt: string; endAt: string; score?: number }[];
   blocked: string | null;
+  /** 記録にもう書かれている日時（そのまま予定に登録できる） */
+  fixed: FixedEvent[];
+}
+
+/** 記録に書かれていた、もう決まっている予定 */
+interface FixedEvent {
+  startAt: string;
+  endAt: string;
+  /** 時刻まで書かれていたか。false なら仮置きなので直してもらう */
+  timeKnown: boolean;
+  content: string;
+  kind: EventKind;
+  quote: string;
 }
 
 /**
@@ -1441,6 +1454,78 @@ interface NoteScheduleProposal {
  * 記録の内容から「次に決める予定」と希望条件を読み取り、カレンダーの空きに当てて候補を出し、
  * 直してから仮押さえとして登録する。
  */
+function FixedEventRow({ noteId, f, clientName, onDone }: { noteId: number; f: FixedEvent; clientName: string | null; onDone: () => void }) {
+  const surname = clientName ? clientName.split(/[\s\u3000]/)[0]! : '';
+  const [start, setStart] = useState(() => toLocalInput(f.startAt));
+  const [title, setTitle] = useState(`${surname ? `${surname} ` : ''}${f.content}`);
+  const [kind, setKind] = useState<EventKind>(f.kind);
+  const [duration, setDuration] = useState(String(Math.max(15, Math.round((new Date(f.endAt).getTime() - new Date(f.startAt).getTime()) / 60_000))));
+  const [web, setWeb] = useState(false);
+  const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [done, setDone] = useState(false);
+  const mins = () => Math.max(15, Number(duration) || 60);
+
+  const add = useMutation({
+    mutationFn: () => {
+      const startAt = new Date(fromLocalInput(start));
+      return api.post<{ webText?: string }>(`/case-notes/${noteId}/schedule/register`, {
+        mode: 'confirmed',
+        title: title.trim() || f.content,
+        kind,
+        web,
+        slots: [{ startAt: startAt.toISOString(), endAt: new Date(startAt.getTime() + mins() * 60_000).toISOString() }],
+      });
+    },
+    onSuccess: (r) => {
+      setDone(true);
+      setMsg({ kind: 'ok', text: `予定に登録しました${r.webText ? `（${r.webText.split('\n')[0]}）` : ''}` });
+      onDone();
+    },
+    onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
+  });
+
+  return (
+    <li className="rounded bg-white/70 p-2">
+      <label className="block">
+        <span className="label">件名</span>
+        <input className="input py-0.5" value={title} onChange={(e) => setTitle(e.target.value)} disabled={done} />
+      </label>
+      <div className="mt-1 flex flex-wrap items-end gap-1.5">
+        <label className="min-w-0">
+          <span className="label">日時</span>
+          <input className="input w-auto py-0.5" type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} disabled={done} />
+        </label>
+        <label>
+          <span className="label">種別</span>
+          <select className="input w-auto py-0.5" value={kind} onChange={(e) => setKind(e.target.value as EventKind)} disabled={done}>
+            {EVENT_KINDS.filter((k) => k !== 'hold').map((k) => (
+              <option key={k} value={k}>
+                {EVENT_KIND_LABEL[k]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span className="label">所要（分）</span>
+          <input className="input w-16 py-0.5" type="number" min={15} step={15} value={duration} onChange={(e) => setDuration(e.target.value)} disabled={done} />
+        </label>
+        <label className="flex items-center gap-1 whitespace-nowrap pb-1 text-xs text-slate-600">
+          <input type="checkbox" checked={web} onChange={(e) => setWeb(e.target.checked)} disabled={done} />
+          WEB
+        </label>
+        <button className="btn btn-sm btn-primary ml-auto whitespace-nowrap" onClick={() => add.mutate()} disabled={done || add.isPending}>
+          {done ? '登録済み' : add.isPending ? '登録中…' : '予定に登録'}
+        </button>
+      </div>
+      <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+        {!f.timeKnown && <span className="rounded bg-amber-100 px-1 text-amber-800">時刻は仮</span>}
+        {f.quote && <span>記録から: 「{f.quote}」</span>}
+      </div>
+      {msg && <div className={`mt-0.5 text-xs ${msg.kind === 'ok' ? 'text-green-700' : 'text-red-600'}`}>{msg.text}</div>}
+    </li>
+  );
+}
+
 function NoteSchedulePanel({ n, onDone, onClose }: { n: Note; onDone: () => void; onClose: () => void }) {
   const [p, setP] = useState<NoteScheduleProposal | null>(null);
   const [title, setTitle] = useState('');
@@ -1462,8 +1547,8 @@ function NoteSchedulePanel({ n, onDone, onClose }: { n: Note; onDone: () => void
       setMsg(
         r.blocked
           ? { kind: 'info', text: r.blocked }
-          : !r.found
-            ? { kind: 'info', text: 'この記録からは、これから決める予定を読み取れませんでした。候補を手で入れて仮押さえできます' }
+          : !r.found && r.fixed.length === 0
+            ? { kind: 'info', text: 'この記録からは、予定にする日時を読み取れませんでした。候補を手で入れて仮押さえできます' }
             : null,
       );
     },
@@ -1500,7 +1585,7 @@ function NoteSchedulePanel({ n, onDone, onClose }: { n: Note; onDone: () => void
   return (
     <div className="fade-in mt-2 space-y-2 rounded border border-blue-200 bg-blue-50/30 p-2">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="font-semibold">記録から日程調整</span>
+        <span className="font-semibold">記録から予定を登録・日程調整</span>
         {read.isPending && <span className="loading-text text-xs text-slate-500">記録を読んで空きを探しています…</span>}
         <button className="ml-auto text-xs text-slate-500 hover:underline" onClick={onClose}>
           閉じる
@@ -1515,8 +1600,20 @@ function NoteSchedulePanel({ n, onDone, onClose }: { n: Note; onDone: () => void
         </div>
       )}
 
+      {p && p.fixed.length > 0 && (
+        <div>
+          <div className="label">記録に書かれている日時（そのまま予定に登録できます）</div>
+          <ul className="space-y-1.5">
+            {p.fixed.map((f, i) => (
+              <FixedEventRow key={i} noteId={n.id} f={f} clientName={p.clientName} onDone={onDone} />
+            ))}
+          </ul>
+        </div>
+      )}
+
       {p && (
         <>
+          {p.fixed.length > 0 && <div className="border-t border-blue-200 pt-1 text-xs font-semibold text-slate-600">これから決める予定の候補</div>}
           <label className="block">
             <span className="label">件名</span>
             <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="打合せ" />
@@ -1814,9 +1911,9 @@ function NoteView({ n, onDeleted, onNotice }: { n: Note; onDeleted: () => void; 
         <button
           className="whitespace-nowrap text-xs text-blue-700 hover:underline"
           onClick={() => setScheduleOpen(!scheduleOpen)}
-          title="この記録から、次に決める予定と候補日時を読み取って仮押さえします"
+          title="記録に書かれている日時をそのまま予定に登録できます。これから決めるものは候補日時を出して仮押さえします"
         >
-          日程調整
+          予定に登録・日程調整
         </button>
         <button className="whitespace-nowrap text-xs text-blue-700 hover:underline" onClick={() => setEditing(true)}>
           編集
