@@ -6,6 +6,7 @@ import { useDraftRecord, useDraftGroup, useDraft, DraftHint } from '../lib/draft
 import { RoomPicker } from '../lib/RoomPicker';
 import { HoldForm, fmtEventRange, type RescheduleTarget } from '../lib/HoldForm';
 import { LongText } from '../lib/LongText';
+import { TaskDeadlineSelect } from '../lib/Deadline';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { fmtDateTime, fmtDate, fmtYen, toLocalInput, fromLocalInput, channelLabel } from '../lib/format';
 import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
@@ -44,7 +45,7 @@ interface CaseData {
   chatworkRoomId: number | null;
   staff: { id: number; name: string } | null;
   notes: Note[];
-  tasks: { id: number; title: string; status: string }[];
+  tasks: { id: number; title: string; status: string; dueAt: string | null; followUpAt: string | null }[];
   events: { id: number; title: string; startAt: string; endAt: string; kind: string; location: string | null; status: string | null }[];
 }
 /** 次のアクションの期限。YYYY-MM-DD でも ISO でも「9/20(日)」の形にする */
@@ -227,16 +228,34 @@ export default function CaseDetail() {
             <ContactsSection caseId={c.id} />
             <section className="card text-sm">
               <h2 className="mb-2 font-semibold">未了タスク</h2>
-              <ul className="space-y-1">
+              <ul className="mb-3 space-y-1">
                 {c.tasks
                   .filter((t) => t.status !== 'done')
-                  .map((t) => (
-                    <li key={t.id}>
-                      {t.title} <span className="badge badge-gray">{TASK_STATUS_LABEL[t.status as TaskStatus]}</span>
-                    </li>
-                  ))}
+                  .map((t) => {
+                    const limit = t.status === 'open' ? (t.dueAt ?? t.followUpAt) : (t.followUpAt ?? t.dueAt);
+                    const over = limit ? new Date(limit).getTime() < Date.now() : false;
+                    return (
+                      <li key={t.id} className="flex flex-wrap items-center gap-2">
+                        <span className="min-w-0 flex-1">{t.title}</span>
+                        <span className="badge badge-gray">{TASK_STATUS_LABEL[t.status as TaskStatus]}</span>
+                        {limit && (
+                          <span className={`whitespace-nowrap text-xs ${over ? 'font-semibold text-orange-600' : 'text-slate-500'}`}>
+                            {t.status === 'open' ? '期日' : '期限'} {fmtDate(limit)}
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
                 {c.tasks.filter((t) => t.status !== 'done').length === 0 && <li className="text-slate-500">なし</li>}
               </ul>
+              <CaseTaskForm
+                caseId={c.id}
+                hasStaff={!!c.staff}
+                onDone={() => {
+                  qc.invalidateQueries({ queryKey: ['case', id] });
+                  qc.invalidateQueries({ queryKey: ['tasks'] });
+                }}
+              />
             </section>
             <section className="card text-sm">
               <div className="mb-2 flex items-center">
@@ -632,6 +651,89 @@ interface Contact {
 const EMPTY_CONTACT = { role: 'opponent_counsel', name: '', organization: '', emails: '', phone: '', note: '' };
 
 /** 事件の関係者（相手方・相手方代理人・裁判所など）。登録したメールアドレス等からの連絡は自動でこの事件に紐付く */
+/** 事件ページから、この事件のタスクを直接追加する */
+function CaseTaskForm({ caseId, hasStaff, onDone }: { caseId: number; hasStaff: boolean; onDone: () => void }) {
+  const [title, setTitle] = useState('');
+  const [status, setStatus] = useState<TaskStatus>('open');
+  const [deadline, setDeadline] = useState<string | null>(null);
+  const [sync, setSync] = useState(false);
+  const [msg, setMsg] = useState('');
+  // 書きかけのタスク名は、この事件ごとに自動保存する
+  const draft = useDraft(`case:${caseId}:new-task`, title, setTitle);
+  const waiting = status !== 'open';
+  const add = useMutation({
+    mutationFn: () => {
+      // 1 行目がタスク名、2 行目からはメモ（タスク画面と同じ書き方）
+      const lines = title.split('\n');
+      const head = lines.findIndex((l) => l.trim());
+      const note = lines.slice(head + 1).join('\n').trim();
+      return api.post('/tasks', {
+        title: lines[head]!.trim(),
+        note: note || null,
+        status,
+        caseId,
+        followUpAt: waiting ? deadline : null,
+        dueAt: waiting ? null : deadline,
+        syncToChatwork: sync,
+      });
+    },
+    onSuccess: () => {
+      setTitle('');
+      setDeadline(null);
+      draft.clear();
+      setMsg('タスクを追加しました');
+      onDone();
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
+  return (
+    <form
+      className="space-y-2 border-t border-[var(--hairline)] pt-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (title.trim()) add.mutate();
+      }}
+    >
+      <div>
+        <textarea
+          className="input w-full resize-y"
+          rows={2}
+          placeholder={'この事件にタスクを追加（1 行目がタスク名、2 行目からはメモ）'}
+          value={title}
+          onChange={(e) => {
+            setTitle(e.target.value);
+            setMsg('');
+          }}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && title.trim()) {
+              e.preventDefault();
+              add.mutate();
+            }
+          }}
+        />
+        <DraftHint handle={draft} />
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <select className="input w-auto py-0.5 text-xs" value={status} onChange={(e) => setStatus(e.target.value as TaskStatus)} aria-label="状態">
+          {(['open', 'waiting_client', 'waiting_other'] as const).map((st) => (
+            <option key={st} value={st}>
+              {TASK_STATUS_LABEL[st]}
+            </option>
+          ))}
+        </select>
+        <TaskDeadlineSelect value={deadline} onChange={setDeadline} label={waiting ? '期限' : '期日'} defaultLabel={waiting ? '既定（設定の営業日数）' : 'なし'} />
+        <label className="flex items-center gap-1 text-xs" title={hasStaff ? 'この事件の担当事務局に振ります' : '担当事務局が未設定のときは、自分のマイチャットに作ります'}>
+          <input type="checkbox" checked={sync} onChange={(e) => setSync(e.target.checked)} /> Chatwork にも作成
+        </label>
+        <button className="btn btn-sm btn-primary ml-auto" disabled={add.isPending || !title.trim()}>
+          {add.isPending ? '追加中…' : '追加'}
+        </button>
+      </div>
+      {msg && <div className="fade-in text-xs text-slate-600">{msg}</div>}
+    </form>
+  );
+}
+
 function ContactsSection({ caseId }: { caseId: number }) {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['contacts', String(caseId)], queryFn: () => api.get<Contact[]>(`/cases/${caseId}/contacts`) });

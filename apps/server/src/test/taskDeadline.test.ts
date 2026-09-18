@@ -47,3 +47,24 @@ describe('タスクを追加するときの期限', () => {
     expect(parsed.dueAt).toBe(DUE);
   });
 });
+
+describe('事件ページからタスクを追加する', () => {
+  it('事件だけ指定すれば、その事件の依頼者にも紐付く', async () => {
+    const { db, schema } = await import('../db/index.js');
+    const client = db().insert(schema.clients).values({ name: '山田 花子' }).returning().get();
+    const kase = db().insert(schema.cases).values({ clientId: client.id, title: '山田 離婚' }).returning().get();
+    const t = await createTask({ ...base, title: '陳述書の案を作る', status: 'open', caseId: kase.id, dueAt: DUE, followUpAt: null });
+    expect(t.caseId).toBe(kase.id);
+    expect(t.clientId).toBe(client.id);
+    expect(t.dueAt).toBe(DUE);
+  });
+
+  it('依頼者を明に指定したときは、そちらを優先する', async () => {
+    const { db, schema } = await import('../db/index.js');
+    const a = db().insert(schema.clients).values({ name: '佐藤 太郎' }).returning().get();
+    const b = db().insert(schema.clients).values({ name: '鈴木 一郎' }).returning().get();
+    const kase = db().insert(schema.cases).values({ clientId: a.id, title: '佐藤 交通事故' }).returning().get();
+    const t = await createTask({ ...base, title: '照会', status: 'open', caseId: kase.id, clientId: b.id, dueAt: null, followUpAt: null });
+    expect(t.clientId).toBe(b.id);
+  });
+});
