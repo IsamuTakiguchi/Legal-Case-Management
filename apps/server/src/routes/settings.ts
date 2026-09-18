@@ -11,7 +11,7 @@ import { lineQuotaStatus } from '../services/lineQuota.js';
 import { JOBS, runJob, jobStatus } from '../jobs/index.js';
 import { usageSummary } from '../services/apiCost.js';
 import { myAddresses, configuredMyAddresses } from '../jobs/gmailPoll.js';
-import { refixOwnMessages } from '../services/inbox.js';
+import { refixOwnMessages, inboxCounts } from '../services/inbox.js';
 import { generateStyleProfile, getStyleProfile, saveStyleProfile, importGmailSent, importChatworkMine, importPlainText, styleStats } from '../services/style.js';
 import { storage } from '../integrations/storage.js';
 import { channelSchema } from '@lcm/shared';
@@ -257,9 +257,8 @@ settingsRoutes.get('/api-usage', (c) => {
 settingsRoutes.get('/nav-counts', (c) => c.json(navCounts()));
 
 export function navCounts(): { inbox: number; unread: number; tasks: number; alerts: number } {
-  const inbox = db().select({ id: schema.conversations.id }).from(schema.conversations).where(and(eq(schema.conversations.needsReply, true), eq(schema.conversations.archived, false))).all().length;
-  // まだ開いていない会話の数（開くと 0 になる）。アイコンの数を「未読だけ」にするときに使う
-  const unread = db().select({ id: schema.conversations.id }).from(schema.conversations).where(and(gt(schema.conversations.unread, 0), eq(schema.conversations.archived, false))).all().length;
+  // 未返信・未読は受信箱と同じ見え方で数える（inboxCounts）
+  const { inbox, unread } = inboxCounts();
   const tasks = listTasks({ status: 'active' }).length;
   const alerts = openAlerts().length;
   return { inbox, unread, tasks, alerts };

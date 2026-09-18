@@ -1,4 +1,4 @@
-import { and, eq, desc, sql, inArray, isNull, isNotNull } from 'drizzle-orm';
+import { and, eq, desc, gt, sql, inArray, isNull, isNotNull } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import type { InboundMessage } from '../channels/types.js';
 import { findClientByIdentity, raiseUnlinkedContact, cleanDisplayName } from './identity.js';
@@ -170,7 +170,12 @@ export async function ingestMessage(
     if (!conv.counterpartAddress && counterpartAddress) patch.counterpartAddress = counterpartAddress;
   } else {
     if (!conv.lastOutboundAt || m.sentAt > conv.lastOutboundAt) patch.lastOutboundAt = m.sentAt;
-    if (!backfill) patch.needsReply = false;
+    // 自分が返したなら読んでいる。Chatwork や Gmail で直接返した分もここを通るので、
+    // ここで未読を戻さないと「未返信」は消えるのに「未読」だけアプリで開くまで残り続ける
+    if (!backfill) {
+      patch.needsReply = false;
+      patch.unread = 0;
+    }
   }
   if (m.subject && !conv.subject) patch.subject = m.subject;
   if (Object.keys(patch).length) d.update(schema.conversations).set(patch).where(eq(schema.conversations.id, conv.id)).run();
@@ -243,6 +248,45 @@ function previewOf(last: MessageRow) {
   return { body: body.slice(0, 600), truncated: body.length > 600, direction: last.direction, sentAt: last.sentAt, senderName: last.senderName };
 }
 
+/** Gmail の「メインだけ」の設定で、受信箱から外している会話か */
+function hiddenByGmailCategory(r: { channel: string; meta: unknown }): boolean {
+  if (r.channel !== 'gmail' || getSetting('gmail_categories') !== 'primary') return false;
+  return NON_PRIMARY_CATEGORIES.includes(((r.meta as { category?: string }).category ?? 'primary') as GmailCategory);
+}
+
+/**
+ * メニューとアイコンに出す数。受信箱の一覧と同じ見え方で数える
+ * （受信箱で隠している会話を数に入れると、画面に無いものがアイコンに出てしまう）。
+ * inbox=未返信（相手からの連絡が最後で、まだ返していない）／unread=未読（まだ開いていない）
+ */
+export function inboxCounts(): { inbox: number; unread: number } {
+  const rows = db()
+    .select({ id: schema.conversations.id, channel: schema.conversations.channel, meta: schema.conversations.meta, needsReply: schema.conversations.needsReply, unread: schema.conversations.unread })
+    .from(schema.conversations)
+    .where(eq(schema.conversations.archived, false))
+    .all()
+    .filter((r) => !hiddenByGmailCategory(r));
+  return { inbox: rows.filter((r) => r.needsReply).length, unread: rows.filter((r) => (r.unread ?? 0) > 0).length };
+}
+
+/**
+ * 自分が最後に送っているのに未読が残っている会話を直す（起動時に一度だけ）。
+ * 以前は自分の送信を取り込んでも未読を戻していなかったため、外で返した会話の未読が
+ * アプリで開くまで残り、「未読だけ」のアイコンの数がふくらんでいた
+ */
+export function repairUnreadAfterReply(): number {
+  const d = db();
+  const convs = d.select().from(schema.conversations).where(gt(schema.conversations.unread, 0)).all();
+  let fixed = 0;
+  for (const c of convs) {
+    const last = d.select({ direction: schema.messages.direction }).from(schema.messages).where(eq(schema.messages.conversationId, c.id)).orderBy(desc(schema.messages.sentAt), desc(schema.messages.id)).limit(1).get();
+    if (last?.direction !== 'out') continue;
+    d.update(schema.conversations).set({ unread: 0 }).where(eq(schema.conversations.id, c.id)).run();
+    fixed++;
+  }
+  return fixed;
+}
+
 export function listConversations(filter: {
   clientId?: number;
   channel?: string;
@@ -289,9 +333,7 @@ export function listConversations(filter: {
     .limit(filter.limit ?? 200)
     .all();
   // Gmail は「メインだけ」の設定なら、取込済みのプロモーション等の会話も一覧から外す
-  if (getSetting('gmail_categories') === 'primary') {
-    rows = rows.filter((r) => r.channel !== 'gmail' || !NON_PRIMARY_CATEGORIES.includes(((r.meta as { category?: string }).category ?? 'primary') as GmailCategory));
-  }
+  rows = rows.filter((r) => !hiddenByGmailCategory(r));
   if (filter.q) {
     const ids = d
       .all<{ rowid: number }>(sql`SELECT rowid FROM messages_fts WHERE messages_fts MATCH ${ftsQuery(filter.q)} LIMIT 500`)
