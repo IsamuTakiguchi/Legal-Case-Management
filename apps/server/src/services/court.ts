@@ -398,12 +398,13 @@ export interface HoldSetInput {
   web?: boolean;
 }
 
-function holdSetTitle(input: HoldSetInput, clientName: string | null): { hold: string; confirmed: string } {
+export function holdSetTitle(input: Pick<HoldSetInput, 'exactTitle' | 'counterpartName' | 'title'>, clientName: string | null): { hold: string; confirmed: string } {
   const exact = input.exactTitle?.trim();
   if (exact) return { hold: exact.endsWith('仮') ? exact : `${exact} 仮`, confirmed: exact.replace(/\s*仮$/, '') };
   const who = clientName ? familyName(clientName) : (input.counterpartName ?? '').trim();
   const content = input.title.trim();
-  const base = [who, content].filter(Boolean).join(' ');
+  // 内容がすでに名前で始まっていれば重ねない（「リスタート 打合せ」に「リスタート」を足さない）
+  const base = who && content.startsWith(who) ? content : [who, content].filter(Boolean).join(' ');
   return { hold: base.endsWith('仮') ? base : `${base} 仮`, confirmed: base.replace(/\s*仮$/, '') };
 }
 

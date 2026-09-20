@@ -40,6 +40,36 @@ describe('共有ユーティリティ', () => {
   it('姓の抽出と依頼者名の一致', () => {
     expect(familyName('山田 太郎')).toBe('山田');
     expect(familyName('山田太郎')).toBe('山田');
+    // 空白なしの 3 文字は「姓 2 文字＋名 1 文字」が普通
+    expect(familyName('瀧口勇')).toBe('瀧口');
+    // 3〜4 文字の姓は切らない
+    expect(familyName('佐々木健')).toBe('佐々木');
+    expect(familyName('長谷川一郎')).toBe('長谷川');
+    expect(familyName('勅使河原太郎')).toBe('勅使河原');
+    expect(familyName('佐々木 健')).toBe('佐々木');
+    // 漢字のあとにかなが続けば、漢字までが姓
+    expect(familyName('山田たろう')).toBe('山田');
+    // 2 文字以下はそのまま
+    expect(familyName('林')).toBe('林');
+    expect(familyName('山田')).toBe('山田');
+    // 会社・団体は姓ではないので切らない（「リス」にしない）
+    expect(familyName('リスタートコンサルティング')).toBe('リスタートコンサルティング');
+    expect(familyName('登大路総合法律事務所')).toBe('登大路総合法律事務所');
+    expect(familyName('大和ハウス工業')).toBe('大和ハウス工業');
+    // 法人格だけ外す（前でも後ろでも、空白があってもなくても）
+    expect(familyName('株式会社リスタート')).toBe('リスタート');
+    expect(familyName('リスタート株式会社')).toBe('リスタート');
+    expect(familyName('株式会社 リスタート')).toBe('リスタート');
+    expect(familyName('㈱リスタート')).toBe('リスタート');
+    expect(familyName('医療法人社団 みどり会')).toBe('みどり会');
+    expect(familyName('一般社団法人日本◯◯協会')).toBe('日本◯◯協会');
+    // カタカナ・英字だけの名前は、どこで切れるか分からないので切らない
+    expect(familyName('ジョンスミス')).toBe('ジョンスミス');
+    expect(familyName('ABCトレーディング')).toBe('ABCトレーディング');
+    expect(familyName('John Smith')).toBe('John');
+    // ひらがな姓も切らない
+    expect(familyName('さとう太郎')).toBe('さとう太郎');
+    expect(familyName('')).toBe('');
     expect(titleMentionsClient('山田 期日', ['山田 太郎', '山田'])).toBe(true);
     expect(titleMentionsClient('鈴木 期日', ['山田 太郎'])).toBe(false);
   });
@@ -154,5 +184,22 @@ describe('依頼者の一括登録', () => {
     expect(r.created).toBe(2);
     const again = await onedriveCandidates();
     expect(again.every((c) => c.existingClientId)).toBe(true);
+  });
+});
+
+describe('仮押さえの件名', () => {
+  it('依頼者の姓（会社ならその名前）＋内容＋仮。会社名を「リス」のように切らない', async () => {
+    const { holdSetTitle } = await import('../services/court.js');
+    expect(holdSetTitle({ title: '打合せ' }, '瀧口勇')).toEqual({ hold: '瀧口 打合せ 仮', confirmed: '瀧口 打合せ' });
+    expect(holdSetTitle({ title: '打合せ' }, 'リスタートコンサルティング')).toEqual({ hold: 'リスタートコンサルティング 打合せ 仮', confirmed: 'リスタートコンサルティング 打合せ' });
+    expect(holdSetTitle({ title: '打合せ' }, '株式会社リスタート')).toEqual({ hold: 'リスタート 打合せ 仮', confirmed: 'リスタート 打合せ' });
+    // 内容がすでに名前で始まっていれば重ねない
+    expect(holdSetTitle({ title: 'リスタート 打合せ' }, '株式会社リスタート').hold).toBe('リスタート 打合せ 仮');
+    expect(holdSetTitle({ title: '瀧口 打合せ' }, '瀧口勇').hold).toBe('瀧口 打合せ 仮');
+    // 依頼者が無ければ相手の名前、それも無ければ内容だけ
+    expect(holdSetTitle({ title: '面談', counterpartName: '田中' }, null).hold).toBe('田中 面談 仮');
+    expect(holdSetTitle({ title: '面談' }, null).hold).toBe('面談 仮');
+    // 件名を直接指定したときはそのまま（仮だけ補う）
+    expect(holdSetTitle({ title: '打合せ', exactTitle: '山田 第2回打合せ' }, '瀧口勇')).toEqual({ hold: '山田 第2回打合せ 仮', confirmed: '山田 第2回打合せ' });
   });
 });
