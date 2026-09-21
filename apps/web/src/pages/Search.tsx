@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import { useDraft, DraftHint } from '../lib/draft';
 import { fmtDateTime } from '../lib/format';
 import { Icon } from '../lib/icons';
+import { Secretary } from '../lib/Secretary';
 
 const KINDS = ['note', 'message', 'case', 'client', 'task', 'event', 'form', 'creditor'] as const;
 type Kind = (typeof KINDS)[number];
@@ -58,7 +59,7 @@ const EXAMPLES = ['山田さんの査定書はどうなっている？', '今週
 export default function Search() {
   const [q, setQ] = useState('');
   const [kinds, setKinds] = useState<Kind[]>([]);
-  const [mode, setMode] = useState<'ask' | 'plain'>('ask');
+  const [mode, setMode] = useState<'do' | 'ask' | 'plain'>('do');
   const [asked, setAsked] = useState<AskResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
   // 書きかけの質問はこの端末に自動保存する
@@ -90,56 +91,61 @@ export default function Search() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-baseline gap-3">
-        <h1>AI 検索</h1>
-        <span className="text-sm text-slate-500">記録・やり取り・事件・タスク・予定・書式を、まとめて探します</span>
+        <h1>AI 秘書</h1>
+        <span className="text-sm text-slate-500">記録・予定・タスクの登録から、事務所のデータ探しまで頼めます</span>
       </div>
 
-      <section className="card space-y-2">
-        <div className="segmented w-fit">
-          {(['ask', 'plain'] as const).map((m) => (
-            <button key={m} className={mode === m ? 'is-active' : ''} onClick={() => setMode(m)}>
-              {m === 'ask' ? 'AI に聞く' : 'そのまま探す'}
-            </button>
-          ))}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <input
-            className="input min-w-0 flex-1"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.nativeEvent.isComposing) run();
-            }}
-            placeholder={mode === 'ask' ? '聞きたいことを日本語で（例: 山田さんの査定書はどうなっている？）' : '探したい語（例: 査定書）'}
-          />
-          <button className="btn btn-primary" onClick={run} disabled={!q.trim() || ask.isPending}>
-            {ask.isPending ? '探しています…' : mode === 'ask' ? 'AI に聞く' : '探す'}
+      <div className="segmented w-fit">
+        {(['do', 'ask', 'plain'] as const).map((m) => (
+          <button key={m} className={mode === m ? 'is-active' : ''} onClick={() => setMode(m)}>
+            {m === 'do' ? '秘書に頼む' : m === 'ask' ? 'AI に聞く' : 'そのまま探す'}
           </button>
-        </div>
-        <DraftHint handle={draft} />
-        <div className="flex flex-wrap items-center gap-1.5 text-xs">
-          <span className="text-slate-500">探す先</span>
-          <button className={`badge ${kinds.length === 0 ? 'badge-blue' : 'badge-gray'}`} onClick={() => setKinds([])}>
-            すべて
-          </button>
-          {KINDS.map((k) => (
-            <button key={k} className={`badge ${kinds.includes(k) ? 'badge-blue' : 'badge-gray'}`} onClick={() => toggleKind(k)}>
-              {KIND_LABEL[k]}
+        ))}
+      </div>
+
+      {mode === 'do' && <Secretary />}
+
+      {mode !== 'do' && (
+        <section className="card space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              className="input min-w-0 flex-1"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.nativeEvent.isComposing) run();
+              }}
+              placeholder={mode === 'ask' ? '聞きたいことを日本語で（例: 山田さんの査定書はどうなっている？）' : '探したい語（例: 査定書）'}
+            />
+            <button className="btn btn-primary" onClick={run} disabled={!q.trim() || ask.isPending}>
+              {ask.isPending ? '探しています…' : mode === 'ask' ? 'AI に聞く' : '探す'}
             </button>
-          ))}
-        </div>
-        {mode === 'ask' && !asked && !ask.isPending && (
-          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-            例:
-            {EXAMPLES.map((e) => (
-              <button key={e} className="rounded-full border border-slate-200 px-2 py-0.5 hover:bg-slate-50" onClick={() => setQ(e)}>
-                {e}
+          </div>
+          <DraftHint handle={draft} />
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="text-slate-500">探す先</span>
+            <button className={`badge ${kinds.length === 0 ? 'badge-blue' : 'badge-gray'}`} onClick={() => setKinds([])}>
+              すべて
+            </button>
+            {KINDS.map((k) => (
+              <button key={k} className={`badge ${kinds.includes(k) ? 'badge-blue' : 'badge-gray'}`} onClick={() => toggleKind(k)}>
+                {KIND_LABEL[k]}
               </button>
             ))}
           </div>
-        )}
-        {err && <div className="text-xs text-red-600">{err}</div>}
-      </section>
+          {mode === 'ask' && !asked && !ask.isPending && (
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+              例:
+              {EXAMPLES.map((e) => (
+                <button key={e} className="rounded-full border border-slate-200 px-2 py-0.5 hover:bg-slate-50" onClick={() => setQ(e)}>
+                  {e}
+                </button>
+              ))}
+            </div>
+          )}
+          {err && <div className="text-xs text-red-600">{err}</div>}
+        </section>
+      )}
 
       {mode === 'ask' && ask.isPending && <div className="loading-text card text-sm text-slate-500">記録・やり取りを探して、まとめています…</div>}
 

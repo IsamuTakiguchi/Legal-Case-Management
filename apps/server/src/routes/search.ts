@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { searchAll, SEARCH_KINDS, SEARCH_KIND_LABEL } from '../services/search.js';
 import { askAcrossData } from '../services/askSearch.js';
+import { planSecretary, applySecretaryActions, secretaryActionSchema } from '../services/secretary.js';
 
 export const searchRoutes = new Hono();
 
@@ -25,4 +26,21 @@ searchRoutes.post('/search/ask', async (c) => {
     })
     .parse(await c.req.json());
   return c.json(await askAcrossData(body.question, { kinds: body.kinds }));
+});
+
+/** AI 秘書: 頼みごとから「やることの案」を作る（ここでは登録しない） */
+searchRoutes.post('/secretary/plan', async (c) => {
+  const body = z
+    .object({
+      text: z.string().min(1),
+      history: z.array(z.object({ role: z.enum(['user', 'assistant']), text: z.string() })).max(20).optional(),
+    })
+    .parse(await c.req.json());
+  return c.json(await planSecretary(body.text, body.history ?? []));
+});
+
+/** AI 秘書: 確認した案を実際に登録する */
+searchRoutes.post('/secretary/apply', async (c) => {
+  const body = z.object({ actions: z.array(secretaryActionSchema).min(1).max(8) }).parse(await c.req.json());
+  return c.json(await applySecretaryActions(body.actions));
 });

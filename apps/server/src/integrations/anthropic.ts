@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
-import type { z } from 'zod';
+import { z } from 'zod';
 import { AI_MODEL_IDS } from '@lcm/shared';
 import { env, isConfigured } from '../config.js';
 import { logger } from '../logger.js';
@@ -138,4 +138,114 @@ export async function generateStructuredFromContent<T extends z.ZodType>(opts: {
 
 export function resetAnthropicClient() {
   client = null;
+}
+
+/**
+ * 道具（ツール）。読み取りだけのものは run を持ち、最後にまとめを返すものは run を持たない。
+ * run の無い道具が呼ばれた時点で往復を終え、その中身を呼び出し元に返す。
+ */
+export interface AgentTool<T extends z.ZodType = z.ZodType> {
+  name: string;
+  /** Claude に見せる説明。いつ使うかを日本語で書く */
+  description: string;
+  schema: T;
+  /** 読み取りの処理。省略すると「これが最後」の合図になる */
+  run?: (input: z.infer<T>) => Promise<unknown> | unknown;
+}
+
+/** 道具を 1 つ作る（run の引数に schema の型が付くようにするための包み） */
+export function agentTool<T extends z.ZodType>(t: AgentTool<T>): AgentTool {
+  return t as AgentTool;
+}
+
+export interface ToolLoopResult {
+  /** 最後に返ってきた文章（道具で終わったときは空のこともある） */
+  text: string;
+  /** run の無い道具が呼ばれたときの中身 */
+  final: { name: string; input: unknown } | null;
+  /** 使った道具の名前（呼ばれた順） */
+  used: string[];
+  /** やり取りの記録（続きを頼むときにそのまま渡せる） */
+  messages: Anthropic.MessageParam[];
+}
+
+/**
+ * 道具を渡して、Claude に何回か往復させる。
+ *
+ * 途中で必要な情報（依頼者の ID など）を自分で調べてもらい、最後にまとめを受け取る。
+ * 道具はすべて読み取りにして、書き込みは呼び出し元が確認のうえで行う。
+ */
+export async function runToolLoop(opts: {
+  system: string;
+  messages: Anthropic.MessageParam[];
+  tools: AgentTool[];
+  /** 往復の上限。既定 6 */
+  maxRounds?: number;
+  maxTokens?: number;
+  effort?: Effort;
+  purpose?: string;
+  tier?: ModelTier;
+}): Promise<ToolLoopResult> {
+  const byName = new Map(opts.tools.map((t) => [t.name, t]));
+  const defs: Anthropic.ToolUnion[] = opts.tools.map((t) => ({
+    name: t.name,
+    description: t.description,
+    input_schema: z.toJSONSchema(t.schema, { io: 'input' }) as Anthropic.Tool.InputSchema,
+  }));
+  const messages = [...opts.messages];
+  const used: string[] = [];
+  let text = '';
+
+  for (let round = 0; round < (opts.maxRounds ?? 6); round++) {
+    const stream = anthropic().messages.stream({
+      model: model(opts.tier),
+      max_tokens: opts.maxTokens ?? 8000,
+      system: [{ type: 'text', text: opts.system, cache_control: { type: 'ephemeral' } }],
+      messages,
+      tools: defs,
+      thinking: { type: 'adaptive' },
+      output_config: { effort: opts.effort ?? 'medium' },
+    });
+    const res = await stream.finalMessage();
+    track(opts.purpose, res);
+    if (res.stop_reason === 'refusal') {
+      logger.warn({ stop_details: res.stop_details }, 'Claude が生成を拒否しました');
+      throw new Error('生成が拒否されました。指示内容を見直してください。');
+    }
+    text = res.content
+      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+      .map((b) => b.text)
+      .join('')
+      .trim();
+    // 考えた跡も含めて、返ってきたものをそのまま次の往復に渡す
+    messages.push({ role: 'assistant', content: res.content });
+    const calls = res.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
+    if (!calls.length) return { text, final: null, used, messages };
+
+    // 同じ往復で複数の道具が呼ばれることがある。結果は 1 通のメッセージにまとめて返す
+    const results: Anthropic.ToolResultBlockParam[] = [];
+    for (const call of calls) {
+      used.push(call.name);
+      const tool = byName.get(call.name);
+      if (!tool) {
+        results.push({ type: 'tool_result', tool_use_id: call.id, is_error: true, content: `${call.name} という道具はありません` });
+        continue;
+      }
+      const parsed = tool.schema.safeParse(call.input);
+      if (!parsed.success) {
+        results.push({ type: 'tool_result', tool_use_id: call.id, is_error: true, content: `入力が正しくありません: ${parsed.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join(' / ')}` });
+        continue;
+      }
+      if (!tool.run) return { text, final: { name: tool.name, input: parsed.data }, used, messages };
+      try {
+        const out = await tool.run(parsed.data);
+        results.push({ type: 'tool_result', tool_use_id: call.id, content: JSON.stringify(out ?? null) });
+      } catch (err) {
+        results.push({ type: 'tool_result', tool_use_id: call.id, is_error: true, content: (err as Error).message });
+      }
+    }
+    messages.push({ role: 'user', content: results });
+  }
+  logger.warn({ used }, '道具の往復が上限に達しました');
+  return { text, final: null, used, messages };
 }
