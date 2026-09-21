@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!--
+    T-Lex のロゴ（ピクトグラム版）。本を開いて吠えるティラノサウルス。
+    案内標識のように、面（シルエット）だけで描く。色は 3 つ：生成りの地色・紺の恐竜・茶の本。
+    アプリのアイコン一式は apps/web/scripts/render-icons.mjs がこのファイルから作る。
+  -->
+  <rect id="tile" width="512" height="512" rx="112" fill="#f6f1e7" />
+  <g id="art">
+    <!-- 尾 -->
+    <path fill="#1c2b44" d="M190 262C130 268 80 262 34 228c40 68 92 106 170 108Z" />
+    <!-- 胴 -->
+    <ellipse fill="#1c2b44" cx="228" cy="308" rx="84" ry="102" />
+    <!-- 首 -->
+    <path fill="#1c2b44" d="M160 250 274 122l70 52-96 140Z" />
+    <!-- 背びれ -->
+    <path fill="#1c2b44" d="M236 96l30 48 32-24Z" />
+    <path fill="#1c2b44" d="M178 146l32 48 32-24Z" />
+    <path fill="#1c2b44" d="M126 206l36 44 30-28Z" />
+    <!-- 上あご -->
+    <rect fill="#1c2b44" x="255" y="104" width="182" height="122" rx="50" />
+    <!-- 上の歯（口の中に向かって下向き） -->
+    <path fill="#1c2b44" d="M318 222l11 22 11-22Zm30 0l11 22 11-22Zm30 0l11 22 11-22Zm30 0l11 22 11-22Z" />
+    <!-- 下あご（付け根を軸に開く）と下の歯 -->
+    <g transform="rotate(27 298 222)">
+      <rect fill="#1c2b44" x="270" y="220" width="156" height="44" rx="18" />
+      <path fill="#1c2b44" d="M330 228l11-22 11 22Zm30 0l11-22 11 22Zm30 0l11-22 11 22Z" />
+    </g>
+    <!-- 目・まゆ・鼻 -->
+    <circle fill="#f6f1e7" cx="346" cy="152" r="17" />
+    <circle fill="#1c2b44" cx="351" cy="155" r="8" />
+    <path fill="#f6f1e7" d="M318 124a6 6 0 0 1 2.5-11.7l46 14a6 6 0 0 1-3.5 11.5Z" />
+    <circle fill="#f6f1e7" cx="418" cy="134" r="6" />
+    <!-- 腕（本を持つ） -->
+    <rect fill="#1c2b44" x="280" y="296" width="30" height="96" rx="15" transform="rotate(-40 295 300)" />
+    <!-- 吠え声 -->
+    <g fill="#b07d2f">
+      <rect x="440" y="170" width="52" height="12" rx="6" transform="rotate(-30 466 176)" />
+      <rect x="446" y="212" width="52" height="12" rx="6" />
+      <rect x="440" y="254" width="52" height="12" rx="6" transform="rotate(30 466 260)" />
+    </g>
+    <!-- 開いた本：表紙・ページ・本文の行 -->
+    <path fill="#b07d2f" d="M76 348 256 384l180-36v88L256 470 76 436Z" />
+    <path fill="#f6f1e7" d="M90 363 246 394v62L90 427Zm332 0L266 394v62l156-29Z" />
+    <g fill="#1c2b44">
+      <path d="M108 382l120 24v7l-120-24Zm0 18l120 24v7l-120-24Zm0 18l84 17v7l-84-17Z" />
+      <path d="M404 382l-120 24v7l120-24Zm0 18l-120 24v7l120-24Zm0 18l-84 17v7l84-17Z" />
+    </g>
+  </g>
+</svg>
