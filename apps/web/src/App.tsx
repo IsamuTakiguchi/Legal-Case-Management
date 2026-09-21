@@ -42,7 +42,7 @@ function navBadge(to: string, c: NavCounts): { n: number; tone: 'blue' | 'gray' 
 const NAV: { to: string; label: string; icon: IconName }[] = [
   { to: '/', label: 'ダッシュボード', icon: 'home' },
   { to: '/inbox', label: '受信箱', icon: 'inbox' },
-  { to: '/search', label: 'AI 検索', icon: 'search' },
+  { to: '/search', label: 'AI 秘書', icon: 'search' },
   { to: '/calendar', label: '予定', icon: 'calendar' },
   { to: '/clients', label: '依頼者', icon: 'person' },
   { to: '/cases', label: '事件', icon: 'scale' },
