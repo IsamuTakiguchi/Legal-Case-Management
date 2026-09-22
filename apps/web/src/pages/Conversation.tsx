@@ -8,6 +8,7 @@ import { ContactLinkForm } from '../lib/ContactLinkForm';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { channelBadge, channelLabel, fmtDateTime, fmtBytes, fromLocalInput, toLocalInput, todayLocalInput } from '../lib/format';
 import { Icon } from '../lib/icons';
+import { useSpotlight } from '../lib/spotlight';
 import { DeadlineEditor, TaskDeadlineSelect, WaitDeadlineSelect } from '../lib/Deadline';
 import { SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply, type EventKind } from '@lcm/shared';
 
@@ -109,6 +110,8 @@ export default function Conversation() {
   const conv = useQuery({ queryKey: ['conversation', id], queryFn: () => api.get<Conv>(`/conversations/${id}`), refetchInterval: 30_000 });
   const templates = useQuery({ queryKey: ['templates'], queryFn: () => api.get<Template[]>('/templates') });
   const sessions = useQuery({ queryKey: ['scheduling', id], queryFn: () => api.get<Session[]>(`/scheduling?conversationId=${id}`) });
+  // 要確認の「日程調整が停滞」から ?session=… で来たら、その 1 件まで動かして光らせる
+  const spotlightSession = useSpotlight('session', !!sessions.data);
 
   const [text, setText] = useState('');
   const [instruction, setInstruction] = useState('');
@@ -653,7 +656,7 @@ export default function Conversation() {
             {sessions.data
               .filter((s) => s.state !== 'cancelled')
               .map((s) => (
-                <SessionCard key={s.id} s={s} onText={(t) => setText((prev) => (prev ? `${prev}\n\n${t}` : t))} onDone={invalidate} />
+                <SessionCard key={s.id} s={s} spotlight={s.id === spotlightSession} onText={(t) => setText((prev) => (prev ? `${prev}\n\n${t}` : t))} onDone={invalidate} />
               ))}
           </div>
         )}
@@ -1025,7 +1028,7 @@ function SchedulePanel({ conversationId, onText, onDone }: { conversationId: num
   );
 }
 
-function SessionCard({ s, onText, onDone }: { s: Session; onText: (t: string) => void; onDone: () => void }) {
+function SessionCard({ s, onText, onDone, spotlight }: { s: Session; onText: (t: string) => void; onDone: () => void; spotlight?: boolean }) {
   const [chosen, setChosen] = useState(s.candidates[0]?.startAt ?? '');
   const [custom, setCustom] = useState('');
   const [zoom, setZoom] = useState(s.kind === 'WEB');
@@ -1040,7 +1043,7 @@ function SessionCard({ s, onText, onDone }: { s: Session; onText: (t: string) =>
   });
   const cancel = useMutation({ mutationFn: () => api.post(`/scheduling/${s.id}/cancel`), onSuccess: onDone });
   return (
-    <div className="mb-2 rounded border border-slate-200 p-2 text-xs">
+    <div id={`session-${s.id}`} className={`mb-2 rounded border border-slate-200 p-2 text-xs ${spotlight ? 'spotlight' : ''}`}>
       <div className="flex items-center justify-between">
         <span className="font-semibold">
           {s.kind} <span className="badge badge-gray">{s.state === 'proposing' ? '調整中' : s.state === 'confirmed' ? '確定' : s.state}</span>

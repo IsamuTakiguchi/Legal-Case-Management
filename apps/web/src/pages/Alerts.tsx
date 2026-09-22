@@ -6,6 +6,7 @@ import { useDraftGroup, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
 import { ContactLinkForm } from '../lib/ContactLinkForm';
 import { channelBadge, channelLabel, fmtDateTime, fromLocalInput, todayLocalInput } from '../lib/format';
+import { schedulingLink } from '../lib/alertLink';
 import { ALERT_TYPE_LABEL, type AlertType } from '@lcm/shared';
 
 interface Alert {
@@ -47,7 +48,13 @@ export default function Alerts() {
                       <UnlinkedHeader alert={a} />
                     ) : (
                       <>
-                        <div className="font-medium">{a.title}</div>
+                        {type === 'scheduling_stale' ? (
+                          <Link to={schedulingLink(a.payload).to} className="block font-medium hover:underline">
+                            {a.title}
+                          </Link>
+                        ) : (
+                          <div className="font-medium">{a.title}</div>
+                        )}
                         {a.body && <div className="whitespace-pre-wrap text-slate-600">{a.body}</div>}
                       </>
                     )}
@@ -62,7 +69,12 @@ export default function Alerts() {
                   {type === 'unassigned_file' && <LinkAction alert={a} label="このファイルの依頼者" onLink={(clientId) => assign.mutate({ attachmentId: Number(a.payload.attachmentId), clientId })} />}
                   {type === 'line_followed' && <LineFollowAction alert={a} onDone={refresh} />}
                   {type === 'next_hearing_missing' && <NextHearing alert={a} onDone={refresh} />}
-                  {(type === 'waiting_overdue' || type === 'reply_received' || type === 'scheduling_stale') && a.payload.conversationId ? (
+                  {type === 'scheduling_stale' && (
+                    <Link to={schedulingLink(a.payload).to} className="btn btn-sm btn-primary">
+                      {schedulingLink(a.payload).label}
+                    </Link>
+                  )}
+                  {(type === 'waiting_overdue' || type === 'reply_received') && a.payload.conversationId ? (
                     <Link to={`/inbox/${a.payload.conversationId}`} className="btn btn-sm">
                       会話を開く
                     </Link>

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
+import { useSpotlight } from '../lib/spotlight';
 import { useDraftRecord, useDraftGroup, useDraft, DraftHint } from '../lib/draft';
 import { RoomPicker } from '../lib/RoomPicker';
 import { HoldForm, fmtEventRange, type RescheduleTarget } from '../lib/HoldForm';
@@ -504,6 +505,8 @@ function CaseHolds({
     onError: fail,
   });
   const sets = q.data ?? [];
+  // 要確認の「日程調整が停滞」から ?session=… で来たら、その 1 件まで動かして光らせる
+  const spotlight = useSpotlight('session', sets.length > 0);
   return (
     <section className="card space-y-2" id="case-holds">
       <div className="flex flex-wrap items-center gap-2">
@@ -552,7 +555,7 @@ function CaseHolds({
       {!q.isLoading && sets.length === 0 && !adding && <div className="text-sm text-slate-500">調整中の仮押さえはありません。候補日時をまとめて押さえるときは「＋ 仮押さえを追加」から。</div>}
       <ul className="space-y-3">
         {sets.map((s) => (
-          <li key={s.sessionId} className="rounded border border-slate-200 p-2 text-sm">
+          <li key={s.sessionId} id={`session-${s.sessionId}`} className={`rounded border border-slate-200 p-2 text-sm ${s.sessionId === spotlight ? 'spotlight' : ''}`}>
             <div className="mb-1 flex flex-wrap items-center gap-2">
               <span className={`badge ${s.rescheduleOf ? 'badge-blue' : 'badge-gray'}`}>{s.rescheduleOf ? '日程変更' : s.kind}</span>
               <span className="font-medium">{s.candidates[0]?.title?.replace(/\s*仮$/, '') ?? '日程調整'}</span>

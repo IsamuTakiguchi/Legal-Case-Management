@@ -739,3 +739,22 @@ summary:focus-visible {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ほかの画面から名指しで開いたものを、しばらく目立たせる（要確認 → その日程調整 など） */
+@keyframes spotlight {
+  0% {
+    box-shadow: 0 0 0 3px var(--accent-soft);
+    background-color: var(--accent-soft);
+  }
+  70% {
+    box-shadow: 0 0 0 3px var(--accent-soft);
+    background-color: var(--accent-soft);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+    background-color: transparent;
+  }
+}
+.spotlight {
+  animation: spotlight 3.2s ease-out both;
+}

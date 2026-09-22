@@ -263,6 +263,25 @@ export function listSessions(filter: { conversationId?: number; clientId?: numbe
     .all();
 }
 
+/**
+ * この日程調整が、どの事件のものかを返す。
+ *
+ * 日程調整そのものは事件を持たないので、仮押さえた予定（と、日程変更なら元の予定）から探す。
+ * 会話から始めてまだ事件が決まっていないものは null。
+ */
+export function sessionCaseId(session: SchedulingRow): number | null {
+  for (const c of session.candidates) {
+    if (!c.eventId) continue;
+    const ev = db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.googleEventId, c.eventId)).get();
+    if (ev?.caseId) return ev.caseId;
+  }
+  if (session.rescheduleEventId) {
+    const ev = db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, session.rescheduleEventId)).get();
+    if (ev?.caseId) return ev.caseId;
+  }
+  return null;
+}
+
 /** 提案から N 営業日過ぎても未確定ならアラート */
 export function checkStaleSessions(): number {
   const days = getSettingInt('scheduling_stale_business_days', 3);
@@ -278,7 +297,10 @@ export function checkStaleSessions(): number {
       dedupeKey: `scheduling_stale:${s.id}`,
       title: `日程調整が停滞: ${client?.name ?? '相手'}（${s.kind}）`,
       body: `${formatJaDateTime(new Date(s.proposedAt))} に候補を提案後、確定していません。催促または仮押さえの取消を検討してください。`,
-      payload: { sessionId: s.id, conversationId: s.conversationId, clientId: s.clientId },
+      // caseId は、要確認から「日程調整を開く」でその画面へ飛ぶために入れる
+      payload: { sessionId: s.id, conversationId: s.conversationId, clientId: s.clientId, caseId: sessionCaseId(s), candidates: s.candidates.length },
+      // すでに出ている分にも、あとから足した行き先（caseId）が入るようにする
+      refresh: true,
     });
     n++;
   }
