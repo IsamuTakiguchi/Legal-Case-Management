@@ -4,10 +4,11 @@ import { api } from '../lib/api';
 import { channelBadge, channelLabel, fmtDateTime, fmtRelative } from '../lib/format';
 import { ALERT_TYPE_LABEL, TASK_STATUS_LABEL, EVENT_KIND_LABEL, type AlertType, type TaskStatus, type EventKind } from '@lcm/shared';
 import { Icon, type IconName } from '../lib/icons';
+import { alertLink } from '../lib/alertLink';
 import { DeadlineEditor } from '../lib/Deadline';
 
 interface DashboardData {
-  alerts: { id: number; type: string; title: string; body: string | null; createdAt: string }[];
+  alerts: { id: number; type: string; title: string; body: string | null; createdAt: string; payload?: Record<string, unknown> | null }[];
   alertCounts: Record<string, number>;
   waiting: { id: number; title: string; status: string; clientId: number | null; clientName: string | null; caseId: number | null; caseTitle: string | null; followUpAt: string | null; waitingSince: string | null; conversationId: number | null }[];
   needsReply: number;
@@ -116,7 +117,8 @@ export default function Dashboard() {
           <ul className="space-y-1 text-sm">
             {d.alerts.slice(0, 8).map((a) => (
               <li key={a.id}>
-                <Link to="/alerts" className="hover:underline">
+                {/* 中身の画面が分かるものは、そこへ直接飛ぶ（日程調整の停滞 → その日程調整） */}
+                <Link to={alertLink(a)} className="hover:underline">
                   <span className="badge badge-orange mr-2">{ALERT_TYPE_LABEL[a.type as AlertType] ?? a.type}</span>
                   {a.title}
                 </Link>
