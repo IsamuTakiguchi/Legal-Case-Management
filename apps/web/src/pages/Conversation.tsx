@@ -1192,6 +1192,17 @@ interface Extracted {
   title: string;
   /** いま使える WEB 会議の提供元 */
   webProvider: 'zoom' | 'meet' | 'none';
+  /** 日程変更の元になりうる、この相手の予定 */
+  existingEvents?: { id: number; title: string; startAt: string; endAt: string; kind: string; location: string | null }[];
+  /** やり取りから日程変更と読み取ったとき（eventId は変更前の予定。分からなければ null） */
+  reschedule?: { eventId: number | null; quote: string } | null;
+}
+
+interface Replaced {
+  id: number;
+  title: string;
+  startAt: string;
+  endAt: string;
 }
 
 const WEB_PROVIDER_LABEL: Record<'zoom' | 'meet' | 'none', string> = { zoom: 'Zoom', meet: 'Google Meet', none: '（未設定）' };
@@ -1210,6 +1221,8 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
   const [webText, setWebText] = useState('');
   const [err, setErr] = useState('');
   const [done, setDone] = useState('');
+  // 日程変更（リスケ）のとき、取り消す元の予定。'' は「新しく入れるだけ」
+  const [replaceId, setReplaceId] = useState('');
   const extract = useMutation({
     mutationFn: () => api.post<Extracted>(`/conversations/${conversationId}/schedule/extract`),
     onSuccess: (r) => {
@@ -1225,6 +1238,8 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
       setLocation(r.web ? (r.location ?? '') : (r.location ?? ''));
       setCaseId(cases[0] ? String(cases[0].id) : '');
       setSlots(r.slots.map((s) => ({ start: toLocalInput(s.startAt), quote: s.quote, timeKnown: s.timeKnown })));
+      // 日程変更と読み取れたら、元の予定を取り消す設定にしておく（画面で外せる）
+      setReplaceId(r.reschedule?.eventId ? String(r.reschedule.eventId) : '');
     },
     onError: (e) => {
       // AI が使えないときも手入力で登録できるように空の結果を出す
@@ -1237,13 +1252,14 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
   });
   const register = useMutation({
     mutationFn: () =>
-      api.post<{ mode: string; events: { id: number }[]; webText: string }>(`/conversations/${conversationId}/schedule/register`, {
+      api.post<{ mode: string; events: { id: number }[]; webText: string; replaced?: Replaced | null; replaces?: Replaced | null }>(`/conversations/${conversationId}/schedule/register`, {
         mode,
         title: mode === 'holds' ? title.replace(/\s*仮$/, '') : title,
         kind,
         caseId: caseId ? Number(caseId) : null,
         location: location || null,
         web,
+        replaceEventId: replaceId ? Number(replaceId) : null,
         slots: (mode === 'confirmed' ? slots.slice(0, 1) : slots)
           .filter((s) => s.start)
           .map((s) => {
@@ -1253,10 +1269,15 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
       }),
     onSuccess: (r) => {
       setWebText(r.webText ?? '');
+      const was = (x: Replaced) => `${fmtDateTime(x.startAt)}「${x.title}」`;
       setDone(
         r.mode === 'confirmed'
-          ? 'カレンダーに登録しました'
-          : `${r.events.length} 件を仮押さえしました。確定したら「予定」画面の「この候補で確定」を押してください${web ? '（そのときに会議 URL を発行します）' : ''}`,
+          ? r.replaced
+            ? `元の予定 ${was(r.replaced)} を取り消して、新しい日時で登録しました`
+            : 'カレンダーに登録しました'
+          : `${r.events.length} 件を仮押さえしました。確定したら「予定」画面の「この候補で確定」を押してください${web ? '（そのときに会議 URL を発行します）' : ''}${
+              r.replaces ? `。確定した時点で、元の予定 ${was(r.replaces)} は取り消されます` : ''
+            }`,
       );
       setErr('');
       onDone();
@@ -1358,6 +1379,36 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
                 </select>
               </div>
             )}
+            {(res.existingEvents?.length ?? 0) > 0 && (
+              <div className={`md:col-span-2 rounded border p-2 ${replaceId ? 'border-amber-300 bg-amber-50' : 'border-slate-200'}`}>
+                <label className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                  <input type="checkbox" checked={!!replaceId} onChange={(e) => setReplaceId(e.target.checked ? String(res.reschedule?.eventId ?? res.existingEvents![0]!.id) : '')} />
+                  日程変更（リスケ）として登録する（元の予定を取り消す）
+                </label>
+                {res.reschedule && (
+                  <div className="mt-1 text-xs text-amber-800">
+                    やり取りから日程変更と読み取りました{res.reschedule.quote ? `（「${res.reschedule.quote}」）` : ''}。
+                    {!res.reschedule.eventId && 'どの予定の変更かは下で選んでください。'}
+                  </div>
+                )}
+                {replaceId && (
+                  <div className="mt-1.5 space-y-1">
+                    <select className="input w-auto max-w-full" value={replaceId} onChange={(e) => setReplaceId(e.target.value)} aria-label="取り消す予定">
+                      {res.existingEvents!.map((ev) => (
+                        <option key={ev.id} value={ev.id}>
+                          {fmtDateTime(ev.startAt)}　{ev.title}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="text-xs text-slate-600">
+                      {mode === 'confirmed'
+                        ? '新しい日時で登録したあと、この予定を取り消します（Google カレンダーからも消えます）。'
+                        : '候補のどれかを「この候補で確定」したときに、この予定を取り消します。それまではこの予定も残ります。'}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             <div className="md:col-span-2">
               <label className="label">{mode === 'confirmed' ? '日時（先頭の 1 件を使います）' : '候補日時'}</label>
               <div className="space-y-1">
@@ -1379,8 +1430,17 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button className="btn btn-primary" onClick={() => register.mutate()} disabled={register.isPending || !title.trim() || slots.filter((s) => s.start).length === 0}>
-              {register.isPending ? '登録中…' : mode === 'confirmed' ? 'カレンダーに登録' : `${slots.filter((s) => s.start).length} 件を仮押さえ`}
+            <button
+              className="btn btn-primary shrink-0 whitespace-nowrap"
+              onClick={() => {
+                // 予定を消すので、確定の日程変更だけは念のため聞く（仮押さえは確定するまで消さない）
+                const target = replaceId && mode === 'confirmed' ? res.existingEvents?.find((ev) => String(ev.id) === replaceId) : null;
+                if (target && !window.confirm(`元の予定 ${fmtDateTime(target.startAt)}「${target.title}」を取り消して、新しい日時で登録します。よろしいですか？`)) return;
+                register.mutate();
+              }}
+              disabled={register.isPending || !title.trim() || slots.filter((s) => s.start).length === 0}
+            >
+              {register.isPending ? '登録中…' : mode === 'confirmed' ? (replaceId ? '元の予定を取り消して登録' : 'カレンダーに登録') : `${slots.filter((s) => s.start).length} 件を仮押さえ`}
             </button>
             <span className="text-xs text-slate-500">内容を確認してから押してください。Google 接続時は Google カレンダーにも登録されます。</span>
           </div>

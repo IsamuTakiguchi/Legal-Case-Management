@@ -75,6 +75,8 @@ schedulingRoutes.post('/conversations/:id/schedule/register', async (c) => {
       description: z.string().nullable().optional(),
       caseId: z.number().int().nullable().optional(),
       web: z.boolean().optional(),
+      // 日程変更のとき、取り消す元の予定
+      replaceEventId: z.number().int().nullable().optional(),
     })
     .parse(await c.req.json());
   return c.json(await registerScheduleFromConversation(Number(c.req.param('id')), body));
