@@ -1,11 +1,12 @@
 import { z } from 'zod';
-import { eq, and, inArray, desc } from 'drizzle-orm';
+import { eq, and, inArray, desc, ne, gte, lte } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { generateStructured } from '../integrations/anthropic.js';
 import { familyName, formatJaDateTime, toJstParts, OPEN_CASE_STATUSES, type EventKind } from '@lcm/shared';
-import { createCalendarEvent, createHoldSet } from './court.js';
+import { createCalendarEvent, createHoldSet, removeCalendarEvent, cancelHoldSet } from './court.js';
 import { getSetting, businessHours, fmtHm } from './settings.js';
 import { issueZoomIfNeeded, webLocation, webMeetingProvider, webMeetingText } from './webMeeting.js';
+import { logger } from '../logger.js';
 
 /**
  * 会話（LINE / Chatwork / Gmail）の日程調整のやり取りを読み取り、
@@ -29,8 +30,30 @@ const extractSchema = z.object({
     )
     .describe('確定なら 1 件、候補なら挙がっている順に複数。日程の話がなければ空'),
   note: z.string().describe('判断の根拠や注意点を日本語で 1〜2 文（例: 相手は火曜午後を希望、時刻は未指定）'),
+  reschedule: z
+    .object({
+      isReschedule: z.boolean().describe('すでに決まっている予定の日時を変える話（リスケ・日程変更・延期・都合が悪くなった等）か'),
+      originalIndex: z.number().int().nullable().describe('変更前の予定の番号（「すでに入っている予定」の [n]）。当てはまるものが無い・分からなければ null'),
+      quote: z.string().describe('日程変更と判断した根拠の一節（短く）。日程変更でなければ空'),
+    })
+    .describe('日程変更かどうか。新しく予定を決める話なら isReschedule=false'),
 });
 export type ExtractedSchedule = z.infer<typeof extractSchema>;
+
+/** 日程変更の元になりうる予定（同じ依頼者の、仮押さえでない予定。少し前から先々まで） */
+export function existingEventsForReschedule(clientId: number | null, now = new Date()) {
+  if (!clientId) return [];
+  const from = new Date(now.getTime() - 7 * 86400_000).toISOString();
+  const to = new Date(now.getTime() + 180 * 86400_000).toISOString();
+  return db()
+    .select()
+    .from(schema.calendarEvents)
+    .where(and(eq(schema.calendarEvents.clientId, clientId), ne(schema.calendarEvents.kind, 'hold'), gte(schema.calendarEvents.startAt, from), lte(schema.calendarEvents.startAt, to)))
+    .orderBy(schema.calendarEvents.startAt)
+    .all()
+    .slice(0, 15)
+    .map((e) => ({ id: e.id, title: e.title, startAt: e.startAt, endAt: e.endAt, kind: e.kind, location: e.location }));
+}
 
 const WD = ['日', '月', '火', '水', '木', '金', '土'];
 
@@ -64,6 +87,16 @@ export async function extractScheduleFromConversation(conversationId: number, op
   const bh = businessHours();
   const start = fmtHm(bh.startMin);
   const end = fmtHm(bh.endMin);
+  // 日程変更（リスケ）なら、どの予定を動かす話かを当てるために、いま入っている予定を渡す
+  const existing = existingEventsForReschedule(conv.clientId, now);
+  const existingText = existing.length
+    ? existing
+        .map((e, i) => {
+          const p = toJstParts(new Date(e.startAt));
+          return `[${i + 1}] ${p.month}/${p.day}(${WD[p.weekday]}) ${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')} ${e.title}`;
+        })
+        .join('\n')
+    : '（なし）';
   const result = await generateStructured({
     purpose: '日程の希望の読み取り',
     tier: 'light',
@@ -73,9 +106,11 @@ export async function extractScheduleFromConversation(conversationId: number, op
       `時刻が「午前」だけなら ${start} 以降の切りのよい時刻（10:00 など）、「午後」だけなら 14:00、時刻の言及がなければ 10:00 を仮に置き timeKnown=false にしてください。営業時間は ${start}〜${end} です。`,
       '双方が同じ日時で合意している（「その日でお願いします」「承知しました」など）場合だけ confirmed とし、片方が候補を出しただけ、または相手が別の候補を出した状態は candidates とします。',
       '候補は本文に出てきた順に、重複せずすべて挙げてください。過去の日時や、すでに断られた候補は含めません。',
+      'すでに決まっている予定の日時を変える話（「◯日の打合せを別日にしたい」「都合が悪くなった」「延期」など）なら reschedule.isReschedule=true とし、変更前の予定を「すでに入っている予定」の番号で originalIndex に入れます。slots には新しい日時（候補）だけを入れ、変更前の日時は入れません。',
+      '新しく予定を決める話なら isReschedule=false です。変更前の予定が一覧に無い・どれか分からないときは originalIndex=null にします。',
       '本文にない情報は作らないでください。',
     ].join('\n'),
-    user: `相手: ${who}\n自分: ${me}\n\n--- やり取り（古い順） ---\n${transcript}`,
+    user: `相手: ${who}\n自分: ${me}\n\n--- この相手とすでに入っている予定 ---\n${existingText}\n\n--- やり取り（古い順） ---\n${transcript}`,
     schema: extractSchema,
     effort: 'medium',
     maxTokens: 2000,
@@ -90,11 +125,17 @@ export async function extractScheduleFromConversation(conversationId: number, op
     .filter((s): s is NonNullable<typeof s> => !!s);
   const content = result.content.trim() || (result.kind === 'hearing' ? '期日' : result.kind === 'consult' ? (result.web ? 'WEB相談' : '相談') : '打合せ');
   const counterpartName = client ? familyName(client.name) : familyName(conv.counterpartName ?? who);
+  // 番号は 1 始まり。範囲外なら「どれか分からない」として扱う（画面で選べる）
+  const original = result.reschedule?.isReschedule && result.reschedule.originalIndex ? (existing[result.reschedule.originalIndex - 1] ?? null) : null;
   return {
     ...result,
     durationMinutes,
     content,
     slots,
+    /** 日程変更の元になりうる予定（画面で選び直せるように全部返す） */
+    existingEvents: existing,
+    /** 日程変更と読み取ったときの、変更前の予定 */
+    reschedule: result.reschedule?.isReschedule ? { eventId: original?.id ?? null, quote: result.reschedule.quote } : null,
     clientId: conv.clientId,
     clientName: client?.name ?? null,
     counterpartName,
@@ -219,6 +260,32 @@ export interface RegisterScheduleInput {
   caseId?: number | null;
   /** WEB 会議で行う。確定なら Zoom / Meet をその場で発行し、仮押さえなら確定時に発行する */
   web?: boolean;
+  /**
+   * 日程変更（リスケ）のとき、変更前の予定の ID。
+   * 確定なら新しい予定を入れたうえで元の予定を取り消す。仮押さえなら、候補のどれかを確定した時点で取り消す
+   */
+  replaceEventId?: number | null;
+}
+
+/** 日程変更で取り消す予定を確かめる（別の依頼者の予定や、仮押さえそのものは取り消さない） */
+function replaceTarget(eventId: number | null | undefined, clientId: number | null) {
+  if (!eventId) return null;
+  const ev = db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, eventId)).get();
+  if (!ev) throw new Error('取り消す予定が見つかりません（すでに削除された可能性があります）');
+  if (ev.kind === 'hold') throw new Error('仮押さえは日程変更の元にできません。仮押さえの画面で取り消してください');
+  if (clientId && ev.clientId && ev.clientId !== clientId) throw new Error('取り消そうとした予定は、この会話とは別の依頼者の予定です');
+  return ev;
+}
+
+/** その予定について、途中まで進めていた日程変更（仮押さえ）があれば取り消す */
+async function cancelRunningReschedules(eventId: number) {
+  const running = db()
+    .select()
+    .from(schema.schedulingSessions)
+    .where(and(eq(schema.schedulingSessions.state, 'proposing'), eq(schema.schedulingSessions.rescheduleEventId, eventId)))
+    .all();
+  for (const r of running) await cancelHoldSet(r.id);
+  return running.length;
 }
 
 /** 抽出結果（ユーザーが確認・修正したもの）をカレンダーへ登録 */
@@ -228,7 +295,10 @@ export async function registerScheduleFromConversation(conversationId: number, i
   if (!conv) throw new Error('会話が見つかりません');
   if (!input.slots.length) throw new Error('日時がありません');
   const client = conv.clientId ? d.select().from(schema.clients).where(eq(schema.clients.id, conv.clientId)).get() : null;
-  let caseId = input.caseId ?? null;
+  // 日程変更なら、登録を始める前に取り消す予定を確かめる（途中で失敗して元の予定だけ消える、を避ける）
+  const original = replaceTarget(input.replaceEventId, client?.id ?? null);
+  const replacedInfo = original ? { id: original.id, title: original.title, startAt: original.startAt, endAt: original.endAt } : null;
+  let caseId = input.caseId ?? original?.caseId ?? null;
   if (!caseId && client) {
     const rank: Record<string, number> = { active: 0, wrapup: 1, consultation: 2 };
     const open = d.select().from(schema.cases).where(and(eq(schema.cases.clientId, client.id), inArray(schema.cases.status, OPEN_CASE_STATUSES))).all();
@@ -254,21 +324,40 @@ export async function registerScheduleFromConversation(conversationId: number, i
       meet: provider === 'meet',
     });
     const web = zoom ?? (row.meetUrl ? { provider: 'meet' as const, url: row.meetUrl, password: '', id: null } : null);
-    return { mode: 'confirmed' as const, events: [row], web, webText: webMeetingText(web) };
+    // 新しい予定が入ってから、元の予定を取り消す（順番を逆にすると、登録に失敗したとき予定が消えたままになる）
+    if (original) {
+      const cancelled = await cancelRunningReschedules(original.id);
+      await removeCalendarEvent(original.id);
+      logger.info({ conversationId, from: original.startAt, to: row.startAt, cancelledHolds: cancelled }, '会話から日程変更しました（元の予定を取り消し）');
+    }
+    return { mode: 'confirmed' as const, events: [row], web, webText: webMeetingText(web), replaced: replacedInfo };
   }
   const who = client ? familyName(client.name) : familyName(conv.counterpartName ?? '');
   const content = input.title.replace(new RegExp(`^${who.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`), '').replace(/\s*仮$/, '').trim() || input.title;
+  if (original) {
+    // 同じ予定を二重に日程変更しない（事件ページの「リスケ」と同じ決まり）
+    const running = db()
+      .select()
+      .from(schema.schedulingSessions)
+      .where(and(eq(schema.schedulingSessions.state, 'proposing'), eq(schema.schedulingSessions.rescheduleEventId, original.id)))
+      .get();
+    if (running) throw new Error('この予定はすでに日程変更の調整中です。事件ページか予定ページの仮押さえから進めてください');
+  }
   const r = await createHoldSet({
     title: content,
-    kind: input.kind === 'hold' ? 'meeting' : input.kind,
-    clientId: client?.id ?? null,
+    // 日程変更なら、元の予定の件名をそのまま引き継ぐ（確定したときに同じ件名で入る）
+    exactTitle: original?.title ?? null,
+    kind: original ? (original.kind as EventKind) : input.kind === 'hold' ? 'meeting' : input.kind,
+    clientId: client?.id ?? original?.clientId ?? null,
     caseId,
     counterpartName: client ? null : who,
-    location: input.location ?? null,
-    description: baseDescription,
+    location: input.location ?? original?.location ?? null,
+    description: original ? [`${formatJaDateTime(new Date(original.startAt))} の「${original.title}」の日程変更`, baseDescription].join('\n') : baseDescription,
     slots: input.slots,
     web: input.web ?? false,
+    // 候補のどれかを確定した時点で、元の予定を取り消す（それまでは元の予定も残す）
+    rescheduleEventId: original?.id ?? null,
   });
   // 仮押さえの段階では会議 URL を作らない（どれか 1 つに確定したときに発行する）
-  return { mode: 'holds' as const, sessionId: r.sessionId, events: r.events, web: null, webText: '' };
+  return { mode: 'holds' as const, sessionId: r.sessionId, events: r.events, web: null, webText: '', replaces: replacedInfo };
 }
