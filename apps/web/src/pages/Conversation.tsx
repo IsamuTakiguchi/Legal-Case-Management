@@ -12,7 +12,7 @@ import { Icon } from '../lib/icons';
 import { useSpotlight } from '../lib/spotlight';
 import { quickSendTimes } from '../lib/sendTimes';
 import { DeadlineEditor, TaskDeadlineSelect, WaitDeadlineSelect } from '../lib/Deadline';
-import { SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply, type EventKind } from '@lcm/shared';
+import { SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply, messageLink, type EventKind } from '@lcm/shared';
 
 /** Chatwork の取込理由の表示名（設定画面の診断と同じ） */
 const SCOPE_REASON_LABEL: Record<string, string> = {
@@ -44,7 +44,7 @@ interface Message {
   /** Chatwork: なぜ受信箱に入ったか（取込範囲の確認用） */
   scopeReason?: string | null;
   /** 事務局の質問から依頼者に確認を送った記録 */
-  clientConfirms?: { channel: string; conversationId: number; at: string }[];
+  clientConfirms?: { channel: string; conversationId: number; messageId?: number; at: string }[];
   clientId?: number | null;
   caseId?: number | null;
   clientName?: string | null;
@@ -272,15 +272,18 @@ export default function Conversation() {
   const listRef = useRef<HTMLDivElement>(null);
   const unreadRef = useRef<HTMLDivElement>(null);
   const lastScrolledFor = useRef<number | null>(null);
+  // タイムラインなどから ?message=… で来たら、最新ではなくそのメッセージまで動かして光らせる
+  const spotlightMessage = useSpotlight('message', !!c, messageElementId);
   useEffect(() => {
     if (!c || !listRef.current || lastScrolledFor.current === c.id) return;
     lastScrolledFor.current = c.id;
+    if (spotlightMessage && c.messages.some((m) => m.id === spotlightMessage)) return;
     const el = listRef.current;
     requestAnimationFrame(() => {
       if (unreadRef.current) el.scrollTop = Math.max(0, unreadRef.current.offsetTop - el.offsetTop - 8);
       else el.scrollTop = el.scrollHeight;
     });
-  }, [c]);
+  }, [c, spotlightMessage]);
   const scrollToLatest = () => {
     const el = listRef.current;
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
@@ -414,7 +417,7 @@ export default function Conversation() {
                 </div>
               )}
             <div id={`msg-${m.id}`} className={`flex ${m.direction === 'out' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${m.direction === 'out' ? 'bg-blue-600 text-white' : 'bg-slate-100'}`}>
+              <div className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${m.direction === 'out' ? 'bg-blue-600 text-white' : 'bg-slate-100'} ${m.id === spotlightMessage ? 'spotlight-ring' : ''}`}>
                 <div className={`mb-1 text-xs ${m.direction === 'out' ? 'text-blue-100' : 'text-slate-500'}`}>
                   {m.direction === 'out' ? '自分' : (m.senderName ?? name)} ・ {fmtDateTime(m.sentAt)}
                   {c.channel === 'chatwork' && m.direction === 'in' && (
@@ -424,7 +427,7 @@ export default function Conversation() {
                   )}
                   {(m.clientConfirms?.length ?? 0) > 0 && (
                     <Link
-                      to={`/inbox/${m.clientConfirms!.at(-1)!.conversationId}`}
+                      to={messageLink(m.clientConfirms!.at(-1)!.conversationId, m.clientConfirms!.at(-1)!.messageId)}
                       className="ml-1 rounded bg-green-100 px-1 text-[10px] text-green-800 hover:underline"
                       title="この質問から依頼者に送った確認を開きます"
                     >
@@ -919,6 +922,11 @@ function ReactionBar({
       {err && <div className="mt-0.5 text-xs text-red-600">{err}</div>}
     </div>
   );
+}
+
+/** 会話の中の 1 通の要素 ID（タイムラインや返信先から飛ぶ先） */
+function messageElementId(id: number): string {
+  return `msg-${id}`;
 }
 
 function SchedulePanel({ conversationId, onText, onDone }: { conversationId: number; onText: (t: string) => void; onDone: () => void }) {

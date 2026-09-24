@@ -5,6 +5,7 @@ import { api } from './api';
 import { useDraft, DraftHint } from './draft';
 import { ClientPicker } from './ClientPicker';
 import { fmtDateTime } from './format';
+import { messageLink } from '@lcm/shared';
 
 type ConfirmChannel = 'gmail' | 'line';
 
@@ -93,7 +94,7 @@ export function ClientConfirmPanel({ messageId, onClose, onSent }: { messageId: 
 
   const send = useMutation({
     mutationFn: () =>
-      api.post<{ channel: ConfirmChannel; conversationId: number; waitingTaskId: number | null; staffNotified: boolean; staffError: string | null; note: string | null }>(`/messages/${messageId}/client-confirm`, {
+      api.post<{ channel: ConfirmChannel; conversationId: number; messageId: number; waitingTaskId: number | null; staffNotified: boolean; staffError: string | null; note: string | null }>(`/messages/${messageId}/client-confirm`, {
         clientId: d!.clientId,
         caseId: d!.caseId,
         channel,
@@ -236,7 +237,7 @@ export function ClientConfirmPanel({ messageId, onClose, onSent }: { messageId: 
 
               <div className="flex flex-wrap items-center gap-2">
                 {done && sentConv ? (
-                  <Link className="btn btn-sm" to={`/inbox/${sentConv}`}>
+                  <Link className="btn btn-sm" to={messageLink(sentConv, send.data?.messageId)}>
                     送ったやり取りを開く
                   </Link>
                 ) : (

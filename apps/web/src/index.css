@@ -758,3 +758,16 @@ summary:focus-visible {
 .spotlight {
   animation: spotlight 3.2s ease-out both;
 }
+/* 吹き出しなど、背景色を持つものは枠だけ光らせる（背景を消すと文字が見えなくなる） */
+@keyframes spotlight-ring {
+  0%,
+  70% {
+    box-shadow: 0 0 0 3px var(--accent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+.spotlight-ring {
+  animation: spotlight-ring 3.2s ease-out both;
+}

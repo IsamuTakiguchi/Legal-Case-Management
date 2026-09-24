@@ -10,7 +10,7 @@ import { LongText } from '../lib/LongText';
 import { TaskDeadlineSelect } from '../lib/Deadline';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { fmtDateTime, fmtDate, fmtYen, fmtBytes, toLocalInput, fromLocalInput, channelLabel } from '../lib/format';
-import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
+import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, messageLink, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
 
 interface Note {
@@ -2199,20 +2199,27 @@ function Timeline({ caseId }: { caseId: number }) {
         <ul className="space-y-2 text-sm">
           {t.data?.map((i, idx) => {
             const wf = typeof i.ref?.waitingFor === 'string' && i.ref.waitingFor !== 'none' ? (i.ref.waitingFor as WaitingFor) : null;
+            // メッセージは、会話を開いてそのメッセージまで動かす
+            const msgTo = typeof i.ref?.conversationId === 'number' ? messageLink(i.ref.conversationId, typeof i.ref.messageId === 'number' ? i.ref.messageId : null) : null;
             return (
               <li key={idx} className="flex gap-3 border-b border-slate-100 pb-2">
-                <span className="w-32 shrink-0 text-slate-500">{fmtDateTime(i.at)}</span>
-                <span className={`badge ${i.type.startsWith('message:in') ? 'badge-blue' : i.type.startsWith('message:out') ? 'badge-gray' : i.type.startsWith('event') ? 'badge-orange' : 'badge-gray'}`}>{typeLabel(i.type)}</span>
-                <div className="min-w-0">
+                <span className="w-20 shrink-0 text-xs text-slate-500 sm:w-32 sm:text-sm">{fmtDateTime(i.at)}</span>
+                <span className={`badge self-start ${i.type.startsWith('message:in') ? 'badge-blue' : i.type.startsWith('message:out') ? 'badge-gray' : i.type.startsWith('event') ? 'badge-orange' : 'badge-gray'}`}>{typeLabel(i.type)}</span>
+                <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    {i.ref?.conversationId ? (
-                      <Link to={`/inbox/${i.ref.conversationId}`} className="font-medium hover:underline">
+                    {msgTo ? (
+                      <Link to={msgTo} className="font-medium hover:underline" title="会話の中のこのメッセージを開きます">
                         {i.title}
                       </Link>
                     ) : (
                       <span className="font-medium">{i.title}</span>
                     )}
                     {wf && <span className="badge badge-orange">{WAITING_FOR_LABEL[wf]}の回答待ち</span>}
+                    {msgTo && (
+                      <Link to={msgTo} className="btn btn-sm ml-auto" title="会話の中のこのメッセージを開きます。返信もそこからできます">
+                        メッセージを開く
+                      </Link>
+                    )}
                   </div>
                   {i.body && <TimelineBody body={i.body} messageId={typeof i.ref?.messageId === 'number' ? i.ref.messageId : null} truncated={i.ref?.truncated === true} />}
                 </div>
