@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { ftsQuery } from './inbox.js';
-import { CASE_NOTE_KIND_LABEL, CHANNEL_LABEL, TASK_STATUS_LABEL, EVENT_KIND_LABEL, formatJaDateTime, type CaseNoteKind, type Channel, type TaskStatus, type EventKind } from '@lcm/shared';
+import { CASE_NOTE_KIND_LABEL, CHANNEL_LABEL, TASK_STATUS_LABEL, EVENT_KIND_LABEL, formatJaDateTime, type CaseNoteKind, type Channel, type TaskStatus, type EventKind, phoneDigits, isPhoneLike } from '@lcm/shared';
 
 /**
  * 事務所のデータを横断して探す。
@@ -63,6 +63,8 @@ export function searchTerms(query: string): string[] {
     const t = seg.trim();
     if (t.length < 2) continue;
     add(t);
+    // 電話番号は「090-1234-5678」でも「09012345678」でも当たるように、数字だけの形も足す
+    if (isPhoneLike(t)) out.add(phoneDigits(t));
     // 「山田さんの査定書はどうなっている」→「山田さん」「査定書」「どうなってい」のように助詞でも切る
     for (const w of t.split(/(?:について|における|に関する|から|まで|より|など|ので|ため|[のをにはがでともへや])/u)) add(w);
   }
@@ -143,7 +145,7 @@ export function searchAll(query: string, opts: SearchOptions = {}): SearchHit[] 
   const hits: SearchHit[] = [];
 
   // 名前を引くための対応表（どの種類からも依頼者名・事件名を出せるように）
-  const clients = d.select({ id: schema.clients.id, name: schema.clients.name, kana: schema.clients.kana, aliases: schema.clients.aliases, notes: schema.clients.notes }).from(schema.clients).all();
+  const clients = d.select({ id: schema.clients.id, name: schema.clients.name, kana: schema.clients.kana, aliases: schema.clients.aliases, phones: schema.clients.phones, notes: schema.clients.notes }).from(schema.clients).all();
   const clientName = new Map(clients.map((c) => [c.id, c.name]));
   const cases = d
     .select({ id: schema.cases.id, title: schema.cases.title, clientId: schema.cases.clientId, summary: schema.cases.summary, policy: schema.cases.policy, stage: schema.cases.stage, courtName: schema.cases.courtName, caseNumber: schema.cases.caseNumber })
@@ -163,13 +165,14 @@ export function searchAll(query: string, opts: SearchOptions = {}): SearchHit[] 
           kind: 'client',
           id: c.id,
           title: c.name,
-          snippet: snippetAround([c.kana, ...(c.aliases ?? []), c.notes ?? ''].filter(Boolean).join(' / '), terms),
+          snippet: snippetAround([c.kana, ...(c.aliases ?? []), ...(c.phones ?? []), c.notes ?? ''].filter(Boolean).join(' / '), terms),
           at: null,
           clientName: c.name,
           caseTitle: null,
           link: `/clients/${c.id}`,
         },
-        [c.name, c.kana ?? '', ...(c.aliases ?? []), c.notes ?? ''].join(' '),
+        // 電話番号は書いたままの形と、数字だけの形の両方で当てる
+        [c.name, c.kana ?? '', ...(c.aliases ?? []), ...(c.phones ?? []), ...(c.phones ?? []).map(phoneDigits), c.notes ?? ''].join(' '),
       );
     }
   }

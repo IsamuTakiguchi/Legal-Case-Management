@@ -5,7 +5,7 @@ import { isConfigured } from '../config.js';
 import { z } from 'zod';
 import { eq, desc } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { clientInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputSchema, creditorEventInputSchema, CREDITOR_IMPORT_FIELDS, caseContactInputSchema, staffAskDraftSchema, staffAskSendSchema, TASK_STATUSES, EVENT_KINDS } from '@lcm/shared';
+import { normalizePhones, clientInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputSchema, creditorEventInputSchema, CREDITOR_IMPORT_FIELDS, caseContactInputSchema, staffAskDraftSchema, staffAskSendSchema, TASK_STATUSES, EVENT_KINDS } from '@lcm/shared';
 import { searchClients } from '../services/identity.js';
 import { storage, FolderNotFoundError } from '../integrations/storage.js';
 import { clientFolder } from '../services/attachments.js';
@@ -46,7 +46,7 @@ function normalizeEmails(emails: string[]): string[] {
 clientRoutes.post('/clients', async (c) => {
   const input = clientInputSchema.parse(await c.req.json());
   if (input.lineUserId) assertLineFriendFree(input.lineUserId, null);
-  const row = db().insert(schema.clients).values({ ...input, emails: normalizeEmails(input.emails) }).returning().get();
+  const row = db().insert(schema.clients).values({ ...input, emails: normalizeEmails(input.emails), phones: normalizePhones(input.phones) }).returning().get();
   // LINE の友だちを選んで登録したら、既存の会話を付け、友だち追加の通知を消す
   if (input.lineUserId) linkLineFriendToClient(input.lineUserId, row.id);
   return c.json(db().select().from(schema.clients).where(eq(schema.clients.id, row.id)).get());
@@ -119,10 +119,14 @@ clientRoutes.post('/clients/:id/line-invite', async (c) => {
 
 clientRoutes.put('/clients/:id', async (c) => {
   const id = Number(c.req.param('id'));
-  const input = clientInputSchema.partial().parse(await c.req.json());
+  const raw = (await c.req.json()) as Record<string, unknown>;
+  const parsed = clientInputSchema.partial().parse(raw);
+  // partial() でも default([]) が効くので、送られていない一覧（別名・メール・電話）が空で上書きされてしまう。
+  // 実際に送られてきた項目だけを書き換える
+  const input = Object.fromEntries(Object.entries(parsed).filter(([k]) => k in raw)) as typeof parsed;
   if (input.lineUserId) assertLineFriendFree(input.lineUserId, id);
   db().update(schema.clients)
-    .set({ ...input, ...(input.emails ? { emails: normalizeEmails(input.emails) } : {}), updatedAt: new Date().toISOString() })
+    .set({ ...input, ...(input.emails ? { emails: normalizeEmails(input.emails) } : {}), ...(input.phones ? { phones: normalizePhones(input.phones) } : {}), updatedAt: new Date().toISOString() })
     .where(eq(schema.clients.id, id))
     .run();
   if (input.lineUserId) linkLineFriendToClient(input.lineUserId, id);

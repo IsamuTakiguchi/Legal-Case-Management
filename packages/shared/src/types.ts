@@ -91,6 +91,8 @@ export const clientInputSchema = z.object({
   kana: z.string().optional().nullable(),
   aliases: z.array(z.string()).default([]),
   emails: z.array(z.string().email()).default([]),
+  /** 電話番号（携帯・自宅・勤務先など複数可。入力されたままの形で持つ） */
+  phones: z.array(z.string().max(60)).default([]),
   lineUserId: z.string().optional().nullable(),
   chatworkRoomId: z.number().int().optional().nullable(),
   chatworkAccountId: z.number().int().optional().nullable(),

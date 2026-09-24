@@ -4,8 +4,9 @@ import { Link, useParams, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useDraftRecord, clearDraft, DraftHint } from '../lib/draft';
 import { channelBadge, channelLabel, fmtDateTime, fmtBytes } from '../lib/format';
+import { Icon } from '../lib/icons';
 import { ClientForm, clientFormDraftKey, type ClientRow } from './Clients';
-import { EVENT_KIND_LABEL, TASK_STATUS_LABEL, type EventKind, type TaskStatus, CASE_STATUSES, CASE_STATUS_LABEL } from '@lcm/shared';
+import { EVENT_KIND_LABEL, TASK_STATUS_LABEL, type EventKind, type TaskStatus, CASE_STATUSES, CASE_STATUS_LABEL, telHref } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
 import { LineInvitePanel } from '../lib/LineInvite';
 
@@ -280,6 +281,20 @@ function ContactCard({ c, onEdit }: { c: Detail; onEdit: () => void }) {
         </button>
       </div>
       <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[6rem_1fr]">
+        <dt className="text-slate-500">電話</dt>
+        <dd className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          {(c.phones ?? []).length ? (
+            (c.phones ?? []).map((p) => (
+              // スマホでは押すとそのまま発信できる
+              <a key={p} href={telHref(p)} className="inline-flex items-center gap-1 text-blue-700 hover:underline">
+                <Icon name="phone" className="h-3.5 w-3.5" />
+                {p}
+              </a>
+            ))
+          ) : (
+            <span className="text-slate-400">未登録</span>
+          )}
+        </dd>
         <dt className="text-slate-500">メール</dt>
         <dd>{c.emails.length ? c.emails.join('、') : <span className="text-slate-400">未登録（登録すると、そのアドレスからのメールが自動でこの依頼者に入ります）</span>}</dd>
         <dt className="text-slate-500">Chatwork</dt>

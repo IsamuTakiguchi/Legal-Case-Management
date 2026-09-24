@@ -17,6 +17,8 @@ import {
   TASK_STATUS_LABEL,
   formatJaDateTime,
   toJstParts,
+  phoneDigits,
+  isPhoneLike,
 } from '@lcm/shared';
 import { logger } from '../logger.js';
 
@@ -101,10 +103,22 @@ export interface SecretaryPlan {
 
 const shorten = (s: string | null | undefined, n = 80) => (s ?? '').replace(/\s+/g, ' ').slice(0, n);
 
-/** 名前・かな・別名から依頼者を探す */
+/** 名前・かな・別名・電話番号から依頼者を探す */
 export function findClients(name: string, limit = 8) {
   const q = name.trim();
   if (!q) return [];
+  // 「090-1234-5678 から電話」のように番号で来たときは、書き方の違いを無視して番号で当てる
+  if (isPhoneLike(q)) {
+    const digits = phoneDigits(q);
+    return db()
+      .select()
+      .from(schema.clients)
+      .where(eq(schema.clients.archived, false))
+      .all()
+      .filter((c) => (c.phones ?? []).some((p) => phoneDigits(p) === digits))
+      .slice(0, limit)
+      .map((c) => ({ id: c.id, name: c.name, kana: c.kana, preferredChannel: c.preferredChannel, phones: c.phones ?? [] }));
+  }
   const pat = `%${q}%`;
   const rows = db()
     .select()
@@ -123,7 +137,7 @@ export function findClients(name: string, limit = 8) {
   return hit
     .sort((a, b) => a.name.length - b.name.length)
     .slice(0, limit)
-    .map((c) => ({ id: c.id, name: c.name, kana: c.kana, preferredChannel: c.preferredChannel }));
+    .map((c) => ({ id: c.id, name: c.name, kana: c.kana, preferredChannel: c.preferredChannel, phones: c.phones ?? [] }));
 }
 
 /** 事件を探す。依頼者を指定すると、その依頼者の事件だけ */
@@ -178,8 +192,8 @@ function readTools(sources: SearchHit[]): AgentTool[] {
   return [
     agentTool({
       name: 'find_client',
-      description: '依頼者を名前・かな・別名で探して、ID と正式な名前を返します。記録・予定・タスクを誰かに紐付けるときは、必ずこれで ID を確かめます。',
-      schema: z.object({ name: z.string().describe('探す名前の一部（例「山田」）') }),
+      description: '依頼者を名前・かな・別名・電話番号で探して、ID と正式な名前を返します。記録・予定・タスクを誰かに紐付けるときは、必ずこれで ID を確かめます。電話番号だけ分かっているときは番号をそのまま渡します。',
+      schema: z.object({ name: z.string().describe('探す名前の一部（例「山田」）、または電話番号（例「090-1234-5678」）') }),
       run: (i) => findClients(i.name),
     }),
     agentTool({

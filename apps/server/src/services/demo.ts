@@ -50,12 +50,12 @@ export function seedDemoData(): DemoIds {
     // ---- 依頼者 ----
     const yamada = t
       .insert(schema.clients)
-      .values({ name: '【デモ】山田 花子', kana: 'やまだ はなこ', aliases: ['山田'], emails: ['demo-yamada@example.com'], preferredChannel: 'gmail', onedriveFolderPath: '山田花子', notes: '離婚調停。子ども 2 人。平日日中は仕事のため夕方以降の連絡希望。' })
+      .values({ name: '【デモ】山田 花子', kana: 'やまだ はなこ', aliases: ['山田'], emails: ['demo-yamada@example.com'], phones: ['090-0000-0001（携帯）'], preferredChannel: 'gmail', onedriveFolderPath: '山田花子', notes: '離婚調停。子ども 2 人。平日日中は仕事のため夕方以降の連絡希望。' })
       .returning()
       .get();
     const sato = t
       .insert(schema.clients)
-      .values({ name: '【デモ】佐藤 太郎', kana: 'さとう たろう', aliases: ['佐藤'], emails: ['demo-sato@example.com'], lineUserId: 'Udemo0000000000000000000000000001', preferredChannel: 'line', onedriveFolderPath: '佐藤太郎', notes: '交通事故（被害者側）。LINE 希望。' })
+      .values({ name: '【デモ】佐藤 太郎', kana: 'さとう たろう', aliases: ['佐藤'], emails: ['demo-sato@example.com'], phones: ['080-0000-0002（携帯）', '0742-00-0002（自宅）'], lineUserId: 'Udemo0000000000000000000000000001', preferredChannel: 'line', onedriveFolderPath: '佐藤太郎', notes: '交通事故（被害者側）。LINE 希望。' })
       .returning()
       .get();
     const suzuki = t

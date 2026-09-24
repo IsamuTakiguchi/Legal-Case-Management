@@ -1,3 +1,4 @@
+import { normalizePhones } from '@lcm/shared';
 import { eq, inArray } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { logger } from '../logger.js';
@@ -18,6 +19,7 @@ export interface MergeCandidate {
   name: string;
   kana: string | null;
   emails: string[];
+  phones: string[];
   aliases: string[];
   lineUserId: string | null;
   chatworkRoomId: number | null;
@@ -70,12 +72,14 @@ function candidate(c: typeof schema.clients.$inferSelect): MergeCandidate {
     (c.lineUserId ? 3 : 0) +
     (c.chatworkRoomId ? 3 : 0) +
     c.emails.length * 2 +
+    (c.phones ?? []).length * 2 +
     (c.kana ? 1 : 0);
   return {
     id: c.id,
     name: c.name,
     kana: c.kana,
     emails: c.emails,
+    phones: c.phones ?? [],
     aliases: c.aliases,
     lineUserId: c.lineUserId,
     chatworkRoomId: c.chatworkRoomId,
@@ -176,6 +180,8 @@ export function mergeClients(keepId: number, sourceIds: number[]): MergeResult {
     // 連絡先などの情報をまとめる（残す側の値を優先し、空いているところだけ埋める）
     const patch: Partial<typeof schema.clients.$inferInsert> = { updatedAt: now };
     patch.emails = uniq([...keep.emails, ...sources.flatMap((s) => s.emails)]);
+    // 電話番号は書き方が違っても同じ番号なら 1 つにする（残す側の書き方を優先）
+    patch.phones = normalizePhones([...(keep.phones ?? []), ...sources.flatMap((s) => s.phones ?? [])]);
     patch.aliases = uniq([...keep.aliases, ...sources.flatMap((s) => [...s.aliases, s.name])]).filter((a) => a !== keep.name);
     patch.kana = keep.kana ?? sources.find((s) => s.kana)?.kana ?? null;
     patch.preferredChannel = keep.preferredChannel ?? sources.find((s) => s.preferredChannel)?.preferredChannel ?? null;

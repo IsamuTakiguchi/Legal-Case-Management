@@ -7,7 +7,7 @@ import type { ReactNode } from 'react';
  * 太い丸線で描き、面と重さをそろえる。
  */
 export type IconName = 'home' | 'inbox' | 'calendar' | 'person' | 'scale' | 'check' | 'bell' | 'clip' | 'doc' | 'plug' | 'gear' | 'menu'
-  | 'close' | 'refresh' | 'mail' | 'clock' | 'alert' | 'chat' | 'search';
+  | 'close' | 'refresh' | 'mail' | 'clock' | 'alert' | 'chat' | 'search' | 'phone';
 
 /** 面で描けない部分に使う太い丸線 */
 const line = { fill: 'none', stroke: 'currentColor', strokeWidth: 2.5, strokeLinecap: 'round', strokeLinejoin: 'round' } as const;
@@ -107,6 +107,10 @@ const PATHS: Record<IconName, ReactNode> = {
       <path fillRule="evenodd" d="M6.5 3.5h11A2.5 2.5 0 0 1 20 6v7.5a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 13.5V6a2.5 2.5 0 0 1 2.5-2.5ZM8 8.6a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 0 0 0-2.4Zm4 0a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 0 0 0-2.4Zm4 0a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 0 0 0-2.4Z" />
       <path d="M5.1 14.5h5.6l-4.25 4.55a.8.8 0 0 1-1.35-.55V14.5Z" />
     </>
+  ),
+  // 電話：受話器
+  phone: (
+    <path d="M6.6 2.6a1.6 1.6 0 0 1 2 .5l2.1 3a1.6 1.6 0 0 1-.2 2.1L9.2 9.4a.7.7 0 0 0-.1.8 12.6 12.6 0 0 0 4.7 4.7.7.7 0 0 0 .8-.1l1.2-1.3a1.6 1.6 0 0 1 2.1-.2l3 2.1a1.6 1.6 0 0 1 .5 2l-.8 1.7a2.8 2.8 0 0 1-3 1.6C10.6 19.8 4.2 13.4 3.3 6.4a2.8 2.8 0 0 1 1.6-3l1.7-.8Z" />
   ),
   // 検索：輪と柄
   search: (

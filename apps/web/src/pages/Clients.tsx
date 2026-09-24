@@ -1,10 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useDraftRecord, clearDraft, DraftHint } from '../lib/draft';
 import { LineFriendPicker } from '../lib/LineFriendPicker';
-import { CHANNEL_LABEL } from '@lcm/shared';
+import { CHANNEL_LABEL, splitPhones } from '@lcm/shared';
 import { useSort, readingKey, SortHeader, type SortOption } from '../lib/sort';
 
 const CLIENT_SORTS: SortOption<ClientRow>[] = [
@@ -20,6 +20,8 @@ export interface ClientRow {
   kana: string | null;
   aliases: string[];
   emails: string[];
+  /** 電話番号（携帯・自宅・勤務先など） */
+  phones?: string[];
   lineUserId: string | null;
   /** 友だち追加をお願いした日時。lineUserId が空のままなら「LINE 連携待ち」 */
   lineInvitedAt?: string | null;
@@ -188,12 +190,20 @@ export function ClientForm({
   /** LINE の「連携待ち」を切り替えたときに呼ばれる（親が依頼者を読み直す） */
   onInviteChanged?: () => void;
 }) {
-  const base = { aliases: [], emails: [], ...initial } as Partial<ClientRow>;
+  const base = { aliases: [], emails: [], phones: [], ...initial } as Partial<ClientRow>;
   const [f, setF] = useState<Partial<ClientRow>>(base);
   // 入力途中の内容を自動保存する（保存前に画面を離れても消えない）
   const draft = useDraftRecord(clientFormDraftKey(initial.id), f as Record<string, unknown>, (v) => setF(v as Partial<ClientRow>), base as Record<string, unknown>);
   const folders = useQuery({ queryKey: ['drive-folders'], queryFn: () => api.get<{ path: string; items: { name: string; isFolder: boolean }[] }>('/drive/folders'), retry: false });
   const set = (k: keyof ClientRow, v: unknown) => setF({ ...f, [k]: v });
+  // 電話番号の欄は入力中の文字をそのまま見せる（区切りのカンマを打った途端に消えないように）
+  const [phoneText, setPhoneText] = useState((base.phones ?? []).join(', '));
+  // 下書きを復元したときなど、外から番号が変わったら欄にも反映する
+  const phonesKey = (f.phones ?? []).join('\u0000');
+  useEffect(() => {
+    if (splitPhones(phoneText).join('\u0000') !== phonesKey) setPhoneText((f.phones ?? []).join(', '));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phonesKey]);
   return (
     <form
       className="card grid gap-3 md:grid-cols-2"
@@ -217,6 +227,21 @@ export function ClientForm({
       <div>
         <label className="label">メールアドレス（カンマ区切り）</label>
         <input className="input" value={(f.emails ?? []).join(', ')} onChange={(e) => set('emails', e.target.value.split(/[,、\s]+/).map((s) => s.trim()).filter(Boolean))} />
+      </div>
+      <div>
+        <label className="label">電話番号（複数はカンマ区切り。例: 090-1234-5678（携帯）, 0742-00-0000（自宅））</label>
+        <input
+          className="input"
+          type="text"
+          inputMode="tel"
+          autoComplete="off"
+          value={phoneText}
+          onChange={(e) => {
+            setPhoneText(e.target.value);
+            set('phones', splitPhones(e.target.value));
+          }}
+          placeholder="090-1234-5678"
+        />
       </div>
       <div>
         <label className="label">Chatwork ルーム ID</label>
