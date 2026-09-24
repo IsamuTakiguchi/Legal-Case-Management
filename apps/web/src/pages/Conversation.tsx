@@ -9,6 +9,7 @@ import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { channelBadge, channelLabel, fmtDateTime, fmtBytes, fromLocalInput, toLocalInput, todayLocalInput } from '../lib/format';
 import { Icon } from '../lib/icons';
 import { useSpotlight } from '../lib/spotlight';
+import { quickSendTimes } from '../lib/sendTimes';
 import { DeadlineEditor, TaskDeadlineSelect, WaitDeadlineSelect } from '../lib/Deadline';
 import { SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply, type EventKind } from '@lcm/shared';
 
@@ -126,6 +127,8 @@ export default function Conversation() {
   const [quoteOf, setQuoteOf] = useState<Message | null>(null);
   const [showTimer, setShowTimer] = useState(false);
   const [sendAt, setSendAt] = useState('');
+  // よく使う時刻のどれを押したか（「1 時間後」は時刻が進むと値が変わるので、選択中の表示はこれで見る）
+  const [sendPreset, setSendPreset] = useState<string | null>(null);
   const [selectedAtt, setSelectedAtt] = useState<number[]>([]);
   const [driveFiles, setDriveFiles] = useState<DriveFile[]>([]);
   const [showFiles, setShowFiles] = useState(false);
@@ -198,6 +201,7 @@ export default function Conversation() {
       setQuoteOf(null);
       setShowTimer(false);
       setSendAt('');
+      setSendPreset(null);
       if (r.scheduled) {
         setMsg({ kind: 'ok', text: `${fmtDateTime(r.scheduled.scheduledAt)} に送信するよう予約しました` });
       } else {
@@ -615,11 +619,28 @@ export default function Conversation() {
             <div className="fade-in flex flex-wrap items-center gap-2 rounded-[10px] bg-black/[0.03] px-3 py-2 text-sm">
               <span className="text-xs text-slate-500">送信する時刻:</span>
               {quickSendTimes().map((q) => (
-                <button key={q.value} className={`btn btn-sm ${sendAt === q.value ? 'btn-primary' : ''}`} onClick={() => setSendAt(q.value)}>
+                <button
+                  key={q.key}
+                  className={`btn btn-sm ${sendPreset === q.key ? 'btn-primary' : ''}`}
+                  onClick={() => {
+                    // 押した時点の値を使う（「1 時間後」なら今から 1 時間後）
+                    setSendAt(q.value);
+                    setSendPreset(q.key);
+                  }}
+                >
                   {q.label}
                 </button>
               ))}
-              <input type="datetime-local" className="input w-auto" value={sendAt} min={todayLocalInput(0)} onChange={(e) => setSendAt(e.target.value)} />
+              <input
+                type="datetime-local"
+                className="input w-auto"
+                value={sendAt}
+                min={todayLocalInput(0)}
+                onChange={(e) => {
+                  setSendAt(e.target.value);
+                  setSendPreset(null);
+                }}
+              />
               <button className="btn btn-primary" onClick={() => send.mutate(fromLocalInput(sendAt))} disabled={!text.trim() || !sendAt || send.isPending}>
                 {sendAt ? `${fmtDateTime(fromLocalInput(sendAt))} に送信予約` : '時刻を選んでください'}
               </button>
@@ -705,20 +726,6 @@ export default function Conversation() {
   );
 }
 
-/** 送信時刻の候補（今日 17 時、明日 9 時・10 時。過ぎた時刻は出さない） */
-function quickSendTimes(): { label: string; value: string }[] {
-  const jstNow = new Date(Date.now() + 9 * 3600_000);
-  const day = (offset: number) => new Date(jstNow.getTime() + offset * 86400_000).toISOString().slice(0, 10);
-  const at = (d: string, h: number) => `${d}T${String(h).padStart(2, '0')}:00`;
-  const out: { label: string; value: string }[] = [];
-  const nowLocal = jstNow.toISOString().slice(0, 16);
-  if (at(day(0), 12) > nowLocal) out.push({ label: '今日 12:00', value: at(day(0), 12) });
-  if (at(day(0), 17) > nowLocal) out.push({ label: '今日 17:00', value: at(day(0), 17) });
-  out.push({ label: '明日 9:00', value: at(day(1), 9) });
-  out.push({ label: '明日 10:00', value: at(day(1), 10) });
-  return out;
-}
-
 /** この会話の送信予約（取消・時刻変更・今すぐ送る） */
 function ScheduledList({ items, onChanged }: { items: Scheduled[]; onChanged: () => void }) {
   const qc = useQueryClient();
@@ -772,6 +779,12 @@ function ScheduledList({ items, onChanged }: { items: Scheduled[]; onChanged: ()
             {s.error && <div className="text-xs text-red-600">{s.error}</div>}
             {editing === s.id && (
               <div className="fade-in flex flex-wrap items-center gap-2">
+                {/* 送信予約のときと同じ「よく使う時刻」（1 時間後など）。押すと下の欄に入る */}
+                {quickSendTimes().map((q) => (
+                  <button key={q.key} className="btn btn-sm" onClick={() => setEditAt(q.value)}>
+                    {q.label}
+                  </button>
+                ))}
                 <input type="datetime-local" className="input w-auto" value={editAt} onChange={(e) => setEditAt(e.target.value)} />
                 <button className="btn btn-primary btn-sm" onClick={() => retime.mutate(s.id)} disabled={!editAt || busy}>
                   この時刻に変更
