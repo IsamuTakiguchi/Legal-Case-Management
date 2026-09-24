@@ -35,7 +35,7 @@ export const CREDENTIAL_SERVICES: CredentialService[] = [
     doc: 'deploy.md',
     fields: [
       { key: 'ANTHROPIC_API_KEY', label: 'API キー', secret: true, placeholder: 'sk-ant-…' },
-      { key: 'ANTHROPIC_MODEL', label: 'モデル', secret: false, placeholder: 'claude-opus-5' },
+      { key: 'ANTHROPIC_MODEL', label: 'モデル', secret: false, placeholder: 'claude-opus-5-5' },
     ],
   },
   {

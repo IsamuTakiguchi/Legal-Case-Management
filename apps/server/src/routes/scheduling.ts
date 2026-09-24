@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { proposeSlotsSchema, confirmSlotSchema, nextHearingInputSchema, EVENT_KINDS, schedulePreferencesSchema } from '@lcm/shared';
 import { proposeSlots, confirmSlot, cancelSession, listSessions, findFreeSlots, extractChosenSlot } from '../services/scheduling.js';
-import { syncCalendar, checkPostEvents, resolveNextHearing, listCourtDocs, listClientFolder, upcomingEvents, relinkEvent, listCalendarEvents, createCalendarEvent, editCalendarEvent, removeCalendarEvent, createHoldSet, confirmHold, cancelHoldSet, startReschedule } from '../services/court.js';
+import { syncCalendar, checkPostEvents, resolveNextHearing, listCourtDocs, listClientFolder, upcomingEvents, relinkEvent, listCalendarEvents, createCalendarEvent, editCalendarEvent, removeCalendarEvent, createHoldSet, confirmHold, cancelHoldSet, startReschedule, setHoldSetLocation } from '../services/court.js';
 import { createZoomMeeting } from '../integrations/zoom.js';
 import { extractScheduleFromConversation, registerScheduleFromConversation, extractSchedulePreferences } from '../services/scheduleExtract.js';
 import { holdProposalContext, draftHoldProposal, sendHoldProposal } from '../services/holdProposal.js';
@@ -182,6 +182,12 @@ schedulingRoutes.post('/calendar/events/:id/reschedule', async (c) => {
 schedulingRoutes.post('/calendar/holds/:sessionId/confirm', async (c) => {
   const body = z.object({ eventId: z.number().int() }).parse(await c.req.json());
   return c.json(await confirmHold(Number(c.req.param('sessionId')), body.eventId));
+});
+
+/** 仮押さえた候補の場所を、まとめて付け直す */
+schedulingRoutes.post('/calendar/holds/:sessionId/location', async (c) => {
+  const body = z.object({ location: z.string().trim().max(200).nullable() }).parse(await c.req.json());
+  return c.json(await setHoldSetLocation(Number(c.req.param('sessionId')), body.location));
 });
 
 schedulingRoutes.post('/calendar/holds/:sessionId/cancel', async (c) => {

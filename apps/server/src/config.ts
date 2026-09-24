@@ -13,7 +13,7 @@ const envSchema = z.object({
   LOG_LEVEL: z.string().default('info'),
 
   ANTHROPIC_API_KEY: z.string().optional(),
-  ANTHROPIC_MODEL: z.string().default('claude-opus-5'),
+  ANTHROPIC_MODEL: z.string().default('claude-opus-5-5'),
 
   LINE_CHANNEL_ID: z.string().optional(),
   LINE_CHANNEL_SECRET: z.string().optional(),

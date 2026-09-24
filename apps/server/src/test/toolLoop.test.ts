@@ -10,25 +10,31 @@ process.env.DATA_DIR = tmp;
 process.env.ANTHROPIC_API_KEY = 'test-key';
 
 /** Claude の返事をこちらで決めるための差し替え */
-type Block = { type: 'text'; text: string } | { type: 'tool_use'; id: string; name: string; input: unknown };
+type Block =
+  | { type: 'text'; text: string }
+  | { type: 'tool_use'; id: string; name: string; input: unknown }
+  | { type: 'thinking'; thinking: string; signature: string }
+  | { type: 'fallback'; from: { model: string }; to: { model: string } };
 const replies: { stop_reason: string; content: Block[] }[] = [];
 /** 実際に送られたリクエスト（道具の結果がどう渡ったかを見る） */
-const sent: { messages: { role: string; content: unknown }[]; tools: { name: string }[] }[] = [];
+const sent: { messages: { role: string; content: unknown }[]; tools: { name: string }[]; fallbacks?: unknown; betas?: string[] }[] = [];
 
 vi.mock('@anthropic-ai/sdk', () => {
   class FakeAnthropic {
-    messages = {
-      stream: (req: { messages: { role: string; content: unknown }[]; tools: { name: string }[] }) => {
-        // ループは同じ配列を作り変えていくので、送った時点の形を控える
-        sent.push({ messages: [...req.messages], tools: req.tools });
-        const next = replies.shift() ?? { stop_reason: 'end_turn', content: [{ type: 'text' as const, text: '（用意した返事がありません）' }] };
-        return {
-          finalMessage: async () => ({
-            ...next,
-            model: 'test-model',
-            usage: { input_tokens: 10, output_tokens: 5 },
-          }),
-        };
+    beta = {
+      messages: {
+        stream: (req: { messages: { role: string; content: unknown }[]; tools: { name: string }[]; fallbacks?: unknown; betas?: string[] }) => {
+          // ループは同じ配列を作り変えていくので、送った時点の形を控える
+          sent.push({ messages: [...req.messages], tools: req.tools, fallbacks: req.fallbacks, betas: req.betas });
+          const next = replies.shift() ?? { stop_reason: 'end_turn', content: [{ type: 'text' as const, text: '（用意した返事がありません）' }] };
+          return {
+            finalMessage: async () => ({
+              ...next,
+              model: 'test-model',
+              usage: { input_tokens: 10, output_tokens: 5 },
+            }),
+          };
+        },
       },
     };
   }
@@ -150,6 +156,38 @@ describe('道具を使う往復', () => {
     const r = await runToolLoop({ system: 'テスト', messages: [{ role: 'user', content: 'x' }], tools: tools(), maxRounds: 2 });
     expect(sent.length).toBe(2);
     expect(r.final).toBeNull();
+  });
+
+  it('断られたら別のモデルでやり直す設定を、毎回付けて送る', async () => {
+    replies.push({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'はい' }] });
+    await run();
+    expect(sent[0]!.fallbacks).toBe('default');
+    expect(sent[0]!.betas).toEqual(['server-side-fallback-2026-07-01']);
+  });
+
+  it('途中で別のモデルに切り替わったら、切り替わる前の考えた跡と道具の呼び出しは次に渡さない', async () => {
+    replies.push(
+      {
+        stop_reason: 'tool_use',
+        content: [
+          { type: 'thinking', thinking: '', signature: 'sig-a' },
+          { type: 'tool_use', id: 'x', name: 'boom', input: {} },
+          { type: 'fallback', from: { model: 'claude-opus-5-5' }, to: { model: 'claude-opus-4-8' } },
+          { type: 'thinking', thinking: '', signature: 'sig-b' },
+          { type: 'tool_use', id: 'a', name: 'find_client', input: { name: '山田' } },
+        ],
+      },
+      { stop_reason: 'end_turn', content: [{ type: 'text', text: '見つかりました' }] },
+    );
+    const r = await run();
+    // 切り替わる前に呼ばれた道具は実行しない
+    expect(r.used).toEqual(['find_client']);
+    const assistant = sent[1]!.messages.at(-2) as { role: string; content: { type: string; signature?: string; id?: string }[] };
+    expect(assistant.role).toBe('assistant');
+    expect(assistant.content.map((b) => b.type)).toEqual(['fallback', 'thinking', 'tool_use']);
+    expect(assistant.content[1]!.signature).toBe('sig-b');
+    const results = (sent[1]!.messages.at(-1) as { content: { tool_use_id: string }[] }).content;
+    expect(results.map((b) => b.tool_use_id)).toEqual(['a']);
   });
 
   it('拒否されたときは分かる形で止める', async () => {

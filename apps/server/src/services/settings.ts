@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { DEFAULT_CHATWORK_REACTIONS } from '@lcm/shared';
+import { DEFAULT_CHATWORK_REACTIONS, AI_MODEL_ALIASES } from '@lcm/shared';
 
 export const SETTING_DEFAULTS: Record<string, string> = {
   office_name: '登大路総合法律事務所',
@@ -69,7 +69,7 @@ http://www.noboriohji.com/access/`,
   digest_max_items: '15',
   alert_notify_title: '確認が必要な事項',
   line_manual_send_note: 'ファイルは LINE公式アカウントの管理画面（チャット）から手動でお送りください。',
-  /** 仮押さえの候補日を依頼者に打診する文。{kind}=打合せ等 / {client}=依頼者名 / {slots}=候補の行 */
+  /** 仮押さえの候補日を依頼者に打診する文。{kind}=打合せ等 / {client}=依頼者名 / {slots}=候補の行 / {location}=場所（無ければ場所が決まっているときだけ最後に足す） */
   hold_proposal_template: '{kind}の候補日ですが、\n{slots}\nでいかがでしょうか？',
   /** 候補 1 件の書き方。{M}=月 {D}=日 {wd}=曜日 {start}=開始 {end}=終了 */
   hold_proposal_slot_format: '{M}/{D} {start}-',
@@ -129,6 +129,23 @@ export function setSetting(key: string, value: string) {
     .onConflictDoUpdate({ target: schema.settings.key, set: { value, updatedAt: new Date().toISOString() } })
     .run();
   cache.set(key, value);
+}
+
+/**
+ * 設定画面で前の版のモデル（例: claude-opus-5）を選んでいたら、後継モデルに書き換える。
+ * 起動のたびに呼ぶ（書き換える値が無ければ何もしない）
+ */
+export function upgradeModelSettings(): string[] {
+  const changed: string[] = [];
+  for (const key of ['ai_model', 'ai_model_light']) {
+    const current = getSetting(key).trim();
+    const next = AI_MODEL_ALIASES[current];
+    if (next) {
+      setSetting(key, next);
+      changed.push(`${key}: ${current} → ${next}`);
+    }
+  }
+  return changed;
 }
 
 export function allSettings(): Record<string, string> {

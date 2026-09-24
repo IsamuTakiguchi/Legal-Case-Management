@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
+import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod';
-import { AI_MODEL_IDS } from '@lcm/shared';
+import { AI_MODEL_IDS, AI_MODEL_ALIASES } from '@lcm/shared';
 import { env, isConfigured } from '../config.js';
 import { logger } from '../logger.js';
 import { recordUsage } from '../services/apiCost.js';
@@ -33,14 +33,54 @@ export function model(tier: ModelTier = 'main'): string {
     // DB 未初期化（起動直後やテスト）なら環境変数の既定を使う
     return fallback;
   }
-  const pick = tier === 'light' ? light || main : main;
-  return pick && AI_MODEL_IDS.includes(pick) ? pick : fallback;
+  const pick = upgradeModelId(tier === 'light' ? light || main : main);
+  return pick && AI_MODEL_IDS.includes(pick) ? pick : upgradeModelId(fallback);
+}
+
+/** 以前の版で保存したモデル名（例: claude-opus-5）を、いまの後継モデルに読み替える */
+export function upgradeModelId(id: string): string {
+  return AI_MODEL_ALIASES[id] ?? id;
+}
+
+type Msg = Anthropic.Beta.BetaMessage;
+type MsgParam = Anthropic.Beta.BetaMessageParam;
+type TextBlock = Anthropic.Beta.BetaTextBlock;
+
+/**
+ * 安全上の理由で断られたときは、Anthropic が勧める別のモデルでその場でやり直してもらう
+ * （サーバー側の fallbacks。断られた分は課金されず、やり直しはそのモデルの料金になる）
+ */
+const withFallback = { betas: ['server-side-fallback-2026-07-01'] as Anthropic.Beta.AnthropicBeta[], fallbacks: 'default' as const };
+
+/** やり直しでも断られたとき */
+function refused(res: Msg): never {
+  logger.warn({ stop_details: res.stop_details, model: res.model }, 'Claude が生成を拒否しました');
+  throw new Error('生成が拒否されました。指示内容を見直してください。');
+}
+
+function textOf(res: Msg): string {
+  return res.content
+    .filter((b): b is TextBlock => b.type === 'text')
+    .map((b) => b.text)
+    .join('')
+    .trim();
+}
+
+/**
+ * 返事を次の往復にそのまま渡すための形。
+ * 途中で別のモデルに切り替わったときは、切り替わる前の考えた跡と道具の呼び出しを外す
+ * （API の決まり。文章と切り替わり以降はそのまま）
+ */
+export function replayContent(content: Msg['content']): Msg['content'] {
+  const cut = content.map((b) => b.type).lastIndexOf('fallback');
+  if (cut < 0) return content;
+  return content.filter((b, i) => i >= cut || !(b.type === 'thinking' || b.type === 'redacted_thinking' || b.type === 'tool_use'));
 }
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 /** 応答の usage から利用記録を残す（設定画面の「API 利用料」に出す） */
-function track(purpose: string | undefined, res: { model: string; usage: Anthropic.Usage }) {
+function track(purpose: string | undefined, res: { model: string; usage: Anthropic.Beta.BetaUsage }) {
   recordUsage({
     model: res.model || model(),
     purpose: purpose ?? 'その他',
@@ -56,7 +96,7 @@ function track(purpose: string | undefined, res: { model: string; usage: Anthrop
 /** テキスト生成。長文出力に備えて常にストリーミングで受け取る */
 export async function generateText(opts: {
   system: string;
-  user: string | Anthropic.MessageParam[];
+  user: string | MsgParam[];
   maxTokens?: number;
   effort?: Effort;
   onDelta?: (text: string) => void;
@@ -65,8 +105,9 @@ export async function generateText(opts: {
   /** 軽い処理は light（設定で安いモデルに回せる） */
   tier?: ModelTier;
 }): Promise<string> {
-  const messages: Anthropic.MessageParam[] = typeof opts.user === 'string' ? [{ role: 'user', content: opts.user }] : opts.user;
-  const stream = anthropic().messages.stream({
+  const messages: MsgParam[] = typeof opts.user === 'string' ? [{ role: 'user', content: opts.user }] : opts.user;
+  const stream = anthropic().beta.messages.stream({
+    ...withFallback,
     model: model(opts.tier),
     max_tokens: opts.maxTokens ?? 16000,
     system: [{ type: 'text', text: opts.system, cache_control: { type: 'ephemeral' } }],
@@ -77,15 +118,8 @@ export async function generateText(opts: {
   if (opts.onDelta) stream.on('text', (t) => opts.onDelta!(t));
   const final = await stream.finalMessage();
   track(opts.purpose, final);
-  if (final.stop_reason === 'refusal') {
-    logger.warn({ stop_details: final.stop_details }, 'Claude が生成を拒否しました');
-    throw new Error('生成が拒否されました。指示内容を見直してください。');
-  }
-  return final.content
-    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-    .map((b) => b.text)
-    .join('')
-    .trim();
+  if (final.stop_reason === 'refusal') refused(final);
+  return textOf(final);
 }
 
 /** 構造化出力（zod スキーマで型付け） */
@@ -98,16 +132,17 @@ export async function generateStructured<T extends z.ZodType>(opts: {
   purpose?: string;
   tier?: ModelTier;
 }): Promise<z.infer<T>> {
-  const res = await anthropic().messages.parse({
+  const res = await anthropic().beta.messages.parse({
+    ...withFallback,
     model: model(opts.tier),
     max_tokens: opts.maxTokens ?? 8000,
     system: opts.system,
     messages: [{ role: 'user', content: opts.user }],
     thinking: { type: 'adaptive' },
-    output_config: { effort: opts.effort ?? 'medium', format: zodOutputFormat(opts.schema) },
+    output_config: { effort: opts.effort ?? 'medium', format: betaZodOutputFormat(opts.schema) },
   });
   track(opts.purpose, res);
-  if (res.stop_reason === 'refusal') throw new Error('生成が拒否されました');
+  if (res.stop_reason === 'refusal') refused(res);
   if (!res.parsed_output) throw new Error('構造化出力の解析に失敗しました');
   return res.parsed_output as z.infer<T>;
 }
@@ -115,23 +150,24 @@ export async function generateStructured<T extends z.ZodType>(opts: {
 /** 構造化出力（画像や PDF などのコンテンツブロックを渡せる版） */
 export async function generateStructuredFromContent<T extends z.ZodType>(opts: {
   system: string;
-  content: Anthropic.ContentBlockParam[];
+  content: Anthropic.Beta.BetaContentBlockParam[];
   schema: T;
   maxTokens?: number;
   effort?: Effort;
   purpose?: string;
   tier?: ModelTier;
 }): Promise<z.infer<T>> {
-  const res = await anthropic().messages.parse({
+  const res = await anthropic().beta.messages.parse({
+    ...withFallback,
     model: model(opts.tier),
     max_tokens: opts.maxTokens ?? 4000,
     system: opts.system,
     messages: [{ role: 'user', content: opts.content }],
     thinking: { type: 'adaptive' },
-    output_config: { effort: opts.effort ?? 'low', format: zodOutputFormat(opts.schema) },
+    output_config: { effort: opts.effort ?? 'low', format: betaZodOutputFormat(opts.schema) },
   });
   track(opts.purpose, res);
-  if (res.stop_reason === 'refusal') throw new Error('生成が拒否されました');
+  if (res.stop_reason === 'refusal') refused(res);
   if (!res.parsed_output) throw new Error('構造化出力の解析に失敗しました');
   return res.parsed_output as z.infer<T>;
 }
@@ -166,7 +202,7 @@ export interface ToolLoopResult {
   /** 使った道具の名前（呼ばれた順） */
   used: string[];
   /** やり取りの記録（続きを頼むときにそのまま渡せる） */
-  messages: Anthropic.MessageParam[];
+  messages: MsgParam[];
 }
 
 /**
@@ -177,7 +213,7 @@ export interface ToolLoopResult {
  */
 export async function runToolLoop(opts: {
   system: string;
-  messages: Anthropic.MessageParam[];
+  messages: MsgParam[];
   tools: AgentTool[];
   /** 往復の上限。既定 6 */
   maxRounds?: number;
@@ -187,17 +223,18 @@ export async function runToolLoop(opts: {
   tier?: ModelTier;
 }): Promise<ToolLoopResult> {
   const byName = new Map(opts.tools.map((t) => [t.name, t]));
-  const defs: Anthropic.ToolUnion[] = opts.tools.map((t) => ({
+  const defs: Anthropic.Beta.BetaToolUnion[] = opts.tools.map((t) => ({
     name: t.name,
     description: t.description,
-    input_schema: z.toJSONSchema(t.schema, { io: 'input' }) as Anthropic.Tool.InputSchema,
+    input_schema: z.toJSONSchema(t.schema, { io: 'input' }) as Anthropic.Beta.BetaTool.InputSchema,
   }));
   const messages = [...opts.messages];
   const used: string[] = [];
   let text = '';
 
   for (let round = 0; round < (opts.maxRounds ?? 6); round++) {
-    const stream = anthropic().messages.stream({
+    const stream = anthropic().beta.messages.stream({
+      ...withFallback,
       model: model(opts.tier),
       max_tokens: opts.maxTokens ?? 8000,
       system: [{ type: 'text', text: opts.system, cache_control: { type: 'ephemeral' } }],
@@ -208,22 +245,16 @@ export async function runToolLoop(opts: {
     });
     const res = await stream.finalMessage();
     track(opts.purpose, res);
-    if (res.stop_reason === 'refusal') {
-      logger.warn({ stop_details: res.stop_details }, 'Claude が生成を拒否しました');
-      throw new Error('生成が拒否されました。指示内容を見直してください。');
-    }
-    text = res.content
-      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-      .map((b) => b.text)
-      .join('')
-      .trim();
+    if (res.stop_reason === 'refusal') refused(res);
+    text = textOf(res);
     // 考えた跡も含めて、返ってきたものをそのまま次の往復に渡す
-    messages.push({ role: 'assistant', content: res.content });
-    const calls = res.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
+    const content = replayContent(res.content);
+    messages.push({ role: 'assistant', content });
+    const calls = content.filter((b): b is Anthropic.Beta.BetaToolUseBlock => b.type === 'tool_use');
     if (!calls.length) return { text, final: null, used, messages };
 
     // 同じ往復で複数の道具が呼ばれることがある。結果は 1 通のメッセージにまとめて返す
-    const results: Anthropic.ToolResultBlockParam[] = [];
+    const results: Anthropic.Beta.BetaToolResultBlockParam[] = [];
     for (const call of calls) {
       used.push(call.name);
       const tool = byName.get(call.name);

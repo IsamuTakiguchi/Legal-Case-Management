@@ -902,6 +902,7 @@ function SchedulePanel({ conversationId, onText, onDone }: { conversationId: num
   const [avoid, setAvoid] = useState<Prefs['avoid']>([]);
   const [requested, setRequested] = useState<Prefs['requested']>([]);
   const [prefNote, setPrefNote] = useState('');
+  const [location, setLocation] = useState('');
   const [err, setErr] = useState('');
   const readPrefs = useMutation({
     mutationFn: () => api.post<Prefs>(`/conversations/${conversationId}/schedule/preferences`),
@@ -933,6 +934,7 @@ function SchedulePanel({ conversationId, onText, onDone }: { conversationId: num
         durationMinutes: duration,
         maxCandidates: max,
         preferences: { weekdays, timeRanges: parseTimeRanges(timeRanges), avoid, requested },
+        location: location.trim() || null,
         ...(travel.trim() ? { travelBufferMinutes: Math.max(0, Math.min(240, Number(travel))) } : {}),
       }),
     onSuccess: (r) => {
@@ -980,6 +982,10 @@ function SchedulePanel({ conversationId, onText, onDone }: { conversationId: num
         <div>
           <label className="label">移動時間（分）</label>
           <input type="number" className="input w-20" placeholder="設定値" value={travel} onChange={(e) => setTravel(e.target.value)} title="外出予定（裁判所など）の前後に空ける時間。空欄なら設定の値" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <label className="label">場所</label>
+          <input className="input w-full min-w-40" value={location} onChange={(e) => setLocation(e.target.value)} placeholder={kind === 'WEB' ? '空欄なら会議 URL だけ' : '空欄なら事務所'} maxLength={200} title="仮押さえの予定と、確定した予定の場所に入ります。候補の文にも「場所: …」を添えます" />
         </div>
       </div>
       <div className="mt-2 flex flex-wrap items-end gap-3">

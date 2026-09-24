@@ -4,8 +4,9 @@ import { getSetting } from './settings.js';
 import { logger } from '../logger.js';
 
 /**
- * Claude の料金表（米ドル／100 万トークン）。Anthropic の公開価格（2026-06 時点）。
- * キャッシュ書込は入力の 1.25 倍、キャッシュ読出は入力の 0.1 倍（Fable 5.1 は 0.25 ドル）。
+ * Claude の料金表（米ドル／100 万トークン）。Anthropic の公開価格（2026-09 時点）。
+ * キャッシュ書込は入力の 1.25 倍、キャッシュ読出は入力の 0.1 倍（Opus 5.5 は 0.05 倍、Fable 5.1 は 0.25 ドル）。
+ * 名前の頭で引くので、長い名前（claude-opus-5-5）を短い名前（claude-opus-5）より前に置く。
  * 料金改定があればここを直す
  */
 export interface ModelPrice {
@@ -19,6 +20,7 @@ const PRICES: { prefix: string; price: ModelPrice }[] = [
   { prefix: 'claude-mythos-5-1', price: { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 0.25 } },
   { prefix: 'claude-fable-5', price: { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 1 } },
   { prefix: 'claude-mythos-5', price: { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 1 } },
+  { prefix: 'claude-opus-5-5', price: { input: 4, output: 20, cacheWrite: 5, cacheRead: 0.2 } },
   { prefix: 'claude-opus-5', price: { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 } },
   { prefix: 'claude-opus-4-8', price: { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 } },
   { prefix: 'claude-opus-4-7', price: { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 } },
@@ -30,7 +32,7 @@ const PRICES: { prefix: string; price: ModelPrice }[] = [
   { prefix: 'claude-haiku-4-5', price: { input: 1, output: 5, cacheWrite: 1.25, cacheRead: 0.1 } },
   { prefix: 'claude-haiku', price: { input: 0.8, output: 4, cacheWrite: 1, cacheRead: 0.08 } },
 ];
-const FALLBACK = PRICES.find((p) => p.prefix === 'claude-opus-5')!.price;
+const FALLBACK = PRICES.find((p) => p.prefix === 'claude-opus-5-5')!.price;
 
 export function priceFor(model: string): { price: ModelPrice; estimated: boolean } {
   const hit = PRICES.find((p) => model.startsWith(p.prefix));
