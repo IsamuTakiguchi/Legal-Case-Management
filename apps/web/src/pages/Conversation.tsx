@@ -6,6 +6,7 @@ import { useDraft, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
 import { ContactLinkForm } from '../lib/ContactLinkForm';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
+import { ClientConfirmPanel } from '../lib/ClientConfirmPanel';
 import { channelBadge, channelLabel, fmtDateTime, fmtBytes, fromLocalInput, toLocalInput, todayLocalInput } from '../lib/format';
 import { Icon } from '../lib/icons';
 import { useSpotlight } from '../lib/spotlight';
@@ -42,6 +43,8 @@ interface Message {
   replyTo?: { id: number; senderName: string | null; direction: string; excerpt: string } | null;
   /** Chatwork: なぜ受信箱に入ったか（取込範囲の確認用） */
   scopeReason?: string | null;
+  /** 事務局の質問から依頼者に確認を送った記録 */
+  clientConfirms?: { channel: string; conversationId: number; at: string }[];
   clientId?: number | null;
   caseId?: number | null;
   clientName?: string | null;
@@ -124,6 +127,8 @@ export default function Conversation() {
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   // リアクション欄を開いているメッセージ
   const [reactFor, setReactFor] = useState<number | null>(null);
+  // 事務局の質問を依頼者に確認する（Gmail・LINE）パネルを開いているメッセージ
+  const [confirmFor, setConfirmFor] = useState<number | null>(null);
   const [quoteOf, setQuoteOf] = useState<Message | null>(null);
   const [showTimer, setShowTimer] = useState(false);
   const [sendAt, setSendAt] = useState('');
@@ -417,6 +422,15 @@ export default function Conversation() {
                       取込理由: {SCOPE_REASON_LABEL[m.scopeReason ?? 'none'] ?? m.scopeReason}
                     </span>
                   )}
+                  {(m.clientConfirms?.length ?? 0) > 0 && (
+                    <Link
+                      to={`/inbox/${m.clientConfirms!.at(-1)!.conversationId}`}
+                      className="ml-1 rounded bg-green-100 px-1 text-[10px] text-green-800 hover:underline"
+                      title="この質問から依頼者に送った確認を開きます"
+                    >
+                      ✓ 依頼者に確認済み（{m.clientConfirms!.at(-1)!.channel === 'gmail' ? 'Gmail' : 'LINE'}・{fmtDateTime(m.clientConfirms!.at(-1)!.at)}）
+                    </Link>
+                  )}
                 </div>
                 {m.replyTo && (
                   <button
@@ -443,6 +457,16 @@ export default function Conversation() {
                       title="「了解しました」などの短い一言を、このメッセージへの返信としてワンタップで送ります"
                     >
                       😊 リアクション
+                    </button>
+                  )}
+                  {c.channel === 'chatwork' && m.direction === 'in' && (
+                    <button
+                      type="button"
+                      className="font-medium text-blue-700 hover:underline"
+                      onClick={() => setConfirmFor(confirmFor === m.id ? null : m.id)}
+                      title="この質問を、自分から依頼者に確認する文に書き直して、Gmail か LINE で依頼者に送ります"
+                    >
+                      📨 依頼者に確認
                     </button>
                   )}
                   <button type="button" className="hover:underline" onClick={() => setQuoteOf(m)} title={c.channel === 'chatwork' ? 'Chatwork の引用として本文に付けます' : '「> 」付きの引用文として本文に付けます'}>
@@ -502,6 +526,13 @@ export default function Conversation() {
                 )}
               </div>
             </div>
+            {confirmFor === m.id && (
+              <ClientConfirmPanel
+                messageId={m.id}
+                onClose={() => setConfirmFor(null)}
+                onSent={invalidate}
+              />
+            )}
             </Fragment>
           ))}
           {c.messages.length === 0 && <div className="text-sm text-slate-500">メッセージはありません</div>}

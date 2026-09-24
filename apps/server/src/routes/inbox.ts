@@ -9,6 +9,7 @@ import { linkConversationToContact, unlinkConversation, createContact, getContac
 import { assignConversationAttachments } from '../services/attachments.js';
 import { sendToConversation } from '../services/send.js';
 import { staffAskContext, draftStaffAsk, sendStaffAsk, type StaffAskSource } from '../services/staffAsk.js';
+import { clientConfirmContext, draftClientConfirm, sendClientConfirm, CONFIRM_CHANNELS } from '../services/clientConfirm.js';
 import { scheduleMessage, listScheduled, updateScheduled, cancelScheduled, dispatchScheduled } from '../services/scheduledSend.js';
 import { draftReply } from '../services/style.js';
 import { judgeWaiting } from '../services/tasks.js';
@@ -197,6 +198,44 @@ inboxRoutes.post('/conversations/:id/staff-ask/draft', async (c) => {
 inboxRoutes.post('/conversations/:id/staff-ask', async (c) => {
   const body = staffAskSendSchema.parse(await c.req.json());
   return c.json(await sendStaffAsk(convSource(c, body.messageId), body));
+});
+
+/**
+ * 事務局から Chatwork で来た質問を、弁護士本人からの確認に書き直して依頼者に Gmail / LINE で送る
+ * （下ごしらえ・本人の文体で下書き・送信）
+ */
+const optId = (v: string | undefined) => (v ? Number(v) : null);
+inboxRoutes.get('/messages/:messageId/client-confirm', (c) =>
+  c.json(clientConfirmContext(Number(c.req.param('messageId')), { clientId: optId(c.req.query('clientId')), caseId: optId(c.req.query('caseId')) })),
+);
+
+inboxRoutes.post('/messages/:messageId/client-confirm/draft', async (c) => {
+  const body = z
+    .object({
+      clientId: z.number().int().nullable().optional(),
+      caseId: z.number().int().nullable().optional(),
+      channel: z.enum(CONFIRM_CHANNELS),
+      instruction: z.string().max(2000).nullable().optional(),
+    })
+    .parse(await c.req.json());
+  return c.json(await draftClientConfirm(Number(c.req.param('messageId')), body));
+});
+
+inboxRoutes.post('/messages/:messageId/client-confirm', async (c) => {
+  const body = z
+    .object({
+      clientId: z.number().int(),
+      caseId: z.number().int().nullable().optional(),
+      channel: z.enum(CONFIRM_CHANNELS),
+      text: z.string().min(1),
+      subject: z.string().max(200).nullable().optional(),
+      createWaitingTask: z.boolean().optional(),
+      followUpAt: z.string().datetime({ offset: true }).nullable().optional(),
+      notifyStaff: z.boolean().optional(),
+      staffReplyText: z.string().max(2000).nullable().optional(),
+    })
+    .parse(await c.req.json());
+  return c.json(await sendClientConfirm(Number(c.req.param('messageId')), body));
 });
 
 /**
