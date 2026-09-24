@@ -22,10 +22,11 @@ describe('直前の行動（最近の動き）', () => {
       .values({ channel: 'gmail', externalThreadId: 'a-1', clientId: client.id, caseId: kase.id, counterpartName: '山田 花子', lastMessageAt: '2027-09-01T01:00:00.000Z' })
       .returning()
       .get();
-    db()
+    const msg = db()
       .insert(schema.messages)
       .values({ conversationId: conv.id, channel: 'gmail', externalId: 'am-1', direction: 'in', senderName: '山田 花子', body: '  \n査定書をお送りしました。\n二枚目もあります', sentAt: '2027-09-01T01:00:00.000Z' })
-      .run();
+      .returning()
+      .get();
     const note = db()
       .insert(schema.caseNotes)
       .values({ caseId: kase.id, clientId: client.id, kind: 'phone', counterpart: '山田 花子', occurredAt: '2027-09-01T02:00:00.000Z', createdAt: '2027-09-01T02:05:00.000Z', gist: '査定書の受領を確認した' })
@@ -42,7 +43,8 @@ describe('直前の行動（最近の動き）', () => {
     expect(items.map((i) => [i.kind, i.to])).toEqual([
       ['task', `/cases/${kase.id}`],
       ['note', `/cases/${kase.id}#note-${note.id}`],
-      ['received', `/inbox/${conv.id}`],
+      // 会話を開いて、そのメッセージまで動かす
+      ['received', `/inbox/${conv.id}?message=${msg.id}`],
     ]);
     expect(items[1]).toMatchObject({ label: '電話の記録（山田 花子）', title: '査定書の受領を確認した', clientName: '山田 花子', caseTitle: '山田 離婚' });
     // 会話から依頼者・事件をたどれる。本文は空行を飛ばして 1 行目を出す

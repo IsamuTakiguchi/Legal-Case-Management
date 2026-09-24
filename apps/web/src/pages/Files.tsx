@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { ClientPicker, sortClients } from '../lib/ClientPicker';
 import { channelBadge, channelLabel, fmtDateTime, fmtBytes } from '../lib/format';
+import { messageLink } from '@lcm/shared';
 
 interface Att {
   id: number;
@@ -158,8 +159,8 @@ export default function Files() {
                 <td className="px-3 py-2 text-xs">
                   <span className={channelBadge(a.message.channel)}>{channelLabel(a.message.channel)}</span> {a.message.senderName ?? ''}
                   <div className="text-slate-400">{fmtDateTime(a.message.sentAt)}</div>
-                  <Link to={`/inbox/${a.message.conversationId}`} className="text-blue-700 hover:underline">
-                    会話を開く
+                  <Link to={messageLink(a.message.conversationId, a.message.id)} className="text-blue-700 hover:underline">
+                    メッセージを開く
                   </Link>
                 </td>
                 <td className="px-3 py-2">

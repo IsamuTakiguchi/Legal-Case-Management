@@ -1,6 +1,6 @@
 import { desc, eq, inArray } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { CASE_NOTE_KIND_LABEL, CHANNEL_LABEL, type CaseNoteKind, type Channel } from '@lcm/shared';
+import { CASE_NOTE_KIND_LABEL, CHANNEL_LABEL, messageLink, type CaseNoteKind, type Channel } from '@lcm/shared';
 
 /**
  * 直前の行動（最近の動き）。
@@ -88,7 +88,7 @@ export function recentActivity(limit = 12): ActivityItem[] {
       label: `${CHANNEL_LABEL[m.channel as Channel] ?? m.channel} を${m.direction === 'out' ? '送信' : '受信'}${m.direction === 'in' && m.senderName ? `（${m.senderName}）` : ''}`,
       title: headline(m.body),
       ...who(m.clientId ?? conv?.clientId ?? null, m.caseId ?? conv?.caseId ?? null),
-      to: `/inbox/${m.conversationId}`,
+      to: messageLink(m.conversationId, m.id),
     });
   }
   const taskLink = (t: typeof schema.tasks.$inferSelect) => (t.caseId ? `/cases/${t.caseId}` : t.conversationId ? `/inbox/${t.conversationId}` : '/tasks');
