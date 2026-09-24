@@ -418,6 +418,8 @@ export function getConversation(id: number) {
       raw: undefined,
       // Chatwork: なぜ受信箱に入ったか（取込範囲の確認用）
       scopeReason: conv.channel === 'chatwork' ? ((m.raw as { scopeReason?: string } | null)?.scopeReason ?? null) : null,
+      /** 事務局の質問から依頼者に確認を送った記録（Chatwork の受信のみ） */
+      clientConfirms: conv.channel === 'chatwork' ? ((m.raw as { clientConfirms?: { channel: string; conversationId: number; at: string }[] } | null)?.clientConfirms ?? []) : [],
       replyTo: replyTargetOf(m, messages),
       attachments: atts.filter((a) => a.messageId === m.id),
       clientName: m.clientId ? (msgClients.find((c) => c.id === m.clientId)?.name ?? null) : null,
