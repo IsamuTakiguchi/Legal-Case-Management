@@ -9,6 +9,8 @@ export const clients = sqliteTable('clients', {
   kana: text('kana'),
   aliases: text('aliases', { mode: 'json' }).$type<string[]>().notNull().default([]),
   emails: text('emails', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  /** 電話番号（携帯・自宅・勤務先など。入力されたままの形で持つ） */
+  phones: text('phones', { mode: 'json' }).$type<string[]>().notNull().default([]),
   lineUserId: text('line_user_id'),
   // 友だち追加をお願いした日時。lineUserId が空のままなら「LINE 連携待ち」
   lineInvitedAt: text('line_invited_at'),

@@ -1,3 +1,4 @@
+import { phoneDigits, isPhoneLike } from '@lcm/shared';
 import { and, desc, eq, or, like } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { isLineGroupThread } from '../channels/line.js';
@@ -208,6 +209,15 @@ export function linkConversationToClient(conversationId: number, clientId: numbe
 }
 
 export function searchClients(q: string) {
+  // 電話番号で探したときは、書き方（ハイフンの有無など）が違っても当たるように数字で比べる
+  if (isPhoneLike(q)) {
+    const digits = phoneDigits(q);
+    return db()
+      .select()
+      .from(schema.clients)
+      .all()
+      .filter((c) => (c.phones ?? []).some((p) => phoneDigits(p) === digits));
+  }
   const pat = `%${q}%`;
   return db()
     .select()
