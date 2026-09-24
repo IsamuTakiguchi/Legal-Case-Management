@@ -194,6 +194,8 @@ export const proposeSlotsSchema = z.object({
   travelBufferMinutes: z.number().int().min(0).max(240).optional(),
   /** 予定と予定の間に空ける時間（分）。省略時は設定値 */
   gapMinutes: z.number().int().min(0).max(120).optional(),
+  /** 場所。空なら確定したときに事務所の所在地（WEB は空のまま） */
+  location: z.string().trim().max(200).nullable().optional(),
 });
 export type ProposeSlotsInput = z.infer<typeof proposeSlotsSchema>;
 
@@ -390,24 +392,29 @@ export type FormDraftRequest = z.infer<typeof formDraftRequestSchema>;
 /** 設定画面で選べる AI モデル。料金は 100 万トークンあたりの目安（米ドル） */
 export const AI_MODELS = [
   {
-    id: 'claude-opus-5',
-    label: 'Opus 5（高性能・既定）',
-    hint: '最も賢い。書面の下書きや事件サマリーなど、質が要るものに向く',
-    priceIn: 5,
-    priceOut: 25,
+    id: 'claude-opus-5-5',
+    label: 'Opus 5.5（高性能・既定）',
+    hint: '最新で最も賢い。書面の下書きや事件サマリーなど、質が要るものに向く',
+    priceIn: 4,
+    priceOut: 20,
   },
   {
     id: 'claude-sonnet-5',
     label: 'Sonnet 5（速い・安い）',
-    hint: 'Opus の約 2.5 分の 1 の料金。判定・仕分け・短い抽出なら十分',
+    hint: 'Opus の半分の料金。判定・仕分け・短い抽出なら十分',
     priceIn: 2,
     priceOut: 10,
   },
 ] as const;
 export type AiModelId = (typeof AI_MODELS)[number]['id'];
 export const AI_MODEL_IDS = AI_MODELS.map((m) => m.id) as readonly string[];
+/** 以前の版で選べたモデル → いまの後継モデル（保存済みの設定や環境変数を読み替える） */
+export const AI_MODEL_ALIASES: Readonly<Record<string, AiModelId>> = {
+  'claude-opus-5': 'claude-opus-5-5',
+};
 export function aiModelLabel(id: string): string {
-  return AI_MODELS.find((m) => m.id === id)?.label ?? id;
+  const current = AI_MODEL_ALIASES[id] ?? id;
+  return AI_MODELS.find((m) => m.id === current)?.label ?? id;
 }
 
 /** 事務局への確認（Chatwork）。受信箱の会話からも、事件の記録からも使う */

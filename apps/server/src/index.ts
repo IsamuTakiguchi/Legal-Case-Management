@@ -23,6 +23,7 @@ import { settingsRoutes } from './routes/settings.js';
 import { pushRoutes } from './routes/push.js';
 import { setupRoutes } from './routes/setup.js';
 import { applyCredentialOverrides } from './services/credentials.js';
+import { upgradeModelSettings } from './services/settings.js';
 import { startJobs } from './jobs/index.js';
 import { ZodError } from 'zod';
 
@@ -115,6 +116,8 @@ async function main() {
   ensureDataDirSafe();
   openDatabase();
   applyCredentialOverrides();
+  const upgraded = upgradeModelSettings();
+  if (upgraded.length) logger.info({ upgraded }, 'AI モデルの設定を後継モデルに切り替えました');
   ensurePasswordHash();
   const app = createApp();
   const server = serve({ fetch: app.fetch, port: e.PORT, hostname: '0.0.0.0' }, (info) => {

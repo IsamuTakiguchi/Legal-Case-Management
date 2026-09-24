@@ -40,9 +40,9 @@ const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean; 
   {
     key: 'ai_model',
     label: '使う AI モデル',
-    hint: '下書き・要約・判定に使うモデルです。Sonnet 5 は Opus 5 の 2.5 分の 1 ほどの料金で、速く動きます。料金の実績は下の「API 利用料」で確認できます',
+    hint: '下書き・要約・判定に使うモデルです。Sonnet 5 は Opus 5.5 の半分の料金で、速く動きます。料金の実績は下の「API 利用料」で確認できます',
     options: [
-      { value: '', label: '既定（Opus 5）' },
+      { value: '', label: '既定（Opus 5.5）' },
       ...AI_MODELS.map((m) => ({ value: m.id, label: `${m.label}　入力 $${m.priceIn} / 出力 $${m.priceOut}（100万トークンあたり）` })),
     ],
   },
@@ -97,7 +97,7 @@ const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean; 
   {
     key: 'hold_proposal_template',
     label: '候補日の打診文',
-    hint: '仮押さえた候補日を依頼者に送るときの文です。{kind} は「打合せ」「面談」など、{client} は依頼者名、{slots} は候補日の行に置き換わります。空にすると既定の文に戻ります',
+    hint: '仮押さえた候補日を依頼者に送るときの文です。{kind} は「打合せ」「面談」など、{client} は依頼者名、{slots} は候補日の行、{location} は仮押さえの場所に置き換わります（{location} を書かなければ、場所を決めたときだけ最後に「場所: …」を足します）。空にすると既定の文に戻ります',
     multiline: true,
   },
   {

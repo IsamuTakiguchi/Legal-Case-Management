@@ -5,7 +5,7 @@ import { EVENT_KINDS, EVENT_KIND_LABEL, type EventKind } from '@lcm/shared';
 import { api } from '../lib/api';
 import { useDraftGroup, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
-import { HoldForm, type RescheduleTarget } from '../lib/HoldForm';
+import { HoldForm, HoldLocationEditor, type RescheduleTarget } from '../lib/HoldForm';
 import { toLocalInput, fromLocalInput } from '../lib/format';
 
 interface Ev {
@@ -317,6 +317,16 @@ export default function Calendar() {
                           >
                             全候補を取消
                           </button>
+                          <HoldLocationEditor
+                            sessionId={e.sessionId}
+                            location={e.location}
+                            compact
+                            onSaved={(text) => {
+                              invalidate();
+                              setMsg({ kind: 'ok', text });
+                            }}
+                            onError={(text) => setMsg({ kind: 'err', text })}
+                          />
                         </>
                       )}
                       {!e.sessionId &&

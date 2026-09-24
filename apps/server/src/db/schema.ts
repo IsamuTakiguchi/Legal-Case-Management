@@ -296,6 +296,8 @@ export const schedulingSessions = sqliteTable('scheduling_sessions', {
   zoom: text('zoom', { mode: 'json' }).$type<{ id: string; joinUrl: string; password: string } | null>(),
   /** WEB 会議で行う予定か。仮押さえを確定したときに Zoom / Meet を発行する */
   web: integer('web', { mode: 'boolean' }).notNull().default(false),
+  /** 場所（仮押さえの時点で決めたもの）。確定した予定にも引き継ぐ */
+  location: text('location'),
   proposedAt: text('proposed_at'),
   createdAt: text('created_at').notNull().default(now()),
   updatedAt: text('updated_at').notNull().default(now()),

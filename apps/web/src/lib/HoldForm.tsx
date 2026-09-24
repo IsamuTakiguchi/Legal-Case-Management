@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { EVENT_KINDS, EVENT_KIND_LABEL, parseHoldText, type EventKind } from '@lcm/shared';
 import { api } from './api';
 import { useDraftGroup, DraftHint } from './draft';
@@ -303,6 +303,65 @@ export function HoldForm({
         </button>
         <span className="text-xs text-slate-500">{reschedule ? `件名: ${reschedule.title} 仮（元の予定のまま）` : `件名: ${preview}`}</span>
       </div>
+    </form>
+  );
+}
+
+/**
+ * 仮押さえた候補の場所を、あとからまとめて入れる・直す。
+ * 候補すべての予定の場所が書き換わり、確定した予定にもそのまま残る
+ */
+export function HoldLocationEditor({ sessionId, location, web, compact, onSaved, onError }: { sessionId: number; location: string | null; web?: boolean; compact?: boolean; onSaved: (msg: string) => void; onError: (msg: string) => void }) {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState(location ?? '');
+  const save = useMutation({
+    mutationFn: () => api.post<{ location: string | null; updated: number }>(`/calendar/holds/${sessionId}/location`, { location: value.trim() || null }),
+    onSuccess: (r) => {
+      setOpen(false);
+      // 候補日の打診文にも場所が入るので、開いていれば作り直す
+      qc.invalidateQueries({ queryKey: ['hold-proposal', sessionId] });
+      onSaved(r.location ? `候補 ${r.updated} 件の場所を「${r.location}」にしました` : `候補 ${r.updated} 件の場所を外しました`);
+    },
+    onError: (e) => onError((e as Error).message),
+  });
+  if (!open) {
+    return (
+      <span className="inline-flex flex-wrap items-center gap-1 text-xs text-slate-600">
+        {!compact && <span className="text-slate-500">場所:</span>}
+        {!compact && <span className={location ? '' : 'text-slate-400'}>{location || '未定'}</span>}
+        <button
+          type="button"
+          className={compact ? 'btn btn-sm' : 'text-blue-700 hover:underline'}
+          onClick={() => {
+            setValue(location ?? '');
+            setOpen(true);
+          }}
+          title="候補すべての場所をまとめて変えます"
+        >
+          {location ? '場所を変更' : '場所を入れる'}
+        </button>
+      </span>
+    );
+  }
+  return (
+    <form
+      className="flex w-full flex-wrap items-center gap-1.5"
+      onSubmit={(e) => {
+        e.preventDefault();
+        save.mutate();
+      }}
+    >
+      <label className="text-xs text-slate-500" htmlFor={`hold-location-${sessionId}`}>
+        場所
+      </label>
+      <input id={`hold-location-${sessionId}`} className="input min-w-0 flex-1 py-0.5 text-sm" value={value} onChange={(e) => setValue(e.target.value)} placeholder={web ? '空欄なら会議の種類（Zoom など）' : '例: 事務所 / 奈良地裁 / 依頼者の会社'} maxLength={200} autoFocus />
+      <button type="submit" className="btn btn-sm btn-primary" disabled={save.isPending}>
+        {save.isPending ? '保存中…' : '保存'}
+      </button>
+      <button type="button" className="btn btn-sm" onClick={() => setOpen(false)}>
+        やめる
+      </button>
     </form>
   );
 }

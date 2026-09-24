@@ -179,7 +179,7 @@ export async function proposeSlots(input: ProposeSlotsInput): Promise<{ session:
   if (slots.length === 0) throw new Error('指定期間に空き枠がありません（相手の希望や移動時間の条件を緩めると見つかることがあります）');
   const session = db()
     .insert(schema.schedulingSessions)
-    .values({ clientId: conv.clientId ?? null, conversationId: conv.id, kind: input.kind, state: 'proposing', candidates: slots, proposedAt: new Date().toISOString() })
+    .values({ clientId: conv.clientId ?? null, conversationId: conv.id, kind: input.kind, state: 'proposing', candidates: slots, location: input.location || null, proposedAt: new Date().toISOString() })
     .returning()
     .get();
   const candidates: { startAt: string; endAt: string; eventId?: string }[] = [];
@@ -189,13 +189,14 @@ export async function proposeSlots(input: ProposeSlotsInput): Promise<{ session:
       startAt: new Date(s.startAt),
       endAt: new Date(s.endAt),
       tentative: true,
+      location: input.location || null,
       description: `日程調整中（アプリで管理: セッション ${session.id}）`,
       tag: { clientId: conv.clientId ?? null, kind: 'hold', sessionId: session.id },
     });
     candidates.push({ ...s, eventId: ev.id });
   }
   db().update(schema.schedulingSessions).set({ candidates, updatedAt: new Date().toISOString() }).where(eq(schema.schedulingSessions.id, session.id)).run();
-  const text = slots.map((s) => `・${formatJaDateTime(new Date(s.startAt))}〜`).join('\n');
+  const text = [slots.map((s) => `・${formatJaDateTime(new Date(s.startAt))}〜`).join('\n'), input.location ? `場所: ${input.location}` : ''].filter(Boolean).join('\n');
   return { session: { ...session, candidates }, slots, text };
 }
 
@@ -223,7 +224,8 @@ export async function confirmSlot(input: ConfirmSlotInput): Promise<{ session: S
     title: confirmedTitle(name, session.kind),
     startAt,
     endAt,
-    location: isWeb ? null : getSetting('office_location') || null,
+    // 仮押さえのときに決めた場所があればそれを使う。無ければ事務所（WEB は空）
+    location: session.location || (isWeb ? null : getSetting('office_location') || null),
     description: zoom ? `Zoom: ${zoom.joinUrl}\nパスコード: ${zoom.password}` : null,
     meet: provider === 'meet',
     tag: { clientId: session.clientId, kind: session.kind === '期日' ? 'hearing' : session.kind === '打合せ' ? 'meeting' : 'consult', sessionId: session.id },

@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useSpotlight } from '../lib/spotlight';
 import { useDraftRecord, useDraftGroup, useDraft, DraftHint } from '../lib/draft';
 import { RoomPicker } from '../lib/RoomPicker';
-import { HoldForm, fmtEventRange, type RescheduleTarget } from '../lib/HoldForm';
+import { HoldForm, HoldLocationEditor, fmtEventRange, type RescheduleTarget } from '../lib/HoldForm';
 import { LongText } from '../lib/LongText';
 import { TaskDeadlineSelect } from '../lib/Deadline';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
@@ -327,6 +327,9 @@ interface HoldSet {
   clientName: string | null;
   conversationId: number | null;
   linkedToCase: boolean;
+  /** 場所（決めていなければ null） */
+  location: string | null;
+  web: boolean;
   candidates: HoldCandidate[];
 }
 
@@ -369,11 +372,15 @@ function HoldProposalPanel({ sessionId, onClose, onSent }: { sessionId: number; 
   const [waiting, setWaiting] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const d = ctx.data;
+  // 最後に入れたテンプレートどおりの文（場所を変えたときなど、手を入れていなければ入れ替える）
+  const lastTemplate = useRef('');
   useEffect(() => {
     if (!d) return;
-    setConversationId(d.defaultConversationId ? String(d.defaultConversationId) : '');
+    setConversationId((prev) => prev || (d.defaultConversationId ? String(d.defaultConversationId) : ''));
     // 画面で直した本文は残す（読み込み直しで消さない）
-    setText((prev) => prev || d.text);
+    const before = lastTemplate.current;
+    lastTemplate.current = d.text;
+    setText((prev) => (!prev || prev === before ? d.text : prev));
   }, [d]);
   // 書きかけの打診文はこの端末に自動保存する
   const draft = useDraft(`hold:${sessionId}:proposal`, text, setText, '');
@@ -585,6 +592,18 @@ function CaseHolds({
                 全候補を取消
               </button>
             </div>
+            <div className="mb-1">
+              <HoldLocationEditor
+                sessionId={s.sessionId}
+                location={s.location}
+                web={s.web}
+                onSaved={(text) => {
+                  refresh();
+                  setMsg({ kind: 'ok', text });
+                }}
+                onError={(text) => setMsg({ kind: 'err', text })}
+              />
+            </div>
             {s.rescheduleOf && (
               <div className="mb-1 rounded bg-blue-50 px-2 py-1 text-xs text-blue-900">
                 いまの予定は <b>{fmtEventRange(s.rescheduleOf.startAt, s.rescheduleOf.endAt)}</b>。候補を確定すると、この予定は消えて新しい日時に置き換わります。
@@ -613,7 +632,7 @@ function CaseHolds({
               {s.candidates.map((v) => (
                 <li key={v.googleEventId} className="flex flex-wrap items-center gap-2 py-1">
                   <span className="text-slate-700">{fmtSlot(v.startAt, v.endAt)}</span>
-                  {v.location && <span className="text-xs text-slate-500">{v.location}</span>}
+                  {v.location && v.location !== s.location && <span className="text-xs text-slate-500">{v.location}</span>}
                   {v.eventId ? (
                     <button
                       className="btn btn-sm btn-primary ml-auto"
@@ -1534,6 +1553,7 @@ function NoteSchedulePanel({ n, onDone, onClose }: { n: Note; onDone: () => void
   const [title, setTitle] = useState('');
   const [kind, setKind] = useState<EventKind>('meeting');
   const [duration, setDuration] = useState('60');
+  const [location, setLocation] = useState('');
   // 終了は「開始 + 所要」で決めるので、候補は開始だけ持つ（所要を変えるとすべての候補に効く）
   const [slots, setSlots] = useState<{ start: string; use: boolean }[]>([]);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err' | 'info'; text: string } | null>(null);
@@ -1570,6 +1590,7 @@ function NoteSchedulePanel({ n, onDone, onClose }: { n: Note; onDone: () => void
         kind,
         clientId: p?.clientId ?? null,
         caseId: p?.caseId ?? null,
+        location: location.trim() || null,
         description: `記録から日程調整${p?.note ? `: ${p.note}` : ''}`,
         slots: slots.filter((s) => s.use).map((s) => ({ startAt: fromLocalInput(s.start), endAt: endOf(s.start) })),
       }),
@@ -1644,6 +1665,10 @@ function NoteSchedulePanel({ n, onDone, onClose }: { n: Note; onDone: () => void
               この長さで探し直す
             </button>
           </div>
+          <label className="block">
+            <span className="label">場所</span>
+            <input className="input" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="例: 事務所 / 奈良地裁 / 依頼者の会社" maxLength={200} />
+          </label>
 
           <div>
             <div className="label">候補日時（使うものだけチェック）</div>

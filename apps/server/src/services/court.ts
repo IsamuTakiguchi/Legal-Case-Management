@@ -417,7 +417,7 @@ export async function createHoldSet(input: HoldSetInput) {
   for (const sl of sorted) assertRange(sl.startAt, sl.endAt);
   const session = db()
     .insert(schema.schedulingSessions)
-    .values({ clientId: client?.id ?? null, conversationId: null, kind: input.kind === 'hearing' ? '期日' : input.kind === 'consult' ? '面談' : '打合せ', state: 'proposing', candidates: [], rescheduleEventId: input.rescheduleEventId ?? null, web: input.web ?? false, proposedAt: new Date().toISOString() })
+    .values({ clientId: client?.id ?? null, conversationId: null, kind: input.kind === 'hearing' ? '期日' : input.kind === 'consult' ? '面談' : '打合せ', state: 'proposing', candidates: [], rescheduleEventId: input.rescheduleEventId ?? null, web: input.web ?? false, location: input.location?.trim() || null, proposedAt: new Date().toISOString() })
     .returning()
     .get();
   const candidates: { startAt: string; endAt: string; eventId?: string }[] = [];
@@ -455,6 +455,34 @@ export async function createHoldSet(input: HoldSetInput) {
   holdMeta.set(session.id, { kind: input.kind, confirmedTitle: titles.confirmed });
   logger.info({ sessionId: session.id, slots: events.length }, '複数候補の仮押さえを登録しました');
   return { sessionId: session.id, events };
+}
+
+/**
+ * 仮押さえた候補の場所を、まとめて付け直す（候補すべての予定を書き換える）。
+ * 空にすると場所を外す。WEB 会議の仮押さえは会議の種類を場所に残す
+ */
+export async function setHoldSetLocation(sessionId: number, location: string | null) {
+  const session = db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, sessionId)).get();
+  if (!session) throw new Error('日程調整が見つかりません');
+  if (session.state !== 'proposing') throw new Error('この日程調整はすでに確定または取消されています');
+  const value = location?.trim() || null;
+  const onEvent = session.web ? webLocation(webMeetingProvider(), value) : value;
+  let updated = 0;
+  for (const c of session.candidates) {
+    if (!c.eventId) continue;
+    const row = db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.googleEventId, c.eventId)).get();
+    if (row) {
+      await editCalendarEvent(row.id, { location: onEvent });
+      updated++;
+    } else if (!isLocalEventId(c.eventId) && isGoogleConnected()) {
+      // まだ同期されていない候補（会話から始めた日程調整）は Google 側だけ直す
+      await cal.updateEvent(c.eventId, { location: onEvent ?? '' });
+      updated++;
+    }
+  }
+  db().update(schema.schedulingSessions).set({ location: value, updatedAt: new Date().toISOString() }).where(eq(schema.schedulingSessions.id, sessionId)).run();
+  logger.info({ sessionId, updated }, '仮押さえの場所を変更しました');
+  return { sessionId, location: value, updated };
 }
 
 /** セッション作成時の確定後情報（再起動で消えても件名から復元できる） */
@@ -578,6 +606,10 @@ export interface CaseHoldSet {
   conversationId: number | null;
   /** 候補の予定がこの事件に紐付いているか（依頼者だけ一致なら false） */
   linkedToCase: boolean;
+  /** 場所（仮押さえで決めたもの。無ければ候補に共通する場所。決めていなければ null） */
+  location: string | null;
+  /** WEB 会議で行う予定か */
+  web: boolean;
   candidates: CaseHoldCandidate[];
 }
 
@@ -601,6 +633,7 @@ export function listCaseHolds(caseId: number): CaseHoldSet[] {
     // この事件のもの、または「依頼者が同じでまだ事件が決まっていないもの」だけを出す
     if (!linkedToCase && !(s.clientId === kase.clientId && caseIds.size === 1 && caseIds.has(null))) continue;
     const client = s.clientId ? (db().select().from(schema.clients).where(eq(schema.clients.id, s.clientId)).get() ?? null) : null;
+    const places = new Set(rows.map((r) => r.ev?.location?.trim() || ''));
     out.push({
       sessionId: s.id,
       kind: s.kind,
@@ -610,6 +643,8 @@ export function listCaseHolds(caseId: number): CaseHoldSet[] {
       clientName: client?.name ?? null,
       conversationId: s.conversationId ?? null,
       linkedToCase,
+      location: s.location?.trim() || (places.size === 1 ? [...places][0]! : '') || null,
+      web: s.web,
       candidates: rows
         .map(({ c, ev }) => ({
           eventId: ev?.id ?? null,

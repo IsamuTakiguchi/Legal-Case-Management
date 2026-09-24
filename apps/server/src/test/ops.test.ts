@@ -1465,8 +1465,11 @@ describe('API 利用料', () => {
     expect(costUsd('claude-opus-5', { input: 0, output: 100_000, cacheWrite: 0, cacheRead: 0 }).usd).toBeCloseTo(2.5, 6);
     expect(costUsd('claude-sonnet-5', { input: 1_000_000, output: 1_000_000, cacheWrite: 0, cacheRead: 0 }).usd).toBeCloseTo(12, 6);
     expect(costUsd('claude-fable-5-1', { input: 0, output: 0, cacheWrite: 0, cacheRead: 1_000_000 }).usd).toBeCloseTo(0.25, 6);
-    // 料金表に無いモデルは Opus 5 の単価で概算し、その旨を返す
-    expect(costUsd('claude-unknown-9', { input: 1_000_000, output: 0, cacheWrite: 0, cacheRead: 0 })).toEqual({ usd: 5, estimated: true });
+    // Opus 5.5: 入力 4・出力 20・キャッシュ書込 5・読出 0.2（名前の頭が同じ Opus 5 の単価と取り違えない）
+    expect(costUsd('claude-opus-5-5', { input: 1_000_000, output: 1_000_000, cacheWrite: 0, cacheRead: 0 })).toEqual({ usd: 24, estimated: false });
+    expect(costUsd('claude-opus-5-5', { input: 0, output: 0, cacheWrite: 1_000_000, cacheRead: 1_000_000 }).usd).toBeCloseTo(5.2, 6);
+    // 料金表に無いモデルは Opus 5.5 の単価で概算し、その旨を返す
+    expect(costUsd('claude-unknown-9', { input: 1_000_000, output: 0, cacheWrite: 0, cacheRead: 0 })).toEqual({ usd: 4, estimated: true });
     const month = currentMonthJst();
     const before = usageSummary(month).total.usd;
     recordUsage({ model: 'claude-opus-5', purpose: '返信の下書き', tokens: { input: 2000, output: 500, cacheWrite: 1000, cacheRead: 3000 } });
@@ -1793,8 +1796,8 @@ describe('AI モデルの選択', () => {
   it('未設定なら環境変数の既定、設定すればそのモデル、軽い処理は別に選べる', () => {
     setSetting('ai_model', '');
     setSetting('ai_model_light', '');
-    expect(aiModel()).toBe('claude-opus-5');
-    expect(aiModel('light')).toBe('claude-opus-5');
+    expect(aiModel()).toBe('claude-opus-5-5');
+    expect(aiModel('light')).toBe('claude-opus-5-5');
 
     // 主モデルだけ変えると軽い処理もそれに従う
     setSetting('ai_model', 'claude-sonnet-5');
@@ -1802,16 +1805,38 @@ describe('AI モデルの選択', () => {
     expect(aiModel('light')).toBe('claude-sonnet-5');
 
     // 軽い処理だけ安いモデルに回す
-    setSetting('ai_model', 'claude-opus-5');
+    setSetting('ai_model', 'claude-opus-5-5');
     setSetting('ai_model_light', 'claude-sonnet-5');
-    expect(aiModel()).toBe('claude-opus-5');
+    expect(aiModel()).toBe('claude-opus-5-5');
     expect(aiModel('light')).toBe('claude-sonnet-5');
 
     // 知らないモデル名は既定に戻す（設定ミスで止まらないように）
     setSetting('ai_model', 'gpt-9');
     setSetting('ai_model_light', 'gpt-9');
-    expect(aiModel()).toBe('claude-opus-5');
-    expect(aiModel('light')).toBe('claude-opus-5');
+    expect(aiModel()).toBe('claude-opus-5-5');
+    expect(aiModel('light')).toBe('claude-opus-5-5');
+
+    setSetting('ai_model', '');
+    setSetting('ai_model_light', '');
+  });
+
+  it('前の版の Opus 5 を選んでいたら、Opus 5.5 に読み替える', async () => {
+    const { upgradeModelSettings, getSetting } = await import('../services/settings.js');
+    const { upgradeModelId } = await import('../integrations/anthropic.js');
+    expect(upgradeModelId('claude-opus-5')).toBe('claude-opus-5-5');
+    expect(upgradeModelId('claude-sonnet-5')).toBe('claude-sonnet-5');
+
+    // 保存したままの設定でも、呼ぶモデルは新しいほう
+    setSetting('ai_model', 'claude-opus-5');
+    setSetting('ai_model_light', 'claude-sonnet-5');
+    expect(aiModel()).toBe('claude-opus-5-5');
+    expect(aiModel('light')).toBe('claude-sonnet-5');
+
+    // 起動時に設定そのものも書き換える（画面の選択肢と合うように）。2 回目は何もしない
+    expect(upgradeModelSettings()).toEqual(['ai_model: claude-opus-5 → claude-opus-5-5']);
+    expect(getSetting('ai_model')).toBe('claude-opus-5-5');
+    expect(getSetting('ai_model_light')).toBe('claude-sonnet-5');
+    expect(upgradeModelSettings()).toEqual([]);
 
     setSetting('ai_model', '');
     setSetting('ai_model_light', '');

@@ -30,6 +30,8 @@ export interface HoldProposalContext {
   clientId: number | null;
   clientName: string | null;
   candidates: { startAt: string; endAt: string }[];
+  /** 場所（決めていなければ null） */
+  location: string | null;
   /** 送り先に選べる、依頼者との会話 */
   conversations: HoldProposalConversation[];
   defaultConversationId: number | null;
@@ -54,16 +56,22 @@ export function formatSlotLine(startAt: string, endAt: string, format: string): 
     .replace(/\{end\}/g, hm(e));
 }
 
-/** 打診の本文を組み立てる */
-export function buildProposalText(input: { kind: string; clientName: string | null; candidates: { startAt: string; endAt: string }[] }): string {
+/**
+ * 打診の本文を組み立てる。
+ * 場所が決まっていれば、テンプレートの {location} に入れる（{location} が無いテンプレートなら最後に「場所: …」を足す）
+ */
+export function buildProposalText(input: { kind: string; clientName: string | null; candidates: { startAt: string; endAt: string }[]; location?: string | null }): string {
   const lineFormat = getSetting('hold_proposal_slot_format') || '{M}/{D} {start}-';
   const template = getSetting('hold_proposal_template') || '{kind}の候補日ですが、\n{slots}\nでいかがでしょうか？';
   const slots = input.candidates.map((c) => formatSlotLine(c.startAt, c.endAt, lineFormat)).join('\n');
-  return template
+  const location = input.location?.trim() ?? '';
+  const text = template
     .replace(/\{kind\}/g, input.kind || '打合せ')
     .replace(/\{client\}/g, input.clientName ?? '')
     .replace(/\{slots\}/g, slots)
+    .replace(/\{location\}/g, location)
     .trim();
+  return location && !template.includes('{location}') ? `${text}\n場所: ${location}` : text;
 }
 
 export function holdProposalContext(sessionId: number): HoldProposalContext {
@@ -78,10 +86,13 @@ export function holdProposalContext(sessionId: number): HoldProposalContext {
     .filter((c) => c.eventId)
     .map((c) => {
       const ev = d.select().from(schema.calendarEvents).where(eq(schema.calendarEvents.googleEventId, c.eventId!)).get();
-      return ev ? { startAt: ev.startAt, endAt: ev.endAt } : null;
+      return ev ? { startAt: ev.startAt, endAt: ev.endAt, location: ev.location } : null;
     })
-    .filter((c): c is { startAt: string; endAt: string } => !!c)
+    .filter((c): c is { startAt: string; endAt: string; location: string | null } => !!c)
     .sort((a, b) => a.startAt.localeCompare(b.startAt));
+  // 場所は、仮押さえで決めたもの（無ければ候補の予定に入っている場所がすべて同じならそれ）
+  const places = new Set(candidates.map((c) => c.location?.trim() || ''));
+  const location = s.location?.trim() || (places.size === 1 ? [...places][0]! : '') || null;
 
   const conversations: HoldProposalConversation[] = [];
   if (client) {
@@ -115,10 +126,11 @@ export function holdProposalContext(sessionId: number): HoldProposalContext {
     kind: s.kind,
     clientId: client?.id ?? null,
     clientName: client?.name ?? null,
-    candidates,
+    candidates: candidates.map(({ startAt, endAt }) => ({ startAt, endAt })),
+    location,
     conversations,
     defaultConversationId: fromSession ?? conversations[0]?.id ?? null,
-    text: buildProposalText({ kind: s.kind, clientName: client?.name ?? null, candidates }),
+    text: buildProposalText({ kind: s.kind, clientName: client?.name ?? null, candidates, location }),
     defaultFollowUpAt: addBusinessDays(new Date(), getSettingInt('waiting_followup_business_days', 3)).toISOString(),
     blocked,
   };
