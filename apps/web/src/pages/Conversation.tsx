@@ -13,6 +13,7 @@ import { useSpotlight } from '../lib/spotlight';
 import { quickSendTimes } from '../lib/sendTimes';
 import { DeadlineEditor, TaskDeadlineSelect, WaitDeadlineSelect } from '../lib/Deadline';
 import { SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply, messageLink, type EventKind } from '@lcm/shared';
+import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 
 /** Chatwork の取込理由の表示名（設定画面の診断と同じ） */
 const SCOPE_REASON_LABEL: Record<string, string> = {
@@ -1150,8 +1151,10 @@ function SessionCard({ s, onText, onDone, spotlight }: { s: Session; onText: (t:
 
 function TaskMini({ conversationId, clientId }: { conversationId: number; clientId: number | null }) {
   const qc = useQueryClient();
-  const tasks = useQuery({ queryKey: ['tasks', 'conv', conversationId], queryFn: () => api.get<{ id: number; title: string; status: string; followUpAt: string | null; dueAt: string | null }[]>(`/tasks?conversationId=${conversationId}&status=active`) });
+  const tasks = useQuery({ queryKey: ['tasks', 'conv', conversationId], queryFn: () => api.get<{ id: number; title: string; note: string | null; status: string; followUpAt: string | null; dueAt: string | null; chatworkTaskId: number | null }[]>(`/tasks?conversationId=${conversationId}&status=active`) });
   const [title, setTitle] = useState('');
+  // 中身（タスク名・メモ）を直しているタスク
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [status, setStatus] = useState('waiting_client');
   const [newDeadline, setNewDeadline] = useState<string | null>(null);
   const waiting = status !== 'open';
@@ -1170,13 +1173,30 @@ function TaskMini({ conversationId, clientId }: { conversationId: number; client
     <div className="card">
       <h3 className="mb-2 text-sm font-semibold">この会話のタスク</h3>
       <ul className="mb-2 space-y-1 text-xs">
-        {tasks.data?.map((t) => (
+        {tasks.data?.map((t) =>
+          editingId === t.id ? (
+            <li key={t.id}>
+              <TaskEditForm
+                compact
+                task={t}
+                onCancel={() => setEditingId(null)}
+                onDone={() => {
+                  setEditingId(null);
+                  qc.invalidateQueries({ queryKey: ['tasks'] });
+                }}
+              />
+            </li>
+          ) : (
           <li key={t.id} className="space-y-0.5">
             <div className="flex items-center gap-2">
               <button className="text-slate-400 hover:text-green-600" title="完了" onClick={() => done.mutate(t.id)}>
                 ☐
               </button>
-              <span className="flex-1">{t.title}</span>
+              <span className="min-w-0 flex-1">
+                {t.title}
+                {t.note && <span className="block truncate text-[11px] text-slate-500" title={t.note}>{t.note.split('\n')[0]}</span>}
+              </span>
+              <TaskEditButton onClick={() => setEditingId(t.id)} />
               <span className="badge badge-gray">{t.status === 'open' ? '対応中' : t.status === 'waiting_client' ? '依頼者待ち' : '相手方待ち'}</span>
             </div>
             <div className="pl-5">
@@ -1187,7 +1207,8 @@ function TaskMini({ conversationId, clientId }: { conversationId: number; client
               )}
             </div>
           </li>
-        ))}
+          ),
+        )}
         {tasks.data?.length === 0 && <li className="text-slate-500">なし</li>}
       </ul>
       <div className="flex flex-wrap items-center gap-1">

@@ -12,6 +12,7 @@ import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { fmtDateTime, fmtDate, fmtYen, fmtBytes, toLocalInput, fromLocalInput, channelLabel } from '../lib/format';
 import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, messageLink, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
+import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 
 interface Note {
   id: number;
@@ -46,7 +47,7 @@ interface CaseData {
   chatworkRoomId: number | null;
   staff: { id: number; name: string } | null;
   notes: Note[];
-  tasks: { id: number; title: string; status: string; dueAt: string | null; followUpAt: string | null }[];
+  tasks: { id: number; title: string; note: string | null; status: string; dueAt: string | null; followUpAt: string | null; chatworkTaskId: number | null }[];
   events: { id: number; title: string; startAt: string; endAt: string; kind: string; location: string | null; status: string | null }[];
 }
 /** 次のアクションの期限。YYYY-MM-DD でも ISO でも「9/20(日)」の形にする */
@@ -68,6 +69,8 @@ export default function CaseDetail() {
   const { id } = useParams();
   const qc = useQueryClient();
   const [tab, setTab] = useState<'overview' | 'timeline' | 'creditors'>('overview');
+  // 中身（タスク名・メモ）を直している未了タスク
+  const [editingTask, setEditingTask] = useState<number | null>(null);
   const d = useQuery({ queryKey: ['case', id], queryFn: () => api.get<CaseData>(`/cases/${id}`) });
   // ダッシュボードの「最近の動き」から #note-ID で開かれたら、その記録まで運ぶ
   const loaded = !!d.data;
@@ -235,9 +238,27 @@ export default function CaseDetail() {
                   .map((t) => {
                     const limit = t.status === 'open' ? (t.dueAt ?? t.followUpAt) : (t.followUpAt ?? t.dueAt);
                     const over = limit ? new Date(limit).getTime() < Date.now() : false;
+                    if (editingTask === t.id)
+                      return (
+                        <li key={t.id}>
+                          <TaskEditForm
+                            task={t}
+                            onCancel={() => setEditingTask(null)}
+                            onDone={() => {
+                              setEditingTask(null);
+                              qc.invalidateQueries({ queryKey: ['case', id] });
+                              qc.invalidateQueries({ queryKey: ['tasks'] });
+                            }}
+                          />
+                        </li>
+                      );
                     return (
                       <li key={t.id} className="flex flex-wrap items-center gap-2">
-                        <span className="min-w-0 flex-1">{t.title}</span>
+                        <span className="min-w-0 flex-1">
+                          {t.title}
+                          {t.note && <span className="block truncate text-xs text-slate-500" title={t.note}>{t.note.split('\n')[0]}</span>}
+                        </span>
+                        <TaskEditButton onClick={() => setEditingTask(t.id)} />
                         <span className="badge badge-gray">{TASK_STATUS_LABEL[t.status as TaskStatus]}</span>
                         {limit && (
                           <span className={`whitespace-nowrap text-xs ${over ? 'font-semibold text-orange-600' : 'text-slate-500'}`}>

@@ -150,7 +150,7 @@ export const draftRequestSchema = z.object({
 export type DraftRequest = z.infer<typeof draftRequestSchema>;
 
 export const taskInputSchema = z.object({
-  title: z.string().min(1),
+  title: z.string().trim().min(1),
   clientId: z.number().int().optional().nullable(),
   caseId: z.number().int().optional().nullable(),
   conversationId: z.number().int().optional().nullable(),

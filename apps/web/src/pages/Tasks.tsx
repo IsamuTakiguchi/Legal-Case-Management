@@ -10,6 +10,7 @@ import { DeadlineEditor, TaskDeadlineSelect } from '../lib/Deadline';
 import { TASK_STATUSES, TASK_STATUS_LABEL, type TaskStatus, taskDeadline } from '@lcm/shared';
 import { useSort, readingKey, type SortOption } from '../lib/sort';
 import { Icon } from '../lib/icons';
+import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 
 interface Task {
   id: number;
@@ -124,6 +125,8 @@ export default function Tasks() {
     },
   });
   const update = useMutation({ mutationFn: (v: { id: number; patch: Record<string, unknown> }) => api.put(`/tasks/${v.id}`, v.patch), onSuccess: refresh });
+  // 中身（タスク名・メモ）を直しているタスク
+  const [editingId, setEditingId] = useState<number | null>(null);
   const nudge = useMutation({ mutationFn: (id: number) => api.post(`/tasks/${id}/nudge`), onSuccess: refresh });
   const importCw = useMutation({ mutationFn: () => api.post<{ imported: number; completed: number }>('/tasks/import-chatwork'), onSuccess: refresh });
   const now = Date.now();
@@ -279,15 +282,29 @@ export default function Tasks() {
                     </select>
                   </td>
                   <td className="min-w-[14rem] px-3 py-2">
-                    {t.conversationId ? (
-                      <Link to={`/inbox/${t.conversationId}`} className="font-medium hover:underline">
-                        {t.title}
-                      </Link>
+                    {editingId === t.id ? (
+                      <TaskEditForm
+                        task={t}
+                        onCancel={() => setEditingId(null)}
+                        onDone={() => {
+                          setEditingId(null);
+                          refresh();
+                        }}
+                      />
                     ) : (
-                      <span className="font-medium">{t.title}</span>
+                      <>
+                        {t.conversationId ? (
+                          <Link to={`/inbox/${t.conversationId}`} className="font-medium hover:underline">
+                            {t.title}
+                          </Link>
+                        ) : (
+                          <span className="font-medium">{t.title}</span>
+                        )}
+                        {t.chatworkTaskId && <span className="badge badge-chatwork ml-1">CW</span>}
+                        <TaskEditButton className="ml-2" onClick={() => setEditingId(t.id)} />
+                        {t.note && <TaskNote text={t.note} />}
+                      </>
                     )}
-                    {t.chatworkTaskId && <span className="badge badge-chatwork ml-1">CW</span>}
-                    {t.note && <TaskNote text={t.note} />}
                   </td>
                   <td className="max-w-[18rem] px-3 py-2">
                     <TaskLinks task={t} onSave={(patch) => update.mutate({ id: t.id, patch })} />
