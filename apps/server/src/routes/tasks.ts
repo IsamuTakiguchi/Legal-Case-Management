@@ -12,7 +12,7 @@ taskRoutes.get('/tasks', (c) => {
   const q = c.req.query();
   return c.json(
     listTasks({
-      status: (q.status as (typeof TASK_STATUSES)[number] | 'active') || 'active',
+      status: (q.status as (typeof TASK_STATUSES)[number] | 'active' | 'waiting') || 'active',
       clientId: q.clientId ? Number(q.clientId) : undefined,
       caseId: q.caseId ? Number(q.caseId) : undefined,
       conversationId: q.conversationId ? Number(q.conversationId) : undefined,

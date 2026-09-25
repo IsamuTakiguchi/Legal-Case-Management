@@ -150,9 +150,11 @@ export function nudgeTask(id: number): TaskRow {
   return db().select().from(schema.tasks).where(eq(schema.tasks.id, id)).get()!;
 }
 
-export function listTasks(filter: { status?: TaskStatus | 'active'; clientId?: number; caseId?: number; conversationId?: number }) {
+export function listTasks(filter: { status?: TaskStatus | 'active' | 'waiting'; clientId?: number; caseId?: number; conversationId?: number }) {
   const conds = [];
   if (filter.status === 'active') conds.push(inArray(schema.tasks.status, ['open', 'waiting_client', 'waiting_other']));
+  // 連絡待ち（依頼者の返信待ち＋相手方・裁判所待ち）
+  else if (filter.status === 'waiting') conds.push(inArray(schema.tasks.status, ['waiting_client', 'waiting_other']));
   else if (filter.status) conds.push(eq(schema.tasks.status, filter.status));
   if (filter.clientId) conds.push(eq(schema.tasks.clientId, filter.clientId));
   if (filter.caseId) conds.push(eq(schema.tasks.caseId, filter.caseId));

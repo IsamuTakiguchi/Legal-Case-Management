@@ -6,3 +6,4 @@ export * from './chatworkReactions.js';
 export * from './quotedText.js';
 export * from './phone.js';
 export * from './links.js';
+export * from './taskCounts.js';

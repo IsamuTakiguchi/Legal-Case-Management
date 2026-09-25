@@ -14,7 +14,7 @@ import { myAddresses, configuredMyAddresses } from '../jobs/gmailPoll.js';
 import { refixOwnMessages, inboxCounts } from '../services/inbox.js';
 import { generateStyleProfile, getStyleProfile, saveStyleProfile, importGmailSent, importChatworkMine, importPlainText, styleStats } from '../services/style.js';
 import { storage } from '../integrations/storage.js';
-import { channelSchema } from '@lcm/shared';
+import { channelSchema, countTasks } from '@lcm/shared';
 import { model as aiModel } from '../integrations/anthropic.js';
 import { openAlerts } from '../services/alerts.js';
 import { listTasks } from '../services/tasks.js';
@@ -233,6 +233,8 @@ settingsRoutes.get('/dashboard', (c) => {
   const active = listTasks({ status: 'active' });
   const activeTasks = active.length;
   const openTasks = active.filter((t) => t.status === 'open').length;
+  // 対応中と連絡待ちを分けて、期限切れも数える
+  const taskCounts = countTasks(active);
   return c.json({
     alerts: alerts.slice(0, 20),
     alertCounts: byType,
@@ -240,6 +242,7 @@ settingsRoutes.get('/dashboard', (c) => {
     needsReply,
     activeTasks,
     openTasks,
+    taskCounts,
     todaysEvents: todaysEvents(),
     recent: recentActivity(12),
     lineQuota: isConfigured('line') ? lineQuotaStatus() : null,

@@ -7,7 +7,7 @@ import { useDraft, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
 import { fmtDate, fmtRelative } from '../lib/format';
 import { DeadlineEditor, TaskDeadlineSelect } from '../lib/Deadline';
-import { TASK_STATUSES, TASK_STATUS_LABEL, type TaskStatus } from '@lcm/shared';
+import { TASK_STATUSES, TASK_STATUS_LABEL, type TaskStatus, taskDeadline } from '@lcm/shared';
 import { useSort, readingKey, type SortOption } from '../lib/sort';
 import { Icon } from '../lib/icons';
 
@@ -29,7 +29,7 @@ interface Task {
 }
 
 /** 並べ替え。既定は「期限が早い順」（返信待ちはフォロー期限、対応中は期日。未設定は末尾） */
-const deadlineOf = (t: Task) => (t.status === 'waiting_client' || t.status === 'waiting_other' ? (t.followUpAt ?? t.dueAt) : (t.dueAt ?? t.followUpAt)) ?? null;
+const deadlineOf = (t: Task) => taskDeadline(t);
 const TASK_SORTS: SortOption<Task>[] = [
   { key: 'deadline', label: '期限が早い順', value: deadlineOf },
   { key: 'waiting', label: '待ちが長い順', value: (t) => t.waitingSince ?? null },
@@ -133,6 +133,7 @@ export default function Tasks() {
         <h1 className="text-xl font-bold">タスク・返信待ち</h1>
         <select className="input ml-auto w-auto" value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="active">未完了</option>
+          <option value="waiting">連絡待ち（依頼者・相手方など）</option>
           {TASK_STATUSES.map((s) => (
             <option key={s} value={s}>
               {TASK_STATUS_LABEL[s]}
