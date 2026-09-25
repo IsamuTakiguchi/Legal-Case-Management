@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { channelBadge, channelLabel, fmtDateTime, fmtRelative } from '../lib/format';
-import { ALERT_TYPE_LABEL, TASK_STATUS_LABEL, EVENT_KIND_LABEL, type AlertType, type TaskStatus, type EventKind } from '@lcm/shared';
+import { ALERT_TYPE_LABEL, TASK_STATUS_LABEL, EVENT_KIND_LABEL, type AlertType, type TaskStatus, type EventKind, type TaskCounts } from '@lcm/shared';
 import { Icon, type IconName } from '../lib/icons';
 import { alertLink } from '../lib/alertLink';
 import { DeadlineEditor } from '../lib/Deadline';
@@ -16,6 +16,8 @@ interface DashboardData {
   activeTasks: number;
   /** 対応中のタスクだけ（返信待ちは別のタイルで数えるので重複させない） */
   openTasks: number;
+  /** 対応中と連絡待ちの内訳（期限切れを含む） */
+  taskCounts?: TaskCounts;
   todaysEvents: { id: number; title: string; startAt: string; kind: string; clientName: string | null; location: string | null }[];
   /** 直前の行動（記録・送受信・タスク）。新しい順 */
   recent: RecentItem[];
@@ -88,9 +90,8 @@ export default function Dashboard() {
       )}
       <div className="stagger grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
         <Stat label="未返信の会話" value={d.needsReply} to="/inbox?needsReply=1" icon="mail" tone={d.needsReply ? 'blue' : 'gray'} />
-        <Stat label="返信待ち" value={d.waiting.length} to="/tasks" icon="clock" tone={d.waiting.length ? 'blue' : 'gray'} />
         <Stat label="要確認" value={d.alerts.length} to="/alerts" icon="alert" tone={d.alerts.length ? 'orange' : 'gray'} />
-        <Stat label="タスク" value={d.openTasks} to="/tasks?status=open" icon="check" tone={d.openTasks ? 'green' : 'gray'} />
+        <TaskSplit counts={d.taskCounts ?? { open: d.openTasks, waiting: d.waiting.length, waitingClient: d.waiting.filter((t) => t.status === 'waiting_client').length, waitingOther: d.waiting.filter((t) => t.status === 'waiting_other').length, openOverdue: 0, waitingOverdue: 0 }} />
       </div>
       <div className="stagger grid gap-4 md:grid-cols-2">
         <section className="card">
@@ -258,10 +259,51 @@ const STAT_TONE: Record<string, { value: string; icon: string }> = {
   gray: { value: 'text-[var(--text-2)]', icon: 'bg-[var(--surface-3)] text-[var(--text-3)]' },
 };
 
+/**
+ * タスクの件数を「対応中（自分がやること）」と「連絡待ち（相手の返事待ち）」に分けて見せる。
+ * それぞれ押すと、その状態だけのタスク一覧を開く。期限を過ぎたものがあれば件数を添える
+ */
+function TaskSplit({ counts }: { counts: TaskCounts }) {
+  const half = (opts: { label: string; value: number; to: string; icon: IconName; tone: keyof typeof STAT_TONE; overdue: number; sub?: string }) => {
+    const t = STAT_TONE[opts.value ? opts.tone : 'gray'];
+    return (
+      <Link to={opts.to} className="card-press flex min-w-0 flex-1 items-center gap-3 rounded-[14px] p-1 hover:bg-[var(--surface-2)]" aria-label={`${opts.label} ${opts.value} 件${opts.overdue ? `（うち期限切れ ${opts.overdue} 件）` : ''}`}>
+        <span className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px] ${t.icon}`}>
+          <Icon name={opts.icon} className="h-[22px] w-[22px]" strokeWidth={1.9} />
+        </span>
+        <div className="min-w-0">
+          <div className="eyebrow">{opts.label}</div>
+          <div className="mt-1 flex flex-wrap items-baseline gap-x-2">
+            <span className={`text-[30px] font-semibold leading-none tabular-nums tracking-[-0.03em] ${t.value}`}>{opts.value}</span>
+            {opts.overdue > 0 && <span className="badge badge-orange whitespace-nowrap">期限切れ {opts.overdue}</span>}
+          </div>
+          {opts.sub && <div className="mt-1 truncate text-xs text-[var(--text-3)]">{opts.sub}</div>}
+        </div>
+      </Link>
+    );
+  };
+  return (
+    <section className="card col-span-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3" aria-label="タスクの件数">
+      {half({ label: 'タスク（対応中）', value: counts.open, to: '/tasks?status=open', icon: 'check', tone: 'green', overdue: counts.openOverdue })}
+      <span className="hidden h-12 w-px shrink-0 bg-[var(--hairline-strong)] sm:block" aria-hidden />
+      <span className="h-px w-full bg-[var(--hairline-strong)] sm:hidden" aria-hidden />
+      {half({
+        label: '連絡待ち',
+        value: counts.waiting,
+        to: '/tasks?status=waiting',
+        icon: 'clock',
+        tone: 'blue',
+        overdue: counts.waitingOverdue,
+        sub: counts.waiting ? `依頼者 ${counts.waitingClient}・相手方など ${counts.waitingOther}` : undefined,
+      })}
+    </section>
+  );
+}
+
 function Stat({ label, value, to, icon, tone = 'blue' }: { label: string; value: number | string; to?: string; icon?: IconName; tone?: 'blue' | 'orange' | 'gray' | 'green' }) {
   const t = STAT_TONE[tone];
   const inner = (
-    <div className={`card flex items-center gap-3.5 ${to ? 'card-press' : ''}`}>
+    <div className={`card flex h-full items-center gap-3.5 ${to ? 'card-press' : ''}`}>
       {icon && (
         <span className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px] ${t.icon}`}>
           <Icon name={icon} className="h-[22px] w-[22px]" strokeWidth={1.9} />
@@ -274,7 +316,7 @@ function Stat({ label, value, to, icon, tone = 'blue' }: { label: string; value:
     </div>
   );
   return to ? (
-    <Link to={to} className="block">
+    <Link to={to} className="block h-full">
       {inner}
     </Link>
   ) : (
