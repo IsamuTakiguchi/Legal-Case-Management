@@ -91,7 +91,7 @@ export default function Dashboard() {
       <div className="stagger grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
         <Stat label="未返信の会話" value={d.needsReply} to="/inbox?needsReply=1" icon="mail" tone={d.needsReply ? 'blue' : 'gray'} />
         <Stat label="要確認" value={d.alerts.length} to="/alerts" icon="alert" tone={d.alerts.length ? 'orange' : 'gray'} />
-        <TaskSplit counts={d.taskCounts ?? { open: d.openTasks, waiting: d.waiting.length, waitingClient: d.waiting.filter((t) => t.status === 'waiting_client').length, waitingOther: d.waiting.filter((t) => t.status === 'waiting_other').length, openOverdue: 0, waitingOverdue: 0 }} />
+        <TaskSplit counts={d.taskCounts ?? { open: d.openTasks, waiting: d.waiting.length, waitingClient: d.waiting.filter((t) => t.status === 'waiting_client').length, waitingOther: d.waiting.filter((t) => t.status === 'waiting_other').length, waitingStaff: d.waiting.filter((t) => t.status === 'waiting_staff').length, openOverdue: 0, waitingOverdue: 0 }} />
       </div>
       <div className="stagger grid gap-4 md:grid-cols-2">
         <section className="card">
@@ -294,7 +294,7 @@ function TaskSplit({ counts }: { counts: TaskCounts }) {
         icon: 'clock',
         tone: 'blue',
         overdue: counts.waitingOverdue,
-        sub: counts.waiting ? `依頼者 ${counts.waitingClient}・相手方など ${counts.waitingOther}` : undefined,
+        sub: counts.waiting ? [`依頼者 ${counts.waitingClient}`, `相手方など ${counts.waitingOther}`, counts.waitingStaff ? `事務局 ${counts.waitingStaff}` : ''].filter(Boolean).join('・') : undefined,
       })}
     </section>
   );

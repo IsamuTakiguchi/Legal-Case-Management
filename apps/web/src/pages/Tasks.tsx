@@ -7,7 +7,7 @@ import { useDraft, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
 import { fmtDate, fmtRelative } from '../lib/format';
 import { DeadlineEditor, TaskDeadlineSelect } from '../lib/Deadline';
-import { TASK_STATUSES, TASK_STATUS_LABEL, type TaskStatus, taskDeadline } from '@lcm/shared';
+import { TASK_STATUSES, TASK_STATUS_LABEL, taskDeadline, isWaitingStatus, type TaskStatus } from '@lcm/shared';
 import { useSort, readingKey, type SortOption } from '../lib/sort';
 import { Icon } from '../lib/icons';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
@@ -39,12 +39,13 @@ const TASK_SORTS: SortOption<Task>[] = [
   { key: 'updated', label: '更新が新しい順', value: (t) => t.updatedAt ?? null, desc: true },
 ];
 
-type BulkAction = 'done' | 'open' | 'waiting_client' | 'waiting_other' | 'nudge' | 'delete';
+type BulkAction = 'done' | 'open' | 'waiting_client' | 'waiting_other' | 'waiting_staff' | 'nudge' | 'delete';
 const BULK_LABEL: Record<BulkAction, string> = {
   done: '完了にしました',
   open: '対応中に戻しました',
   waiting_client: '依頼者の返信待ちにしました',
   waiting_other: '相手方・裁判所待ちにしました',
+  waiting_staff: '事務局の回答・作業待ちにしました',
   nudge: '催促済みにしました',
   delete: '削除しました',
 };
@@ -102,7 +103,7 @@ export default function Tasks() {
     el.style.height = `${Math.max(72, Math.min(el.scrollHeight, 260))}px`;
   }, [title]);
   // 返信待ちのタスクは「いつまで待つか」、対応中のタスクは「期日」として入れる
-  const newWaiting = newStatus === 'waiting_client' || newStatus === 'waiting_other';
+  const newWaiting = isWaitingStatus(newStatus);
   const create = useMutation({
     mutationFn: () => {
       const { title: name, note } = splitTitleAndNote(title);
@@ -136,7 +137,7 @@ export default function Tasks() {
         <h1 className="text-xl font-bold">タスク・返信待ち</h1>
         <select className="input ml-auto w-auto" value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="active">未完了</option>
-          <option value="waiting">連絡待ち（依頼者・相手方など）</option>
+          <option value="waiting">連絡待ち（依頼者・相手方・事務局）</option>
           {TASK_STATUSES.map((s) => (
             <option key={s} value={s}>
               {TASK_STATUS_LABEL[s]}
@@ -237,6 +238,9 @@ export default function Tasks() {
             <button className="btn btn-sm" onClick={() => bulk.mutate('waiting_other')} disabled={bulk.isPending}>
               相手方待ちに
             </button>
+            <button className="btn btn-sm" onClick={() => bulk.mutate('waiting_staff')} disabled={bulk.isPending}>
+              事務局待ちに
+            </button>
             <button className="btn btn-sm" onClick={() => bulk.mutate('nudge')} disabled={bulk.isPending} title="返信待ちのタスクのフォロー期限を延ばします">
               催促した
             </button>
@@ -311,7 +315,7 @@ export default function Tasks() {
                   </td>
                   <td className="w-px whitespace-nowrap px-3 py-2 text-xs text-slate-600">
                     {t.waitingSince && <div>{fmtRelative(t.waitingSince)}から待ち</div>}
-                    {(t.status === 'waiting_client' || t.status === 'waiting_other') && <DeadlineEditor compact value={t.followUpAt} onChange={(iso) => update.mutate({ id: t.id, patch: { followUpAt: iso } })} />}
+                    {isWaitingStatus(t.status) && <DeadlineEditor compact value={t.followUpAt} onChange={(iso) => update.mutate({ id: t.id, patch: { followUpAt: iso } })} />}
                     {t.status === 'open' && <DeadlineEditor compact label="期日" value={t.dueAt ?? t.followUpAt} onChange={(iso) => update.mutate({ id: t.id, patch: { dueAt: iso } })} />}
                     {t.status === 'done' && (t.dueAt || t.followUpAt) && <div>期日 {fmtDate(t.dueAt ?? t.followUpAt)}</div>}
                   </td>
@@ -319,10 +323,10 @@ export default function Tasks() {
                     <div className="flex justify-end gap-1">
                       {t.conversationId && (
                         <Link to={`/inbox/${t.conversationId}`} className="btn btn-sm" title="このタスクの元になった会話を開きます">
-                          {t.status === 'waiting_client' || t.status === 'waiting_other' ? '催促文を作成' : '会話を開く'}
+                          {isWaitingStatus(t.status) ? '催促文を作成' : '会話を開く'}
                         </Link>
                       )}
-                      {(t.status === 'waiting_client' || t.status === 'waiting_other') && (
+                      {isWaitingStatus(t.status) && (
                         <button className="btn btn-sm" onClick={() => nudge.mutate(t.id)}>
                           催促した
                         </button>

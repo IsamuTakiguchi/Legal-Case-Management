@@ -1149,6 +1149,9 @@ function SessionCard({ s, onText, onDone, spotlight }: { s: Session; onText: (t:
   );
 }
 
+/** 狭い欄に出す短い状態名 */
+const SHORT_TASK_STATUS: Record<string, string> = { open: '対応中', waiting_client: '依頼者待ち', waiting_other: '相手方待ち', waiting_staff: '事務局待ち' };
+
 function TaskMini({ conversationId, clientId }: { conversationId: number; clientId: number | null }) {
   const qc = useQueryClient();
   const tasks = useQuery({ queryKey: ['tasks', 'conv', conversationId], queryFn: () => api.get<{ id: number; title: string; note: string | null; status: string; followUpAt: string | null; dueAt: string | null; chatworkTaskId: number | null }[]>(`/tasks?conversationId=${conversationId}&status=active`) });
@@ -1197,7 +1200,7 @@ function TaskMini({ conversationId, clientId }: { conversationId: number; client
                 {t.note && <span className="block truncate text-[11px] text-slate-500" title={t.note}>{t.note.split('\n')[0]}</span>}
               </span>
               <TaskEditButton onClick={() => setEditingId(t.id)} />
-              <span className="badge badge-gray">{t.status === 'open' ? '対応中' : t.status === 'waiting_client' ? '依頼者待ち' : '相手方待ち'}</span>
+              <span className="badge badge-gray">{SHORT_TASK_STATUS[t.status] ?? t.status}</span>
             </div>
             <div className="pl-5">
               {t.status === 'open' ? (
@@ -1217,6 +1220,7 @@ function TaskMini({ conversationId, clientId }: { conversationId: number; client
           <option value="open">対応中</option>
           <option value="waiting_client">依頼者待ち</option>
           <option value="waiting_other">相手方待ち</option>
+          <option value="waiting_staff">事務局待ち</option>
         </select>
         <TaskDeadlineSelect value={newDeadline} onChange={setNewDeadline} label={waiting ? '期限' : '期日'} defaultLabel={waiting ? '既定' : 'なし'} />
         <button className="btn btn-sm" onClick={() => add.mutate()} disabled={!title}>

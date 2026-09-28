@@ -1,6 +1,6 @@
 import { and, eq, desc, inArray, lt, isNotNull } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { addBusinessDays, formatJaDateTime, TASK_STATUS_LABEL, type TaskInput, type TaskStatus } from '@lcm/shared';
+import { addBusinessDays, formatJaDateTime, TASK_STATUS_LABEL, isWaitingStatus, WAITING_TASK_STATUSES, ACTIVE_TASK_STATUSES, type TaskInput, type TaskStatus } from '@lcm/shared';
 import { getSettingInt, holidaySet } from './settings.js';
 import { upsertAlert, resolveAlertsByKeyPrefix } from './alerts.js';
 import { isConfigured } from '../config.js';
@@ -17,7 +17,7 @@ export function defaultFollowUp(from = new Date()): Date {
 
 export async function createTask(input: TaskInput): Promise<TaskRow> {
   const now = new Date().toISOString();
-  const waiting = input.status === 'waiting_client' || input.status === 'waiting_other';
+  const waiting = isWaitingStatus(input.status);
   // 事件だけ指定されたら（事件ページからの追加など）、その事件の依頼者に紐付ける
   let clientId = input.clientId ?? null;
   if (!clientId && input.caseId) {
@@ -70,7 +70,7 @@ export function updateTask(id: number, patch: Partial<TaskInput> & { status?: Ta
   if (patch.dueAt !== undefined) set.dueAt = patch.dueAt ?? null;
   if (patch.status && patch.status !== cur.status) {
     set.status = patch.status;
-    const waiting = patch.status === 'waiting_client' || patch.status === 'waiting_other';
+    const waiting = isWaitingStatus(patch.status);
     if (waiting) {
       set.waitingSince = now;
       set.followUpAt = patch.followUpAt ?? defaultFollowUp().toISOString();
@@ -94,7 +94,7 @@ export function updateTask(id: number, patch: Partial<TaskInput> & { status?: Ta
   return db().select().from(schema.tasks).where(eq(schema.tasks.id, id)).get()!;
 }
 
-export type TaskBulkAction = 'done' | 'open' | 'waiting_client' | 'waiting_other' | 'nudge' | 'delete';
+export type TaskBulkAction = 'done' | 'open' | 'waiting_client' | 'waiting_other' | 'waiting_staff' | 'nudge' | 'delete';
 
 /** 一覧でチェックしたタスクをまとめて処理する（状態変更・催促した・削除） */
 export function bulkUpdateTasks(ids: number[], action: TaskBulkAction): { updated: number } {
@@ -108,7 +108,7 @@ export function bulkUpdateTasks(ids: number[], action: TaskBulkAction): { update
       continue;
     }
     if (action === 'nudge') {
-      if (cur.status === 'waiting_client' || cur.status === 'waiting_other') {
+      if (isWaitingStatus(cur.status)) {
         nudgeTask(id);
         n++;
       }
@@ -152,9 +152,9 @@ export function nudgeTask(id: number): TaskRow {
 
 export function listTasks(filter: { status?: TaskStatus | 'active' | 'waiting'; clientId?: number; caseId?: number; conversationId?: number }) {
   const conds = [];
-  if (filter.status === 'active') conds.push(inArray(schema.tasks.status, ['open', 'waiting_client', 'waiting_other']));
+  if (filter.status === 'active') conds.push(inArray(schema.tasks.status, [...ACTIVE_TASK_STATUSES]));
   // 連絡待ち（依頼者の返信待ち＋相手方・裁判所待ち）
-  else if (filter.status === 'waiting') conds.push(inArray(schema.tasks.status, ['waiting_client', 'waiting_other']));
+  else if (filter.status === 'waiting') conds.push(inArray(schema.tasks.status, [...WAITING_TASK_STATUSES]));
   else if (filter.status) conds.push(eq(schema.tasks.status, filter.status));
   if (filter.clientId) conds.push(eq(schema.tasks.clientId, filter.clientId));
   if (filter.caseId) conds.push(eq(schema.tasks.caseId, filter.caseId));
@@ -175,7 +175,7 @@ export function onInboundForTasks(conversationId: number, message: typeof schema
   const waiting = db()
     .select()
     .from(schema.tasks)
-    .where(and(eq(schema.tasks.conversationId, conversationId), inArray(schema.tasks.status, ['waiting_client', 'waiting_other'])))
+    .where(and(eq(schema.tasks.conversationId, conversationId), inArray(schema.tasks.status, [...WAITING_TASK_STATUSES])))
     .all();
   for (const t of waiting) {
     db().update(schema.tasks).set({ status: 'open', updatedAt: new Date().toISOString() }).where(eq(schema.tasks.id, t.id)).run();
@@ -197,7 +197,7 @@ export function checkOverdueWaitingTasks(): number {
     .select({ task: schema.tasks, clientName: schema.clients.name })
     .from(schema.tasks)
     .leftJoin(schema.clients, eq(schema.clients.id, schema.tasks.clientId))
-    .where(and(inArray(schema.tasks.status, ['waiting_client', 'waiting_other']), isNotNull(schema.tasks.followUpAt), lt(schema.tasks.followUpAt, now)))
+    .where(and(inArray(schema.tasks.status, [...WAITING_TASK_STATUSES]), isNotNull(schema.tasks.followUpAt), lt(schema.tasks.followUpAt, now)))
     .all();
   for (const r of rows) {
     const t = r.task;
@@ -283,7 +283,7 @@ export async function importChatworkTasks(): Promise<{ imported: number; complet
   // /my/tasks は「自分に振られたタスク」しか返さないので、載っていない＝完了とは限らない
   // （事件の担当事務局に振ったタスクは載らない）。載っていないものはルームから 1 件ずつ確かめる
   let completed = 0;
-  const mine = db().select().from(schema.tasks).where(and(isNotNull(schema.tasks.chatworkTaskId), inArray(schema.tasks.status, ['open', 'waiting_client', 'waiting_other']))).all();
+  const mine = db().select().from(schema.tasks).where(and(isNotNull(schema.tasks.chatworkTaskId), inArray(schema.tasks.status, [...ACTIVE_TASK_STATUSES]))).all();
   for (const t of mine) {
     if (!t.chatworkTaskId || openIds.has(t.chatworkTaskId)) continue;
     if (!(await isChatworkTaskDone(t.chatworkRoomId, t.chatworkTaskId))) continue;

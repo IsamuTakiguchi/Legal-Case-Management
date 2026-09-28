@@ -3,7 +3,7 @@ import { eq, inArray, and } from 'drizzle-orm';
 import { notifyMyChat, appUrl } from '../services/notify.js';
 import { todaysEvents } from '../services/court.js';
 import { openAlerts } from '../services/alerts.js';
-import { formatJaDateTime, TASK_STATUS_LABEL, type TaskStatus, EVENT_KIND_LABEL, type EventKind } from '@lcm/shared';
+import { formatJaDateTime, TASK_STATUS_LABEL, EVENT_KIND_LABEL, WAITING_TASK_STATUSES, type TaskStatus, type EventKind } from '@lcm/shared';
 import { getSetting, getSettingInt } from '../services/settings.js';
 
 /** 毎朝のダイジェストを Chatwork マイチャットへ */
@@ -13,7 +13,7 @@ export async function morningDigest(): Promise<string> {
     .select({ t: schema.tasks, clientName: schema.clients.name })
     .from(schema.tasks)
     .leftJoin(schema.clients, eq(schema.clients.id, schema.tasks.clientId))
-    .where(inArray(schema.tasks.status, ['waiting_client', 'waiting_other']))
+    .where(inArray(schema.tasks.status, [...WAITING_TASK_STATUSES]))
     .all();
   const openTasks = d
     .select({ t: schema.tasks, clientName: schema.clients.name })

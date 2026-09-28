@@ -2,7 +2,7 @@ import { and, eq, desc, gt, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/index.js';
 import { generateStructured, generateText } from '../integrations/anthropic.js';
-import { formatJaDateTime, type CaseInput, type CaseNoteInput, WAITING_FOR, CASE_NOTE_KIND_LABEL, type CaseNoteKind, OPEN_CASE_STATUSES, CASE_CONTACT_ROLE_LABEL, type CaseContactRole, type TaskStatus } from '@lcm/shared';
+import { formatJaDateTime, WAITING_FOR, CASE_NOTE_KIND_LABEL, OPEN_CASE_STATUSES, CASE_CONTACT_ROLE_LABEL, taskStatusForWaiting, ACTIVE_TASK_STATUSES, type CaseInput, type CaseNoteInput, type CaseNoteKind, type CaseContactRole, type TaskStatus } from '@lcm/shared';
 import { createTask } from './tasks.js';
 import { syncClientFolderWithStatus } from './clientFolders.js';
 import { logger } from '../logger.js';
@@ -192,7 +192,7 @@ const phoneMemoSchema = z.object({
   nextActions: z
     .array(z.object({ title: z.string(), due: z.string().nullable().describe('期限 YYYY-MM-DD。不明なら null'), owner: z.enum(['self', 'client', 'counterpart', 'court', 'other']) }))
     .describe('タスクとして追いかける価値のある「次のアクション」だけを、多くても 3 件。細かい手順は 1 件にまとめる'),
-  waitingFor: z.enum(WAITING_FOR).describe('この後、誰の対応待ちになるか'),
+  waitingFor: z.enum(WAITING_FOR).describe('この後、誰の対応待ちになるか（staff は事務所の職員＝事務局）'),
   counterpart: z.string().nullable().describe('通話相手（メモから分かれば）'),
 });
 
@@ -267,7 +267,7 @@ export async function addCaseNote(input: CaseNoteInput, opts: AddNoteOptions = {
     .get();
   const chosen = nextActions.map((a, i) => ({ a, i })).filter(({ i }) => !opts.taskIndexes || opts.taskIndexes.includes(i));
   if (opts.createTasks && chosen.length) {
-    const status = waitingFor === 'client' ? 'waiting_client' : waitingFor && waitingFor !== 'none' ? 'waiting_other' : 'open';
+    const status = taskStatusForWaiting(waitingFor);
     const dueIso = (due?: string | null) => (due ? new Date(`${due}T09:00:00+09:00`).toISOString() : null);
     const updated: typeof nextActions = nextActions.map((a) => ({ ...a }));
     if (opts.createTasks === 'single') {
@@ -297,7 +297,7 @@ const noteTaskSuggestionSchema = z.object({
       z.object({
         title: z.string().describe('タスク名。弁護士が見て何をするか分かる言い方で、40 字以内'),
         due: z.string().nullable().describe('期限 YYYY-MM-DD。記録から読み取れなければ null'),
-        status: z.enum(['open', 'waiting_client', 'waiting_other']).describe('こちらが動くなら open、依頼者の返事待ちなら waiting_client、相手方・裁判所・保険会社などの待ちなら waiting_other'),
+        status: z.enum(ACTIVE_TASK_STATUSES).describe('こちらが動くなら open、依頼者の返事待ちなら waiting_client、相手方・裁判所・保険会社などの待ちなら waiting_other、事務局（事務所の職員）の回答や作業を待つなら waiting_staff'),
         note: z.string().describe('そのタスクのメモ（背景・決まったこと）。1〜2 文'),
       }),
     )
@@ -322,7 +322,7 @@ export async function suggestNoteTasks(noteId: number): Promise<NoteTaskSuggesti
   const open = d
     .select({ title: schema.tasks.title, status: schema.tasks.status })
     .from(schema.tasks)
-    .where(and(eq(schema.tasks.caseId, kase.id), inArray(schema.tasks.status, ['open', 'waiting_client', 'waiting_other'])))
+    .where(and(eq(schema.tasks.caseId, kase.id), inArray(schema.tasks.status, [...ACTIVE_TASK_STATUSES])))
     .all();
   const lines = [
     `今日: ${formatJaDateTime(new Date()).replace(/\d+時.*$/, '')}`,
@@ -398,7 +398,7 @@ export async function createTasksFromNote(noteId: number, input: NoteTaskInput) 
   if (!row) throw new Error('記録が見つかりません');
   const kase = d.select().from(schema.cases).where(eq(schema.cases.id, row.caseId)).get();
   if (!kase) throw new Error('事件が見つかりません');
-  const status: TaskStatus = input.status ?? (row.waitingFor === 'client' ? 'waiting_client' : row.waitingFor && row.waitingFor !== 'none' ? 'waiting_other' : 'open');
+  const status: TaskStatus = input.status ?? taskStatusForWaiting(row.waitingFor);
   const base = { clientId: kase.clientId, caseId: kase.id, conversationId: null, status, syncToChatwork: input.syncToChatwork ?? false };
   const actions = row.nextActions.map((a) => ({ ...a }));
   const created: { id: number; title: string }[] = [];

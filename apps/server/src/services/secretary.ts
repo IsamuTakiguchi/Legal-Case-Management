@@ -71,7 +71,7 @@ export const taskActionSchema = z.object({
   note: z.string().nullable().optional(),
   clientId: z.number().int().nullable().optional(),
   caseId: z.number().int().nullable().optional(),
-  status: z.enum(TASK_STATUSES).describe('open=自分がやる / waiting_client=依頼者の返事待ち / waiting_other=相手方・裁判所の返事待ち'),
+  status: z.enum(TASK_STATUSES).describe('open=自分がやる / waiting_client=依頼者の返事待ち / waiting_other=相手方・裁判所の返事待ち / waiting_staff=事務局の回答・作業待ち'),
   dueAt: isoAt.nullable().optional().describe('期限（自分がやるとき）'),
   followUpAt: isoAt.nullable().optional().describe('催促する日（返事待ちのとき）。空なら営業日で自動'),
 });
