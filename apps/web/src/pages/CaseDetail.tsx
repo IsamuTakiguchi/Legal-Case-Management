@@ -10,7 +10,7 @@ import { LongText } from '../lib/LongText';
 import { TaskDeadlineSelect } from '../lib/Deadline';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { fmtDateTime, fmtDate, fmtYen, fmtBytes, toLocalInput, fromLocalInput, channelLabel } from '../lib/format';
-import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, messageLink, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
+import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, messageLink, ACTIVE_TASK_STATUSES, taskStatusForWaiting, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 
@@ -758,7 +758,7 @@ function CaseTaskForm({ caseId, hasStaff, onDone }: { caseId: number; hasStaff: 
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <select className="input w-auto py-0.5 text-xs" value={status} onChange={(e) => setStatus(e.target.value as TaskStatus)} aria-label="状態">
-          {(['open', 'waiting_client', 'waiting_other'] as const).map((st) => (
+          {ACTIVE_TASK_STATUSES.map((st) => (
             <option key={st} value={st}>
               {TASK_STATUS_LABEL[st]}
             </option>
@@ -1743,7 +1743,7 @@ function NoteTaskPanel({ n, onDone, onClose }: { n: Note; onDone: () => void; on
   const [mode, setMode] = useState<'each' | 'single'>('single');
   const [title, setTitle] = useState(pending.length ? '' : headline.slice(0, 80));
   const [due, setDue] = useState(pending.find((a) => a.due)?.due?.slice(0, 10) ?? '');
-  const [status, setStatus] = useState<string>(n.waitingFor === 'client' ? 'waiting_client' : n.waitingFor && n.waitingFor !== 'none' ? 'waiting_other' : 'open');
+  const [status, setStatus] = useState<string>(taskStatusForWaiting(n.waitingFor));
   const [sync, setSync] = useState(false);
   const [msg, setMsg] = useState('');
   // AI の案。null なら「まだ作っていない」
@@ -1806,7 +1806,7 @@ function NoteTaskPanel({ n, onDone, onClose }: { n: Note; onDone: () => void; on
                     期限 <input type="date" className="input w-auto py-0.5" value={dft.due} onChange={(e) => setDraft(i, { due: e.target.value })} />
                   </label>
                   <select className="input w-auto py-0.5" value={dft.status} onChange={(e) => setDraft(i, { status: e.target.value })} aria-label="状態">
-                    {(['open', 'waiting_client', 'waiting_other'] as const).map((st) => (
+                    {ACTIVE_TASK_STATUSES.map((st) => (
                       <option key={st} value={st}>
                         {TASK_STATUS_LABEL[st]}
                       </option>
@@ -1889,7 +1889,7 @@ function NoteTaskPanel({ n, onDone, onClose }: { n: Note; onDone: () => void; on
         <label className="flex items-center gap-1">
           状態
           <select className="input w-auto py-0.5" value={status} onChange={(e) => setStatus(e.target.value)}>
-            {(['open', 'waiting_client', 'waiting_other'] as const).map((st) => (
+            {ACTIVE_TASK_STATUSES.map((st) => (
               <option key={st} value={st}>
                 {TASK_STATUS_LABEL[st]}
               </option>
@@ -2061,7 +2061,7 @@ function TimelineBody({ body, messageId, truncated }: { body: string; messageId:
  */
 const PROGRESS_PRESETS: { key: string; counterpart: string; waitingFor: WaitingFor; placeholder: string }[] = [
   { key: 'client', counterpart: '依頼者に確認', waitingFor: 'client', placeholder: '例: 和解案の内容を説明し、受けるかどうか確認を依頼' },
-  { key: 'staff', counterpart: '担当事務局に確認', waitingFor: 'other', placeholder: '例: 登記簿の取寄せを依頼' },
+  { key: 'staff', counterpart: '担当事務局に確認', waitingFor: 'staff', placeholder: '例: 登記簿の取寄せを依頼' },
   { key: 'counterpart', counterpart: '相手方に照会', waitingFor: 'counterpart', placeholder: '例: 提示額の根拠を書面で照会' },
   { key: 'court', counterpart: '裁判所に連絡', waitingFor: 'court', placeholder: '例: 次回期日の候補を打診' },
   { key: 'filed', counterpart: '書面提出', waitingFor: 'none', placeholder: '例: 準備書面（2）と証拠説明書を提出' },

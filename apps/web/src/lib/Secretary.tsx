@@ -35,6 +35,7 @@ const TASK_STATUSES = [
   ['open', '対応中'],
   ['waiting_client', '依頼者の返事待ち'],
   ['waiting_other', '相手方・裁判所の返事待ち'],
+  ['waiting_staff', '事務局の回答・作業待ち'],
 ] as const;
 
 interface NoteAction {

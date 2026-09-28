@@ -299,7 +299,7 @@ export async function sendStaffAsk(source: StaffAskSource, input: StaffAskInput)
       clientId: ctx.clientId,
       caseId: ctx.caseId,
       conversationId: source.kind === 'conversation' ? source.conversationId : null,
-      status: 'waiting_other',
+      status: 'waiting_staff',
       followUpAt: input.due ? new Date(`${input.due}T09:00:00+09:00`).toISOString() : null,
       note: `${staff ? `${staff.name}さんへ` : ''}\n${input.text.trim()}`.trim(),
       syncToChatwork: false,

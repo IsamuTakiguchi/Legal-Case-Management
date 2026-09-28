@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { taskInputSchema, TASK_STATUSES } from '@lcm/shared';
+import { taskInputSchema, TASK_STATUSES, WAITING_TASK_STATUSES } from '@lcm/shared';
 import { createTask, updateTask, nudgeTask, listTasks, importChatworkTasks, syncTaskToChatwork, bulkUpdateTasks, deleteTask } from '../services/tasks.js';
 import { openAlerts, resolveAlert } from '../services/alerts.js';
 import { db, schema } from '../db/index.js';
@@ -32,7 +32,7 @@ taskRoutes.put('/tasks/:id', async (c) => {
 
 /** チェックしたタスクをまとめて処理 */
 taskRoutes.post('/tasks/bulk', async (c) => {
-  const body = z.object({ ids: z.array(z.number().int()).min(1).max(500), action: z.enum(['done', 'open', 'waiting_client', 'waiting_other', 'nudge', 'delete']) }).parse(await c.req.json());
+  const body = z.object({ ids: z.array(z.number().int()).min(1).max(500), action: z.enum(['done', 'open', ...WAITING_TASK_STATUSES, 'nudge', 'delete']) }).parse(await c.req.json());
   return c.json(bulkUpdateTasks(body.ids, body.action));
 });
 

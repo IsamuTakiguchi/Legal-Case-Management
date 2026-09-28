@@ -110,7 +110,7 @@ describe('受信した連絡を事務局に確認する', () => {
     expect(r.chatworkTaskId).toBe(77);
     const task = db().select().from(schema.tasks).where(eq(schema.tasks.id, r.waitingTaskId!)).get()!;
     expect(task.title).toContain('事務局に確認');
-    expect([task.status, task.caseId, task.conversationId]).toEqual(['waiting_other', kase.id, conv.id]);
+    expect([task.status, task.caseId, task.conversationId]).toEqual(['waiting_staff', kase.id, conv.id]);
   });
 
   it('Chatwork アカウント未登録の担当にはタスクで送れない', async () => {
@@ -164,7 +164,7 @@ describe('事件の記録を事務局に確認する', () => {
     expect(body).toContain(`https://lex.example.com/cases/${kase.id}#note-${note.id}`);
     // 返事待ちは会話ではなく事件に紐付く
     const task = db().select().from(schema.tasks).where(eq(schema.tasks.id, r.waitingTaskId!)).get()!;
-    expect([task.caseId, task.clientId, task.conversationId, task.status]).toEqual([kase.id, client.id, null, 'waiting_other']);
+    expect([task.caseId, task.clientId, task.conversationId, task.status]).toEqual([kase.id, client.id, null, 'waiting_staff']);
   });
 
   it('決定事項が無い記録では「決定:」を出さない', async () => {

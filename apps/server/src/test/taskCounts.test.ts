@@ -27,9 +27,10 @@ describe('タスクの件数を「対応中」と「連絡待ち」に分ける'
       { status: 'waiting_client', followUpAt: past },
       { status: 'waiting_client', followUpAt: future },
       { status: 'waiting_other', followUpAt: future },
+      { status: 'waiting_staff', followUpAt: past },
       { status: 'done', dueAt: past },
     ]);
-    expect(c).toEqual({ open: 3, waiting: 3, waitingClient: 2, waitingOther: 1, openOverdue: 1, waitingOverdue: 1 });
+    expect(c).toEqual({ open: 3, waiting: 4, waitingClient: 2, waitingOther: 1, waitingStaff: 1, openOverdue: 1, waitingOverdue: 2 });
   });
 
   it('期限は、連絡待ちなら「いつまで待つか」、対応中なら期日を先に見る', () => {
@@ -45,6 +46,7 @@ describe('タスクの件数を「対応中」と「連絡待ち」に分ける'
       { title: '証拠の整理', status: 'open' },
       { title: '依頼者から資料', status: 'waiting_client', followUpAt: past, waitingSince: past },
       { title: '相手方の回答', status: 'waiting_other', followUpAt: future, waitingSince: past },
+      { title: '事務局の登記簿取寄せ', status: 'waiting_staff', followUpAt: future, waitingSince: past },
       { title: '終わったこと', status: 'done' },
     ];
     for (const v of values) db().insert(schema.tasks).values(v).run();
@@ -55,11 +57,11 @@ describe('タスクの件数を「対応中」と「連絡待ち」に分ける'
     const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
 
     const dash = (await (await app.request('/api/dashboard', { headers: { cookie } })).json()) as { openTasks: number; taskCounts: Record<string, number> };
-    expect(dash.taskCounts).toEqual({ open: 2, waiting: 2, waitingClient: 1, waitingOther: 1, openOverdue: 1, waitingOverdue: 1 });
+    expect(dash.taskCounts).toEqual({ open: 2, waiting: 3, waitingClient: 1, waitingOther: 1, waitingStaff: 1, openOverdue: 1, waitingOverdue: 1 });
     expect(dash.openTasks).toBe(2);
 
     const waiting = (await (await app.request('/api/tasks?status=waiting', { headers: { cookie } })).json()) as { title: string }[];
-    expect(waiting.map((t) => t.title).sort()).toEqual(['依頼者から資料', '相手方の回答']);
+    expect(waiting.map((t) => t.title).sort()).toEqual(['事務局の登記簿取寄せ', '依頼者から資料', '相手方の回答'].sort());
     const open = (await (await app.request('/api/tasks?status=open', { headers: { cookie } })).json()) as { title: string }[];
     expect(open.map((t) => t.title).sort()).toEqual(['準備書面を書く', '証拠の整理']);
   });
