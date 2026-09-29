@@ -38,6 +38,20 @@ export function ensureClientConversation(client: ClientRow, channel: Channel): C
   if (own[0]) return own[0];
   const externalThreadId = channel === 'gmail' ? `new:${client.id}:${Date.now()}` : channel === 'line' ? client.lineUserId! : String(client.chatworkRoomId);
   const counterpartAddress = channel === 'gmail' ? (client.emails[0] ?? null) : channel === 'line' ? client.lineUserId : String(client.chatworkRoomId);
+  // LINE・Chatwork は相手ごとに会話が 1 つ。アーカイブ済みや、まだ依頼者に紐付いていない会話があればそれを使う
+  //（同じ相手の会話を二重に作ろうとすると、重複の制約で失敗する）
+  if (channel !== 'gmail') {
+    const existing = db()
+      .select()
+      .from(schema.conversations)
+      .where(and(eq(schema.conversations.channel, channel), eq(schema.conversations.externalThreadId, externalThreadId)))
+      .get();
+    if (existing) {
+      const patch = { archived: false, ...(existing.clientId ? {} : { clientId: client.id }) };
+      db().update(schema.conversations).set(patch).where(eq(schema.conversations.id, existing.id)).run();
+      return { ...existing, ...patch };
+    }
+  }
   return db()
     .insert(schema.conversations)
     .values({ channel, externalThreadId, clientId: client.id, counterpartName: client.name, counterpartAddress, subject: null })

@@ -213,6 +213,13 @@ describe('事務局の質問から依頼者に確認する', () => {
     expect(clientConfirmContext(questionId).sent).toHaveLength(1);
   });
 
+  it('依頼者との LINE の会話をアーカイブしていても、それを使って送れる（二重に作らない）', async () => {
+    const archived = db().insert(schema.conversations).values({ channel: 'line', externalThreadId: 'U-yamada', clientId, archived: true }).returning().get();
+    const r = await sendClientConfirm(questionId, { clientId, channel: 'line', text: '確認です' });
+    expect(r.conversationId).toBe(archived.id);
+    expect(sent[0]).toMatchObject({ channel: 'line', thread: 'U-yamada' });
+  });
+
   it('依頼者が未紐付けだった伝言は、送った依頼者・事件に紐付ける', async () => {
     const q = addMessage({ conversationId: staffConvId, body: '先日の件、確認をお願いします' });
     await sendClientConfirm(q.id, { clientId, channel: 'line', text: '確認です' });
