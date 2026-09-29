@@ -24,6 +24,7 @@ import { pushRoutes } from './routes/push.js';
 import { setupRoutes } from './routes/setup.js';
 import { applyCredentialOverrides } from './services/credentials.js';
 import { upgradeModelSettings } from './services/settings.js';
+import { backfillClientEntityTypes } from './services/clientEntity.js';
 import { startJobs } from './jobs/index.js';
 import { ZodError } from 'zod';
 
@@ -118,6 +119,8 @@ async function main() {
   applyCredentialOverrides();
   const upgraded = upgradeModelSettings();
   if (upgraded.length) logger.info({ upgraded }, 'AI モデルの設定を後継モデルに切り替えました');
+  const corporations = backfillClientEntityTypes();
+  if (corporations) logger.info({ corporations }, '名前が法人らしい依頼者を「法人」にしました');
   ensurePasswordHash();
   const app = createApp();
   const server = serve({ fetch: app.fetch, port: e.PORT, hostname: '0.0.0.0' }, (info) => {

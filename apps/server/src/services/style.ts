@@ -6,7 +6,7 @@ import { normalizeGmailMessage } from '../channels/gmail.js';
 import * as cw from '../channels/chatwork.js';
 import { getSetting } from './settings.js';
 import { listTemplates, fillTemplate, accessNote } from './templates.js';
-import { CHANNEL_LABEL, familyName, type Channel, type DraftRequest } from '@lcm/shared';
+import { CHANNEL_LABEL, familyName, representativeLabel, type Channel, type DraftRequest } from '@lcm/shared';
 import { logger } from '../logger.js';
 import { ftsQuery } from './inbox.js';
 
@@ -231,9 +231,14 @@ ${samples.map((s, i) => `--- 例${i + 1} ---\n${s.text.slice(0, 900)}`).join('\n
     .map((m) => `[${m.direction === 'in' ? (m.senderName ?? '相手') : '自分'} ${m.sentAt.slice(0, 16).replace('T', ' ')}]\n${m.body.slice(0, 1500)}`)
     .join('\n\n');
 
+  // 依頼者が法人なら、会社名と代表者で宛名を書けるように伝える
+  const client = !ctx.contactName && clientId ? (db().select().from(schema.clients).where(eq(schema.clients.id, clientId)).get() ?? null) : null;
+  const rep = client ? representativeLabel(client) : null;
   const counterpartLine = ctx.contactName
     ? `相手: ${ctx.contactName}（${ctx.contactRole ?? '関係者'}。依頼者 ${ctx.clientName ?? '不明'}${ctx.contactCaseTitle ? ` の「${ctx.contactCaseTitle}」` : ''} に関する対外的なやり取り。依頼者向けの砕けた説明や励ましは入れず、簡潔で丁寧な対外文書として書く）${surname ? `（宛名は「${surname}様」${ctx.contactRole === '相手方代理人' ? 'または「先生」' : ''}）` : ''}`
-    : `相手: ${ctx.clientName ?? ctx.counterpartName ?? '不明'}${surname ? `（宛名は「${surname}様」）` : ''}`;
+    : rep
+      ? `相手: ${ctx.clientName ?? client!.name}（法人の依頼者。代表者は${rep}。宛名は会社名と代表者名で、例えばメールなら「${client!.name}\n${rep} 様」、LINE なら「${familyName(client!.representativeName ?? '')}様」。やり取りの相手が代表者以外の担当者と分かれば、その人に宛てる）`
+      : `相手: ${ctx.clientName ?? ctx.counterpartName ?? '不明'}${surname ? `（宛名は「${surname}様」）` : ''}`;
   const user = `${counterpartLine}
 ${ctx.caseSummary ? `\n事件の現状メモ:\n${ctx.caseSummary}\n` : ''}
 【これまでのやり取り（新しいものが下）】

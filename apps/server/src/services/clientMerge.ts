@@ -184,6 +184,16 @@ export function mergeClients(keepId: number, sourceIds: number[]): MergeResult {
     patch.phones = normalizePhones([...(keep.phones ?? []), ...sources.flatMap((s) => s.phones ?? [])]);
     patch.aliases = uniq([...keep.aliases, ...sources.flatMap((s) => [...s.aliases, s.name])]).filter((a) => a !== keep.name);
     patch.kana = keep.kana ?? sources.find((s) => s.kana)?.kana ?? null;
+    // 法人の代表者は、残す側に無ければ統合する側から引き継ぐ
+    if (!keep.representativeName) {
+      const s = sources.find((x) => x.representativeName);
+      if (s) {
+        patch.representativeTitle = s.representativeTitle;
+        patch.representativeName = s.representativeName;
+        patch.representativeKana = s.representativeKana;
+      }
+    }
+    if (keep.entityType !== 'corporation' && sources.some((s) => s.entityType === 'corporation')) patch.entityType = 'corporation';
     patch.preferredChannel = keep.preferredChannel ?? sources.find((s) => s.preferredChannel)?.preferredChannel ?? null;
     if (!keep.lineUserId) {
       patch.lineUserId = sources.find((s) => s.lineUserId)?.lineUserId ?? null;

@@ -8,18 +8,7 @@ import { getSetting } from './settings.js';
 import { addCaseNote } from './cases.js';
 import { createTask } from './tasks.js';
 import { createCalendarEvent } from './court.js';
-import {
-  CASE_NOTE_KINDS,
-  CASE_NOTE_KIND_LABEL,
-  EVENT_KINDS,
-  EVENT_KIND_LABEL,
-  TASK_STATUSES,
-  TASK_STATUS_LABEL,
-  formatJaDateTime,
-  toJstParts,
-  phoneDigits,
-  isPhoneLike,
-} from '@lcm/shared';
+import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, EVENT_KINDS, EVENT_KIND_LABEL, TASK_STATUSES, TASK_STATUS_LABEL, formatJaDateTime, toJstParts, phoneDigits, isPhoneLike, representativeLabel } from '@lcm/shared';
 import { logger } from '../logger.js';
 
 /**
@@ -103,7 +92,12 @@ export interface SecretaryPlan {
 
 const shorten = (s: string | null | undefined, n = 80) => (s ?? '').replace(/\s+/g, ' ').slice(0, n);
 
-/** 名前・かな・別名・電話番号から依頼者を探す */
+/** 秘書に渡す依頼者の要約（法人なら代表者も） */
+function clientSummary(c: typeof schema.clients.$inferSelect) {
+  return { id: c.id, name: c.name, kana: c.kana, representative: representativeLabel(c), preferredChannel: c.preferredChannel, phones: c.phones ?? [] };
+}
+
+/** 名前・かな・別名・電話番号・法人の代表者名から依頼者を探す */
 export function findClients(name: string, limit = 8) {
   const q = name.trim();
   if (!q) return [];
@@ -117,13 +111,13 @@ export function findClients(name: string, limit = 8) {
       .all()
       .filter((c) => (c.phones ?? []).some((p) => phoneDigits(p) === digits))
       .slice(0, limit)
-      .map((c) => ({ id: c.id, name: c.name, kana: c.kana, preferredChannel: c.preferredChannel, phones: c.phones ?? [] }));
+      .map(clientSummary);
   }
   const pat = `%${q}%`;
   const rows = db()
     .select()
     .from(schema.clients)
-    .where(and(eq(schema.clients.archived, false), or(like(schema.clients.name, pat), like(schema.clients.kana, pat))))
+    .where(and(eq(schema.clients.archived, false), or(like(schema.clients.name, pat), like(schema.clients.kana, pat), like(schema.clients.representativeName, pat), like(schema.clients.representativeKana, pat))))
     .all();
   // 別名（旧姓・通称）でも拾う
   const byAlias = db()
@@ -137,7 +131,7 @@ export function findClients(name: string, limit = 8) {
   return hit
     .sort((a, b) => a.name.length - b.name.length)
     .slice(0, limit)
-    .map((c) => ({ id: c.id, name: c.name, kana: c.kana, preferredChannel: c.preferredChannel, phones: c.phones ?? [] }));
+    .map(clientSummary);
 }
 
 /** 事件を探す。依頼者を指定すると、その依頼者の事件だけ */

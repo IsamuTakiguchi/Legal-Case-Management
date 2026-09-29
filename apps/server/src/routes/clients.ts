@@ -5,7 +5,7 @@ import { isConfigured } from '../config.js';
 import { z } from 'zod';
 import { eq, desc } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { normalizePhones, clientInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputSchema, creditorEventInputSchema, CREDITOR_IMPORT_FIELDS, caseContactInputSchema, staffAskDraftSchema, staffAskSendSchema, TASK_STATUSES, EVENT_KINDS } from '@lcm/shared';
+import { normalizePhones, clientInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputSchema, creditorEventInputSchema, CREDITOR_IMPORT_FIELDS, caseContactInputSchema, staffAskDraftSchema, staffAskSendSchema, TASK_STATUSES, EVENT_KINDS, looksLikeCorporation } from '@lcm/shared';
 import { searchClients } from '../services/identity.js';
 import { storage, FolderNotFoundError } from '../integrations/storage.js';
 import { clientFolder } from '../services/attachments.js';
@@ -46,7 +46,9 @@ function normalizeEmails(emails: string[]): string[] {
 clientRoutes.post('/clients', async (c) => {
   const input = clientInputSchema.parse(await c.req.json());
   if (input.lineUserId) assertLineFriendFree(input.lineUserId, null);
-  const row = db().insert(schema.clients).values({ ...input, emails: normalizeEmails(input.emails), phones: normalizePhones(input.phones) }).returning().get();
+  // 個人・法人を選ばずに登録したら、名前から推定する（「株式会社」などが付けば法人）
+  const entityType = input.entityType ?? (looksLikeCorporation(input.name) ? 'corporation' : 'individual');
+  const row = db().insert(schema.clients).values({ ...input, entityType, emails: normalizeEmails(input.emails), phones: normalizePhones(input.phones) }).returning().get();
   // LINE の友だちを選んで登録したら、既存の会話を付け、友だち追加の通知を消す
   if (input.lineUserId) linkLineFriendToClient(input.lineUserId, row.id);
   return c.json(db().select().from(schema.clients).where(eq(schema.clients.id, row.id)).get());

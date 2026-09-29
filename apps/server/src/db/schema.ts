@@ -7,6 +7,12 @@ export const clients = sqliteTable('clients', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull(),
   kana: text('kana'),
+  /** individual=個人 / corporation=法人 */
+  entityType: text('entity_type').notNull().default('individual'),
+  /** 法人の代表者（肩書・氏名・かな） */
+  representativeTitle: text('representative_title'),
+  representativeName: text('representative_name'),
+  representativeKana: text('representative_kana'),
   aliases: text('aliases', { mode: 'json' }).$type<string[]>().notNull().default([]),
   emails: text('emails', { mode: 'json' }).$type<string[]>().notNull().default([]),
   /** 電話番号（携帯・自宅・勤務先など。入力されたままの形で持つ） */
