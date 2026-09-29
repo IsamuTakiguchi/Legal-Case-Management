@@ -25,6 +25,8 @@ export default function ClientDetail() {
   const [edit, setEdit] = useState(false);
   const [newCase, setNewCase] = useState(false);
   const [sub, setSub] = useState('');
+  // 依頼者フォルダの指定し直し・名前変更の欄
+  const [folderEdit, setFolderEdit] = useState(false);
   const d = useQuery({ queryKey: ['client', id], queryFn: () => api.get<Detail>(`/clients/${id}`) });
   const files = useQuery({ queryKey: ['client-files', id, sub], queryFn: () => api.get<{ folder: string; exists?: boolean; items: { name: string; path: string; isFolder: boolean; size?: number; modifiedAt?: string; webUrl?: string }[] }>(`/clients/${id}/files?path=${encodeURIComponent(sub)}`), retry: false });
   const classify = useMutation({
@@ -216,7 +218,25 @@ export default function ClientDetail() {
                 ↑ 上へ
               </button>
             )}
+            <button className="btn btn-sm ml-auto" onClick={() => setFolderEdit(!folderEdit)} title="別のフォルダを指定したり、フォルダ名を変えたりします">
+              フォルダを変更
+            </button>
           </div>
+          {folderEdit && (
+            <FolderEditor
+              clientId={c.id}
+              currentPath={c.onedriveFolderPath ?? ''}
+              currentFolder={files.data?.folder ?? c.folder}
+              exists={files.data?.exists !== false}
+              onDone={() => {
+                setFolderEdit(false);
+                setSub('');
+                qc.invalidateQueries({ queryKey: ['client-files', id] });
+                qc.invalidateQueries({ queryKey: ['client', id] });
+              }}
+              onCancel={() => setFolderEdit(false)}
+            />
+          )}
           {files.error && <div className="text-sm text-red-600">{(files.error as Error).message}</div>}
           {files.data?.exists === false && (
             <div className="rounded border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
@@ -229,7 +249,7 @@ export default function ClientDetail() {
                     <button className="btn btn-sm" onClick={() => createFolder.mutate()} disabled={createFolder.isPending}>
                       {createFolder.isPending ? '作成中…' : '今すぐフォルダを作る'}
                     </button>
-                    <span className="text-xs text-slate-500">既にある別のフォルダを使うなら「編集」で依頼者フォルダのパスを指定してください</span>
+                    <span className="text-xs text-slate-500">既にある別のフォルダを使うなら、右上の「フォルダを変更」から指定してください</span>
                   </div>
                   {createFolder.error && <div className="mt-1 text-xs text-red-600">{(createFolder.error as Error).message}</div>}
                 </>
@@ -336,5 +356,81 @@ function ContactCard({ c, onEdit }: { c: Detail; onEdit: () => void }) {
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * 依頼者フォルダを直す。
+ * - 別のフォルダを指定: 既にあるフォルダを選ぶ（アプリの指定だけを変える。OneDrive のフォルダはそのまま）
+ * - フォルダ名を変更: OneDrive 上のフォルダの名前そのものを変える（中のファイルはそのまま）
+ */
+function FolderEditor({ clientId, currentPath, currentFolder, exists, onDone, onCancel }: { clientId: number; currentPath: string; currentFolder: string; exists: boolean; onDone: () => void; onCancel: () => void }) {
+  const [mode, setMode] = useState<'pick' | 'rename'>(exists ? 'rename' : 'pick');
+  const currentName = currentFolder.replace(/\/+$/, '').split('/').pop() ?? '';
+  const [path, setPath] = useState(currentPath);
+  const [name, setName] = useState(currentName);
+  const [err, setErr] = useState<string | null>(null);
+  const folders = useQuery({ queryKey: ['drive-folders'], queryFn: () => api.get<{ items: { name: string; isFolder: boolean }[] }>('/drive/folders'), retry: false });
+  const pick = useMutation({
+    mutationFn: () => api.put(`/clients/${clientId}`, { onedriveFolderPath: path.trim() || null }),
+    onSuccess: onDone,
+    onError: (e) => setErr((e as Error).message),
+  });
+  const rename = useMutation({
+    mutationFn: () => api.post<{ from: string; to: string }>(`/clients/${clientId}/folder/rename`, { name: name.trim() }),
+    onSuccess: onDone,
+    onError: (e) => setErr((e as Error).message),
+  });
+  const busy = pick.isPending || rename.isPending;
+  return (
+    <div className="fade-in mb-3 space-y-2 rounded-md border border-blue-200 bg-blue-50/40 p-3 text-sm">
+      <div className="flex flex-wrap items-center gap-3" role="radiogroup" aria-label="フォルダの直し方">
+        <label className="flex items-center gap-1">
+          <input type="radio" name={`folder-mode-${clientId}`} checked={mode === 'rename'} onChange={() => setMode('rename')} disabled={!exists} /> フォルダ名を変更（OneDrive 上の名前も変える）
+        </label>
+        <label className="flex items-center gap-1">
+          <input type="radio" name={`folder-mode-${clientId}`} checked={mode === 'pick'} onChange={() => setMode('pick')} /> 別のフォルダを指定する
+        </label>
+      </div>
+      {mode === 'rename' ? (
+        <form
+          className="flex flex-wrap items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setErr(null);
+            rename.mutate();
+          }}
+        >
+          <input className="input min-w-0 flex-1" value={name} onChange={(e) => setName(e.target.value)} aria-label="新しいフォルダ名" maxLength={200} autoFocus />
+          <button type="submit" className="btn btn-sm btn-primary" disabled={busy || !name.trim() || name.trim() === currentName}>
+            {rename.isPending ? '変更中…' : '名前を変える'}
+          </button>
+          <button type="button" className="btn btn-sm" onClick={onCancel}>
+            やめる
+          </button>
+          <div className="w-full text-xs text-slate-500">中のファイルはそのままです。保存済みファイルの場所の表示も新しい名前に付け替えます。</div>
+        </form>
+      ) : (
+        <form
+          className="flex flex-wrap items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setErr(null);
+            pick.mutate();
+          }}
+        >
+          <input className="input min-w-0 flex-1" list={`client-folders-${clientId}`} value={path} onChange={(e) => setPath(e.target.value)} aria-label="依頼者フォルダのパス" placeholder="例: 1.進行事件/やまだ山田太郎_離婚（空なら氏名から自動）" autoFocus />
+          <datalist id={`client-folders-${clientId}`}>{folders.data?.items.filter((i) => i.isFolder).map((i) => <option key={i.name} value={i.name} />)}</datalist>
+          <button type="submit" className="btn btn-sm btn-primary" disabled={busy || path.trim() === currentPath.trim()}>
+            {pick.isPending ? '保存中…' : 'このフォルダにする'}
+          </button>
+          <button type="button" className="btn btn-sm" onClick={onCancel}>
+            やめる
+          </button>
+          <div className="w-full text-xs text-slate-500">OneDrive で名前を変えたあとに、アプリの指定を合わせるときはこちら。前のフォルダのファイルは移動しません。</div>
+        </form>
+      )}
+      {err && <div className="text-xs text-red-600">{err}</div>}
+    </div>
   );
 }

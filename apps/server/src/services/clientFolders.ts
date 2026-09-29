@@ -1,7 +1,7 @@
 import { eq, sql } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { storage } from '../integrations/storage.js';
-import { isMsConnected, moveItem, getItem, getItemByPath, joinPath } from '../integrations/onedrive.js';
+import { isMsConnected, moveItem, getItem, getItemByPath, joinPath, renameItem } from '../integrations/onedrive.js';
 import { getSetting, setSetting } from './settings.js';
 import { logger } from '../logger.js';
 import { CASE_STATUSES, CASE_STATUS_LABEL, type CaseStatus } from '@lcm/shared';
@@ -275,6 +275,11 @@ export interface FolderRename {
   to: string;
 }
 
+/** 依頼者フォルダの OneDrive 上のパス（「/」で始まる指定は絶対パス、それ以外は依頼者ルートからの相対） */
+function absClientFolder(rel: string): string {
+  return rel.startsWith('/') ? rel : joinPath(storage().clientRoot(), rel);
+}
+
 /** 依頼者フォルダのパスを付け替え、保存済みファイルの表示パスも直す */
 function applyNewFolderPath(client: { id: number; name: string; onedriveFolderPath: string | null }, newRel: string): FolderRename {
   const from = client.onedriveFolderPath ?? '';
@@ -282,8 +287,8 @@ function applyNewFolderPath(client: { id: number; name: string; onedriveFolderPa
   db().update(schema.clients).set({ onedriveFolderPath: newRel, updatedAt: now }).where(eq(schema.clients.id, client.id)).run();
   if (from) {
     // 保存済みファイルの表示用パスも新しいフォルダ名に置き換える（実体は ID で追えているので移動は不要）
-    const oldFolder = joinPath(storage().clientRoot(), from);
-    const newFolder = joinPath(storage().clientRoot(), newRel);
+    const oldFolder = absClientFolder(from);
+    const newFolder = absClientFolder(newRel);
     db()
       .run(sql`update attachments set stored_path = ${newFolder} || substr(stored_path, ${oldFolder.length + 1}) where stored_path like ${oldFolder + '/%'}`);
     db().run(sql`update form_templates set path = ${newFolder} || substr(path, ${oldFolder.length + 1}) where path like ${oldFolder + '/%'}`);
@@ -347,4 +352,59 @@ export async function syncClientFolderNames(): Promise<{ checked: number; rename
     renames.push(applyNewFolderPath(c, newRel));
   }
   return { checked, renamed: renames.length, adopted, renames };
+}
+
+// ---- アプリから依頼者フォルダを指定し直す・名前を変える ----
+
+/**
+ * 画面で依頼者フォルダのパスを指定し直したとき。
+ * 前のフォルダの ID を覚えたままだと、名前変更の追従で前のフォルダに戻されてしまうので、ID を付け直す
+ * （新しいフォルダがまだ無ければ ID は空にしておき、作られたときに控える）。
+ */
+export async function adoptClientFolderPath(clientId: number): Promise<void> {
+  db().update(schema.clients).set({ onedriveItemId: null }).where(eq(schema.clients.id, clientId)).run();
+  const st = storage();
+  if (st.kind !== 'onedrive' || !(await isMsConnected().catch(() => false))) return;
+  const c = db().select().from(schema.clients).where(eq(schema.clients.id, clientId)).get();
+  const rel = c?.onedriveFolderPath?.trim() ?? '';
+  if (!c || !rel) return;
+  const item = await getItemByPath(absClientFolder(rel)).catch(() => null);
+  if (item) rememberClientFolderId(clientId, item.id);
+}
+
+/** OneDrive で使えない文字（" * : < > ? / \ |）と、前後の空白・末尾の「.」 */
+export function validateFolderName(name: string): string {
+  const n = name.trim();
+  if (!n) throw new Error('フォルダ名を入力してください');
+  if (/["*:<>?/\\|]/.test(n)) throw new Error('フォルダ名に " * : < > ? / \\ | は使えません');
+  if (n.endsWith('.')) throw new Error('フォルダ名の最後に「.」は付けられません');
+  if (n.length > 200) throw new Error('フォルダ名が長すぎます');
+  return n;
+}
+
+/**
+ * 依頼者フォルダそのものの名前を OneDrive 上で変える（場所は変えない）。
+ * アプリ側のパスと、保存済みファイルの表示パスも新しい名前に付け替える。
+ */
+export async function renameClientFolder(clientId: number, newName: string): Promise<FolderRename> {
+  const name = validateFolderName(newName);
+  const st = storage();
+  if (st.kind !== 'onedrive') throw new Error('フォルダ名の変更は OneDrive を使っているときだけできます');
+  if (!(await isMsConnected())) throw new Error('OneDrive に接続していません。初期設定から接続してください');
+  const c = db().select().from(schema.clients).where(eq(schema.clients.id, clientId)).get();
+  if (!c) throw new Error('依頼者が見つかりません');
+  const rel = c.onedriveFolderPath?.trim() || defaultClientFolderRel(c);
+  const item = (c.onedriveItemId ? await getItem(c.onedriveItemId).catch(() => null) : null) ?? (await getItemByPath(absClientFolder(rel)).catch(() => null));
+  if (!item || item.deleted) throw new Error('OneDrive にこの依頼者のフォルダが見つかりません。先にフォルダを作るか、別のフォルダを指定してください');
+  if (item.name === name) return { clientId, clientName: c.name, from: rel, to: rel };
+  try {
+    await renameItem(item.id, name);
+  } catch (err) {
+    if (/ 409 /.test((err as Error).message)) throw new Error(`同じ場所に「${name}」というフォルダがすでにあります`);
+    throw err;
+  }
+  rememberClientFolderId(clientId, item.id);
+  // 場所は変えないので、パスの最後だけを新しい名前にする
+  const newRel = rel.replace(/[^/]+\/*$/, name);
+  return applyNewFolderPath({ ...c, onedriveFolderPath: rel }, newRel);
 }

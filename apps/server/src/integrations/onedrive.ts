@@ -300,6 +300,15 @@ export async function moveItem(itemId: string, newFolderPath: string, newName?: 
   });
 }
 
+/** 名前だけ変える（同じ名前が既にあれば失敗させる。勝手に「(1)」を付けない） */
+export async function renameItem(itemId: string, newName: string): Promise<DriveItem> {
+  return graph<DriveItem>(`/me/drive/items/${itemId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: newName, '@microsoft.graph.conflictBehavior': 'fail' }),
+  });
+}
+
 export async function deleteItem(itemId: string): Promise<void> {
   await graph<void>(`/me/drive/items/${itemId}`, { method: 'DELETE' });
 }
