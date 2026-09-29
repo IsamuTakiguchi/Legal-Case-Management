@@ -15,7 +15,8 @@ import { listCaseTypes, upsertCaseType, createCase, updateCase, listCases, getCa
 import * as creditors from '../services/creditors.js';
 import { onedriveCandidates, chatworkCandidates, applyImport, deleteClient } from '../services/clientImport.js';
 import { findDuplicateClients, mergeClients } from '../services/clientMerge.js';
-import { clientFolderParents, defaultClientFolderRel, syncClientFolderName, syncClientFolderNames, rememberClientFolderId } from '../services/clientFolders.js';
+import { clientFolderParents, defaultClientFolderRel, syncClientFolderName, syncClientFolderNames, rememberClientFolderId, adoptClientFolderPath, renameClientFolder } from '../services/clientFolders.js';
+import { logger } from '../logger.js';
 import { listContacts, createContact, updateContact, deleteContact, contactBriefs } from '../services/contacts.js';
 import { prepareHearingNotice } from '../services/hearingNotice.js';
 import { listCaseHolds, attachHoldSetToCase } from '../services/court.js';
@@ -127,12 +128,23 @@ clientRoutes.put('/clients/:id', async (c) => {
   // 実際に送られてきた項目だけを書き換える
   const input = Object.fromEntries(Object.entries(parsed).filter(([k]) => k in raw)) as typeof parsed;
   if (input.lineUserId) assertLineFriendFree(input.lineUserId, id);
+  const before = db().select({ path: schema.clients.onedriveFolderPath }).from(schema.clients).where(eq(schema.clients.id, id)).get();
   db().update(schema.clients)
     .set({ ...input, ...(input.emails ? { emails: normalizeEmails(input.emails) } : {}), ...(input.phones ? { phones: normalizePhones(input.phones) } : {}), updatedAt: new Date().toISOString() })
     .where(eq(schema.clients.id, id))
     .run();
   if (input.lineUserId) linkLineFriendToClient(input.lineUserId, id);
+  // 依頼者フォルダを指定し直したら、前のフォルダの ID を忘れて新しいフォルダを追う（前のフォルダに戻されないように）
+  if ('onedriveFolderPath' in input && (input.onedriveFolderPath?.trim() ?? '') !== (before?.path?.trim() ?? '')) {
+    await adoptClientFolderPath(id).catch((err) => logger.warn({ err, clientId: id }, '依頼者フォルダの ID を控えられませんでした'));
+  }
   return c.json(db().select().from(schema.clients).where(eq(schema.clients.id, id)).get());
+});
+
+/** 依頼者フォルダの名前を OneDrive 上で変える（アプリのパスと保存済みファイルの表示も付け替える） */
+clientRoutes.post('/clients/:id/folder/rename', async (c) => {
+  const body = z.object({ name: z.string().min(1).max(200) }).parse(await c.req.json());
+  return c.json(await renameClientFolder(Number(c.req.param('id')), body.name));
 });
 
 clientRoutes.post('/clients/:id/archive', async (c) => {
