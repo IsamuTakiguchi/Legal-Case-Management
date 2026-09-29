@@ -6,7 +6,7 @@ import { useDraftRecord, clearDraft, DraftHint } from '../lib/draft';
 import { channelBadge, channelLabel, fmtDateTime, fmtBytes } from '../lib/format';
 import { Icon } from '../lib/icons';
 import { ClientForm, clientFormDraftKey, type ClientRow } from './Clients';
-import { EVENT_KIND_LABEL, TASK_STATUS_LABEL, type EventKind, type TaskStatus, CASE_STATUSES, CASE_STATUS_LABEL, telHref } from '@lcm/shared';
+import { EVENT_KIND_LABEL, TASK_STATUS_LABEL, type EventKind, type TaskStatus, CASE_STATUSES, CASE_STATUS_LABEL, telHref, representativeLabel } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
 import { LineInvitePanel } from '../lib/LineInvite';
 
@@ -69,6 +69,7 @@ export default function ClientDetail() {
           ← 依頼者
         </Link>
         <h1 className="text-xl font-bold">{c.name}</h1>
+        {c.entityType === 'corporation' && <span className="badge badge-gray">法人</span>}
         {c.kana && <span className="text-sm text-slate-500">{c.kana}</span>}
         <button className="btn btn-sm ml-auto" onClick={() => setEdit(!edit)}>
           編集
@@ -281,6 +282,15 @@ function ContactCard({ c, onEdit }: { c: Detail; onEdit: () => void }) {
         </button>
       </div>
       <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[6rem_1fr]">
+        {c.entityType === 'corporation' && (
+          <>
+            <dt className="text-slate-500">代表者</dt>
+            <dd>
+              {representativeLabel(c) ?? <span className="text-slate-400">未登録</span>}
+              {c.representativeKana && <span className="ml-2 text-xs text-slate-500">{c.representativeKana}</span>}
+            </dd>
+          </>
+        )}
         <dt className="text-slate-500">電話</dt>
         <dd className="flex flex-wrap items-center gap-x-3 gap-y-1">
           {(c.phones ?? []).length ? (

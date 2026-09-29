@@ -222,6 +222,6 @@ export function searchClients(q: string) {
   return db()
     .select()
     .from(schema.clients)
-    .where(or(like(schema.clients.name, pat), like(schema.clients.kana, pat)))
+    .where(or(like(schema.clients.name, pat), like(schema.clients.kana, pat), like(schema.clients.representativeName, pat), like(schema.clients.representativeKana, pat)))
     .all();
 }

@@ -145,7 +145,7 @@ export function searchAll(query: string, opts: SearchOptions = {}): SearchHit[] 
   const hits: SearchHit[] = [];
 
   // 名前を引くための対応表（どの種類からも依頼者名・事件名を出せるように）
-  const clients = d.select({ id: schema.clients.id, name: schema.clients.name, kana: schema.clients.kana, aliases: schema.clients.aliases, phones: schema.clients.phones, notes: schema.clients.notes }).from(schema.clients).all();
+  const clients = d.select({ id: schema.clients.id, name: schema.clients.name, kana: schema.clients.kana, aliases: schema.clients.aliases, phones: schema.clients.phones, notes: schema.clients.notes, representativeName: schema.clients.representativeName, representativeKana: schema.clients.representativeKana }).from(schema.clients).all();
   const clientName = new Map(clients.map((c) => [c.id, c.name]));
   const cases = d
     .select({ id: schema.cases.id, title: schema.cases.title, clientId: schema.cases.clientId, summary: schema.cases.summary, policy: schema.cases.policy, stage: schema.cases.stage, courtName: schema.cases.courtName, caseNumber: schema.cases.caseNumber })
@@ -165,14 +165,14 @@ export function searchAll(query: string, opts: SearchOptions = {}): SearchHit[] 
           kind: 'client',
           id: c.id,
           title: c.name,
-          snippet: snippetAround([c.kana, ...(c.aliases ?? []), ...(c.phones ?? []), c.notes ?? ''].filter(Boolean).join(' / '), terms),
+          snippet: snippetAround([c.kana, c.representativeName ? `代表者 ${c.representativeName}` : '', ...(c.aliases ?? []), ...(c.phones ?? []), c.notes ?? ''].filter(Boolean).join(' / '), terms),
           at: null,
           clientName: c.name,
           caseTitle: null,
           link: `/clients/${c.id}`,
         },
         // 電話番号は書いたままの形と、数字だけの形の両方で当てる
-        [c.name, c.kana ?? '', ...(c.aliases ?? []), ...(c.phones ?? []), ...(c.phones ?? []).map(phoneDigits), c.notes ?? ''].join(' '),
+        [c.name, c.kana ?? '', c.representativeName ?? '', c.representativeKana ?? '', ...(c.aliases ?? []), ...(c.phones ?? []), ...(c.phones ?? []).map(phoneDigits), c.notes ?? ''].join(' '),
       );
     }
   }

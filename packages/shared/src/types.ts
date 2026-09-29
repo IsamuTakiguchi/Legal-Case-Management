@@ -92,9 +92,28 @@ export type CaseContactInput = z.infer<typeof caseContactInputSchema>;
 export const SCHEDULING_KINDS = ['面談', 'WEB', '打合せ', '期日'] as const;
 export type SchedulingKind = (typeof SCHEDULING_KINDS)[number];
 
+export const CLIENT_ENTITY_TYPES = ['individual', 'corporation'] as const;
+export type ClientEntityType = (typeof CLIENT_ENTITY_TYPES)[number];
+export const CLIENT_ENTITY_TYPE_LABEL: Record<ClientEntityType, string> = { individual: '個人', corporation: '法人' };
+
+/** 名前から法人らしいかを見る（登録画面で「法人」を最初から選んでおくため） */
+export function looksLikeCorporation(name: string | null | undefined): boolean {
+  return /株式会社|有限会社|合同会社|合名会社|合資会社|(一般|公益)(社団|財団)法人|社会福祉法人|医療法人|学校法人|宗教法人|特定非営利活動法人|NPO法人|協同組合|組合|(（|\()(株|有|同)(）|\))|㈱|㈲/.test(name ?? '');
+}
+
+/** 代表者の表示（「代表取締役 山田太郎」）。法人でない・未登録なら null */
+export function representativeLabel(c: { entityType?: string | null; representativeTitle?: string | null; representativeName?: string | null }): string | null {
+  if (c.entityType !== 'corporation' || !c.representativeName?.trim()) return null;
+  return [c.representativeTitle?.trim(), c.representativeName.trim()].filter(Boolean).join(' ');
+}
+
 export const clientInputSchema = z.object({
   name: z.string().min(1),
   kana: z.string().optional().nullable(),
+  entityType: z.enum(CLIENT_ENTITY_TYPES).optional(),
+  representativeTitle: z.string().trim().max(60).optional().nullable(),
+  representativeName: z.string().trim().max(100).optional().nullable(),
+  representativeKana: z.string().trim().max(100).optional().nullable(),
   aliases: z.array(z.string()).default([]),
   emails: z.array(z.string().email()).default([]),
   /** 電話番号（携帯・自宅・勤務先など複数可。入力されたままの形で持つ） */

@@ -4,7 +4,7 @@ import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useDraftRecord, clearDraft, DraftHint } from '../lib/draft';
 import { LineFriendPicker } from '../lib/LineFriendPicker';
-import { CHANNEL_LABEL, splitPhones } from '@lcm/shared';
+import { CHANNEL_LABEL, splitPhones, looksLikeCorporation, representativeLabel, type ClientEntityType } from '@lcm/shared';
 import { useSort, readingKey, SortHeader, type SortOption } from '../lib/sort';
 
 const CLIENT_SORTS: SortOption<ClientRow>[] = [
@@ -18,6 +18,12 @@ export interface ClientRow {
   id: number;
   name: string;
   kana: string | null;
+  /** individual=個人 / corporation=法人 */
+  entityType?: ClientEntityType;
+  /** 法人の代表者 */
+  representativeTitle?: string | null;
+  representativeName?: string | null;
+  representativeKana?: string | null;
   aliases: string[];
   emails: string[];
   /** 電話番号（携帯・自宅・勤務先など） */
@@ -149,6 +155,7 @@ export default function Clients() {
                     {c.name}
                   </Link>
                   {c.kana && <span className="ml-2 text-xs text-slate-500">{c.kana}</span>}
+                  {representativeLabel(c) && <div className="text-xs text-slate-500">代表者: {representativeLabel(c)}</div>}
                 </td>
                 <td className="px-4 py-2 text-xs">
                   {c.emails.length > 0 && <span className="badge badge-gmail mr-1">Gmail</span>}
@@ -196,6 +203,9 @@ export function ClientForm({
   const draft = useDraftRecord(clientFormDraftKey(initial.id), f as Record<string, unknown>, (v) => setF(v as Partial<ClientRow>), base as Record<string, unknown>);
   const folders = useQuery({ queryKey: ['drive-folders'], queryFn: () => api.get<{ path: string; items: { name: string; isFolder: boolean }[] }>('/drive/folders'), retry: false });
   const set = (k: keyof ClientRow, v: unknown) => setF({ ...f, [k]: v });
+  // 個人か法人か。まだ選んでいなければ、名前から推定する（「株式会社」などが付けば法人）
+  const entityType: ClientEntityType = f.entityType ?? (looksLikeCorporation(f.name) ? 'corporation' : 'individual');
+  const corp = entityType === 'corporation';
   // 電話番号の欄は入力中の文字をそのまま見せる（区切りのカンマを打った途端に消えないように）
   const [phoneText, setPhoneText] = useState((base.phones ?? []).join(', '));
   // 下書きを復元したときなど、外から番号が変わったら欄にも反映する
@@ -209,17 +219,51 @@ export function ClientForm({
       className="card grid gap-3 md:grid-cols-2"
       onSubmit={(e) => {
         e.preventDefault();
-        onSubmit(f);
+        // 代表者の肩書を空のまま登録したら「代表取締役」にしておく
+        const title = corp && f.representativeName?.trim() && !f.representativeTitle?.trim() ? '代表取締役' : f.representativeTitle;
+        onSubmit({ ...f, entityType, representativeTitle: title ?? null });
       }}
     >
+      <div className="flex flex-wrap items-center gap-4 md:col-span-2" role="radiogroup" aria-label="個人・法人">
+        <span className="label mb-0">区分</span>
+        <label className="flex items-center gap-1 text-sm">
+          <input type="radio" name="entityType" checked={!corp} onChange={() => set('entityType', 'individual')} /> 個人
+        </label>
+        <label className="flex items-center gap-1 text-sm">
+          <input type="radio" name="entityType" checked={corp} onChange={() => set('entityType', 'corporation')} /> 法人
+        </label>
+        {!f.entityType && corp && <span className="text-xs text-slate-500">名前から法人と判断しました（違えば「個人」を選んでください）</span>}
+      </div>
       <div>
-        <label className="label">氏名（必須）</label>
-        <input className="input" required value={f.name ?? ''} onChange={(e) => set('name', e.target.value)} />
+        <label className="label">{corp ? '法人名（必須）' : '氏名（必須）'}</label>
+        <input className="input" required value={f.name ?? ''} onChange={(e) => set('name', e.target.value)} placeholder={corp ? '例: 株式会社のぼりおおじ' : ''} />
       </div>
       <div>
         <label className="label">かな</label>
         <input className="input" value={f.kana ?? ''} onChange={(e) => set('kana', e.target.value)} />
       </div>
+      {corp && (
+        <fieldset className="grid gap-3 rounded-md border border-slate-200 p-3 md:col-span-2 md:grid-cols-3">
+          <legend className="px-1 text-xs font-semibold text-slate-600">代表者</legend>
+          <div>
+            <label className="label">肩書</label>
+            <input className="input" list="rep-titles" value={f.representativeTitle ?? ''} onChange={(e) => set('representativeTitle', e.target.value)} placeholder="代表取締役" />
+            <datalist id="rep-titles">
+              {['代表取締役', '代表取締役社長', '代表社員', '代表理事', '理事長', '組合長', '代表者'].map((t) => (
+                <option key={t} value={t} />
+              ))}
+            </datalist>
+          </div>
+          <div>
+            <label className="label">氏名</label>
+            <input className="input" value={f.representativeName ?? ''} onChange={(e) => set('representativeName', e.target.value)} placeholder="例: 山田 太郎" />
+          </div>
+          <div>
+            <label className="label">かな</label>
+            <input className="input" value={f.representativeKana ?? ''} onChange={(e) => set('representativeKana', e.target.value)} placeholder="例: やまだ たろう" />
+          </div>
+        </fieldset>
+      )}
       <div>
         <label className="label">別名（カレンダーの表記など・カンマ区切り）</label>
         <input className="input" value={(f.aliases ?? []).join(', ')} onChange={(e) => set('aliases', e.target.value.split(/[,、]/).map((s) => s.trim()).filter(Boolean))} />
