@@ -12,6 +12,7 @@ import { yyyymmdd, CHANNEL_LABEL, type Channel } from '@lcm/shared';
 import { logger } from '../logger.js';
 import { defaultClientFolderRel, syncClientFolderName } from './clientFolders.js';
 import { isGenericFilename, suggestFilename } from './fileNaming.js';
+import { dropPreviewCache } from './previewCache.js';
 
 export function clientFolder(client: { id?: number; name: string; onedriveFolderPath: string | null }): string {
   const root = storage().clientRoot();
@@ -295,6 +296,7 @@ export async function ignoreAttachment(attachmentId: number): Promise<void> {
       .catch((err) => logger.warn({ err, id: attachmentId }, '未振分ファイルの削除に失敗'));
   }
   removeStaged(att);
+  dropPreviewCache(attachmentId);
   d.update(schema.attachments).set({ status: 'ignored', storedPath: null, driveItemId: null, error: null }).where(eq(schema.attachments.id, attachmentId)).run();
   resolveAlertsByKeyPrefix(`unassigned_file:${attachmentId}`);
 }

@@ -14,6 +14,7 @@ import { quickSendTimes } from '../lib/sendTimes';
 import { DeadlineEditor, TaskDeadlineSelect, WaitDeadlineSelect } from '../lib/Deadline';
 import { SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply, messageLink, type EventKind } from '@lcm/shared';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
+import { AttachmentImage, canPreviewImage } from '../lib/AttachmentImage';
 
 /** Chatwork の取込理由の表示名（設定画面の診断と同じ） */
 const SCOPE_REASON_LABEL: Record<string, string> = {
@@ -29,6 +30,7 @@ const SCOPE_REASON_LABEL: Record<string, string> = {
 interface Attachment {
   id: number;
   filename: string;
+  mime?: string | null;
   size: number | null;
   status: string;
   storedPath: string | null;
@@ -499,6 +501,13 @@ export default function Conversation() {
                 )}
                 {c.cases.length >= 2 && !c.contact && <CaseTag m={m} cases={c.cases} out={m.direction === 'out'} onChanged={invalidate} />}
                 {c.channel === 'chatwork' && m.direction === 'in' && <MessageTools m={m} onChanged={invalidate} />}
+                {m.attachments.some(canPreviewImage) && (
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {m.attachments.filter(canPreviewImage).map((a) => (
+                      <AttachmentImage key={a.id} a={a} />
+                    ))}
+                  </div>
+                )}
                 {m.attachments.length > 0 && (
                   <ul className="mt-1 space-y-0.5">
                     {m.attachments.map((a) => (
