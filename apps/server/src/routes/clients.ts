@@ -5,13 +5,13 @@ import { isConfigured } from '../config.js';
 import { z } from 'zod';
 import { eq, desc } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { normalizePhones, clientInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputSchema, creditorEventInputSchema, CREDITOR_IMPORT_FIELDS, caseContactInputSchema, staffAskDraftSchema, staffAskSendSchema, TASK_STATUSES, EVENT_KINDS, looksLikeCorporation } from '@lcm/shared';
+import { normalizePhones, clientInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputSchema, creditorEventInputSchema, CREDITOR_IMPORT_FIELDS, caseContactInputSchema, staffAskDraftSchema, staffAskSendSchema, TASK_STATUSES, EVENT_KINDS, CASE_STATUSES, looksLikeCorporation } from '@lcm/shared';
 import { searchClients } from '../services/identity.js';
 import { storage, FolderNotFoundError } from '../integrations/storage.js';
 import { clientFolder } from '../services/attachments.js';
 import { proposeScheduleFromNote, registerScheduleFromNote } from '../services/noteSchedule.js';
 import { staffAskContext, draftStaffAsk, sendStaffAsk, type StaffAskSource } from '../services/staffAsk.js';
-import { listCaseTypes, upsertCaseType, createCase, updateCase, listCases, getCase, caseTimeline, addCaseNote, updateCaseNote, deleteCaseNote, generateCaseSummary, structureNote, restructureNote, createTasksFromNote, suggestNoteTasks } from '../services/cases.js';
+import { listCaseTypes, upsertCaseType, createCase, updateCase, bulkUpdateCases, listCases, getCase, caseTimeline, addCaseNote, updateCaseNote, deleteCaseNote, generateCaseSummary, structureNote, restructureNote, createTasksFromNote, suggestNoteTasks } from '../services/cases.js';
 import * as creditors from '../services/creditors.js';
 import { onedriveCandidates, chatworkCandidates, applyImport, deleteClient } from '../services/clientImport.js';
 import { findDuplicateClients, mergeClients } from '../services/clientMerge.js';
@@ -332,6 +332,21 @@ clientRoutes.get('/chatwork/rooms', async (c) => {
   if (!isConfigured('chatwork')) return c.json([]);
   const rooms = await listRooms();
   return c.json(rooms.filter((r) => r.type !== 'my').map((r) => ({ roomId: r.room_id, name: r.name, type: r.type })));
+});
+
+/** 一覧でチェックした事件をまとめて変更する（区分・担当事務局・事件類型） */
+clientRoutes.post('/cases/bulk', async (c) => {
+  const body = z
+    .object({
+      ids: z.array(z.number().int()).min(1).max(500),
+      status: z.enum(CASE_STATUSES).optional(),
+      staffId: z.number().int().nullable().optional(),
+      caseType: z.string().min(1).optional(),
+    })
+    .refine((b) => b.status !== undefined || b.staffId !== undefined || b.caseType !== undefined, '変更する項目を指定してください')
+    .parse(await c.req.json());
+  const { ids, ...patch } = body;
+  return c.json(bulkUpdateCases(ids, patch));
 });
 
 clientRoutes.put('/cases/:id', async (c) => {

@@ -51,7 +51,11 @@ export function createCase(input: CaseInput & { caseType?: string; stage?: strin
   return row;
 }
 
-export function updateCase(id: number, patch: Partial<CaseInput & { caseType: string; stage: string | null; policy: string | null; staffId: number | null; chatworkRoomId: number | null; accidentDate: string | null }>): CaseRow {
+export function updateCase(
+  id: number,
+  patch: Partial<CaseInput & { caseType: string; stage: string | null; policy: string | null; staffId: number | null; chatworkRoomId: number | null; accidentDate: string | null }>,
+  opts: { syncFolder?: boolean } = {},
+): CaseRow {
   const cur = db().select().from(schema.cases).where(eq(schema.cases.id, id)).get();
   if (!cur) throw new Error('事件が見つかりません');
   const now = new Date().toISOString();
@@ -74,13 +78,46 @@ export function updateCase(id: number, patch: Partial<CaseInput & { caseType: st
       .run();
   }
   db().update(schema.cases).set(set).where(eq(schema.cases.id, id)).run();
-  if (patch.status !== undefined && patch.status !== cur.status) {
+  if (patch.status !== undefined && patch.status !== cur.status && opts.syncFolder !== false) {
     // 区分フォルダ運用なら、依頼者フォルダを新しい区分へ移動（非同期・失敗してもログのみ）
     setImmediate(() => {
       syncClientFolderWithStatus(cur.clientId, id).catch((err) => logger.warn({ err, caseId: id }, '依頼者フォルダの移動に失敗'));
     });
   }
   return db().select().from(schema.cases).where(eq(schema.cases.id, id)).get()!;
+}
+
+export type CaseBulkPatch = { status?: CaseStatus; staffId?: number | null; caseType?: string };
+
+/**
+ * 一覧でチェックした事件をまとめて変更する（区分・担当事務局・事件類型）。
+ * 区分を変えたときの依頼者フォルダの移動は、依頼者ごとに 1 回ずつ順番に行う（同じフォルダを同時に動かさない）
+ */
+export function bulkUpdateCases(ids: number[], patch: CaseBulkPatch): { updated: number } {
+  if (patch.caseType !== undefined && !db().select().from(schema.caseTypes).where(eq(schema.caseTypes.key, patch.caseType)).get()) throw new Error('事件類型が見つかりません');
+  if (patch.staffId && !db().select().from(schema.staffMembers).where(eq(schema.staffMembers.id, patch.staffId)).get()) throw new Error('事務局メンバーが見つかりません');
+  let updated = 0;
+  const moved = new Set<number>();
+  for (const id of [...new Set(ids)]) {
+    const cur = db().select().from(schema.cases).where(eq(schema.cases.id, id)).get();
+    if (!cur) continue;
+    const change: CaseBulkPatch = {};
+    if (patch.status !== undefined && patch.status !== cur.status) change.status = patch.status;
+    if (patch.staffId !== undefined && patch.staffId !== cur.staffId) change.staffId = patch.staffId;
+    if (patch.caseType !== undefined && patch.caseType !== cur.caseType) change.caseType = patch.caseType;
+    if (!Object.keys(change).length) continue;
+    updateCase(id, change, { syncFolder: false });
+    if (change.status) moved.add(cur.clientId);
+    updated++;
+  }
+  if (moved.size) {
+    setImmediate(async () => {
+      for (const clientId of moved) {
+        await syncClientFolderWithStatus(clientId).catch((err) => logger.warn({ err, clientId }, '依頼者フォルダの移動に失敗'));
+      }
+    });
+  }
+  return { updated };
 }
 
 /** 区分ごとの事件の件数（相談・進行事件・残務処理・終了事件）。ダッシュボードで使う */
