@@ -52,6 +52,7 @@ export default function Cases() {
   });
   const setStatus = (v: string) => {
     setStatusState(v);
+    setSelected(new Set());
     const u = new URL(location.href);
     u.searchParams.set('status', v || 'all');
     history.replaceState(history.state, '', `${u.pathname}${u.search}`);
@@ -59,6 +60,9 @@ export default function Cases() {
   const [creating, setCreating] = useState(false);
   const [q, setQ] = useState('');
   const all = useQuery({ queryKey: ['cases', 'all'], queryFn: () => api.get<CaseRow[]>('/cases') });
+  // チェックした事件（まとめて区分・担当事務局・類型を変える）
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkMsg, setBulkMsg] = useState('');
   const sort = useSort('cases', CASE_SORTS, 'client');
   // 依頼者名・かな・事件名・事件番号・裁判所・類型をまとめてテキスト検索（カタカナはひらがなに寄せる）
   const hira = (t: string) => t.replace(/[ァ-ヶ]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0x60)).replace(/[\s　]/g, '').toLowerCase();
@@ -70,6 +74,16 @@ export default function Cases() {
   };
   const searched = (all.data ?? []).filter(matches);
   const rows = sort.apply(searched.filter((c) => !status || c.status === status));
+  // 絞り込みで見えなくなった行は選択に数えない
+  const picked = rows.filter((c) => selected.has(c.id));
+  const allPicked = rows.length > 0 && picked.length === rows.length;
+  const toggle = (id: number, on: boolean) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
   const counts: Record<string, number> = {};
   for (const c of searched) counts[c.status] = (counts[c.status] ?? 0) + 1;
   const H = (label: string, key: string) => <SortHeader label={label} sortKey={key} current={sort.key} desc={sort.desc} onClick={sort.setKey} />;
@@ -101,10 +115,24 @@ export default function Cases() {
         </button>
         {q && <span className="self-center text-xs text-slate-500">「{q}」で検索中</span>}
       </div>
-      <div className="card p-0">
+      <CaseBulkBar
+        ids={picked.map((c) => c.id)}
+        onClear={() => setSelected(new Set())}
+        onDone={(msg) => {
+          setBulkMsg(msg);
+          setSelected(new Set());
+        }}
+      />
+      {bulkMsg && picked.length === 0 && <div className="fade-in text-xs text-green-700">{bulkMsg}</div>}
+      <div className="card overflow-x-auto p-0">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-left text-xs text-slate-500">
             <tr>
+              <th className="w-px py-2 pl-4">
+                <input type="checkbox" checked={allPicked} ref={(el) => {
+                    if (el) el.indeterminate = picked.length > 0 && !allPicked;
+                  }} onChange={(e) => setSelected(e.target.checked ? new Set(rows.map((c) => c.id)) : new Set())} aria-label="表示中の事件をすべて選択" />
+              </th>
               <th className="px-4 py-2">{H('事件名', 'title')}</th>
               <th className="px-4 py-2">{H('依頼者', 'client')}</th>
               <th className="px-4 py-2">区分</th>
@@ -117,7 +145,10 @@ export default function Cases() {
           </thead>
           <tbody>
             {rows.map((c) => (
-              <tr key={c.id} className="border-t border-slate-100 hover:bg-slate-50">
+              <tr key={c.id} className={`border-t border-slate-100 hover:bg-slate-50 ${selected.has(c.id) ? 'bg-blue-50/60' : ''}`}>
+                <td className="py-2 pl-4">
+                  <input type="checkbox" checked={selected.has(c.id)} onChange={(e) => toggle(c.id, e.target.checked)} aria-label={`${c.title}（${c.clientName}）を選択`} />
+                </td>
                 <td className="px-4 py-2">
                   <Link to={`/cases/${c.id}`} className="font-medium text-blue-700 hover:underline">
                     {c.title}
@@ -144,7 +175,7 @@ export default function Cases() {
             ))}
             {all.data && rows.length === 0 && (
               <tr>
-                <td className="px-4 py-4 text-slate-500" colSpan={8}>
+                <td className="px-4 py-4 text-slate-500" colSpan={9}>
                   {q ? `「${q}」に一致する事件はありません${status ? `（${CASE_STATUS_LABEL[status as CaseStatus]}の中）` : ''}。` : status ? `「${CASE_STATUS_LABEL[status as CaseStatus]}」の事件はありません。` : '事件がありません。「＋ 新規事件」から追加してください。'}
                 </td>
               </tr>
@@ -152,6 +183,88 @@ export default function Cases() {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+/**
+ * チェックした事件をまとめて変更する（区分・担当事務局・事件類型）。
+ * 区分を変えると、区分フォルダ運用なら依頼者フォルダも移動する
+ */
+function CaseBulkBar({ ids, onClear, onDone }: { ids: number[]; onClear: () => void; onDone: (msg: string) => void }) {
+  const qc = useQueryClient();
+  const types = useQuery({ queryKey: ['case-types'], queryFn: () => api.get<{ key: string; label: string }[]>('/case-types') });
+  const staff = useQuery({ queryKey: ['staff'], queryFn: () => api.get<{ id: number; name: string }[]>('/staff') });
+  const [err, setErr] = useState('');
+  const run = useMutation({
+    mutationFn: (v: { patch: { status?: CaseStatus; staffId?: number | null; caseType?: string }; label: string }) => api.post<{ updated: number }>('/cases/bulk', { ids, ...v.patch }),
+    onSuccess: (r, v) => {
+      setErr('');
+      qc.invalidateQueries({ queryKey: ['cases'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      onDone(r.updated ? `${r.updated} 件を${v.label}` : '変更はありませんでした（すでに同じ内容です）');
+    },
+    onError: (e) => setErr((e as Error).message),
+  });
+  if (!ids.length) return <div className="text-xs text-slate-400">チェックを付けると、まとめて区分・担当事務局・事件類型を変えられます</div>;
+  const setStatusTo = (st: CaseStatus) => {
+    if (st === 'closed' && !confirm(`${ids.length} 件を「終了事件」にしますか？（区分フォルダで管理していれば、依頼者フォルダも終了事件のフォルダへ移ります）`)) return;
+    run.mutate({ patch: { status: st }, label: `「${CASE_STATUS_LABEL[st]}」にしました` });
+  };
+  return (
+    <div className="fade-in card flex flex-wrap items-center gap-2 border-blue-200 py-2 text-sm">
+      <span className="font-medium text-slate-700">{ids.length} 件を選択中</span>
+      <span className="text-xs text-slate-500">区分:</span>
+      {CASE_STATUSES.map((st) => (
+        <button key={st} type="button" className="btn btn-sm" onClick={() => setStatusTo(st)} disabled={run.isPending}>
+          {CASE_STATUS_LABEL[st]}
+        </button>
+      ))}
+      <select
+        className="input w-auto py-1 text-xs"
+        value=""
+        onChange={(e) => {
+          const v = e.target.value;
+          if (!v) return;
+          const staffId = v === 'none' ? null : Number(v);
+          const name = staffId ? staff.data?.find((x) => x.id === staffId)?.name : null;
+          run.mutate({ patch: { staffId }, label: name ? `担当事務局「${name}」にしました` : '担当事務局なしにしました' });
+        }}
+        disabled={run.isPending}
+        aria-label="担当事務局をまとめて設定"
+      >
+        <option value="">担当事務局を設定…</option>
+        {staff.data?.map((x) => (
+          <option key={x.id} value={x.id}>
+            {x.name}
+          </option>
+        ))}
+        <option value="none">（担当なしにする）</option>
+      </select>
+      <select
+        className="input w-auto py-1 text-xs"
+        value=""
+        onChange={(e) => {
+          const key = e.target.value;
+          if (!key) return;
+          const label = types.data?.find((t) => t.key === key)?.label ?? key;
+          run.mutate({ patch: { caseType: key }, label: `事件類型「${label}」にしました` });
+        }}
+        disabled={run.isPending}
+        aria-label="事件類型をまとめて変更"
+      >
+        <option value="">事件類型を変更…</option>
+        {types.data?.map((t) => (
+          <option key={t.key} value={t.key}>
+            {t.label}
+          </option>
+        ))}
+      </select>
+      <button type="button" className="btn btn-sm text-slate-500" onClick={onClear}>
+        選択解除
+      </button>
+      {run.isPending && <span className="loading-text text-xs text-slate-500">変更中…</span>}
+      {err && <span className="text-xs text-red-600">{err}</span>}
     </div>
   );
 }
