@@ -6,6 +6,7 @@ import { useDraft, DraftHint } from './draft';
 import { ClientPicker } from './ClientPicker';
 import { fmtDateTime } from './format';
 import { messageLink } from '@lcm/shared';
+import { ClientContactSetup } from './ClientContactSetup';
 
 type ConfirmChannel = 'gmail' | 'line';
 
@@ -26,6 +27,7 @@ interface ConfirmCtx {
   staffReplyText: string;
   sent: { channel: ConfirmChannel; conversationId: number; at: string }[];
   blocked: string | null;
+  needsContact?: boolean;
 }
 
 const LABEL: Record<ConfirmChannel, string> = { gmail: 'Gmail', line: 'LINE' };
@@ -171,7 +173,16 @@ export function ClientConfirmPanel({ messageId, onClose, onSent }: { messageId: 
             )}
           </div>
 
-          {d.blocked ? (
+          {d.needsContact && d.clientId ? (
+            <ClientContactSetup
+              clientId={d.clientId}
+              channels={['gmail', 'line']}
+              onSaved={() => {
+                autoDrafted.current = false;
+                ctx.refetch();
+              }}
+            />
+          ) : d.blocked ? (
             <div className="rounded-md bg-orange-50 px-3 py-2 text-xs text-orange-800">
               {d.blocked}
               {d.clientId && (

@@ -19,7 +19,7 @@ import { clientFolderParents, defaultClientFolderRel, syncClientFolderName, sync
 import { logger } from '../logger.js';
 import { listContacts, createContact, updateContact, deleteContact, contactBriefs } from '../services/contacts.js';
 import { readContactMemo, importContactMemo } from '../services/contactMemo.js';
-import { prepareHearingNotice } from '../services/hearingNotice.js';
+import { prepareHearingNotice, ClientUnreachableError, clientReachability } from '../services/hearingNotice.js';
 import { listCaseHolds, attachHoldSetToCase } from '../services/court.js';
 import { joinPath, getItemByPath } from '../integrations/onedrive.js';
 
@@ -429,7 +429,20 @@ clientRoutes.post('/case-notes/:id/tasks', async (c) => {
 /** 期日の記録から、依頼者への期日連絡の下書きを用意する（送信は /conversations/:id/send） */
 clientRoutes.post('/case-notes/:id/hearing-notice', async (c) => {
   const body = z.object({ channel: z.enum(['gmail', 'line', 'chatwork']).optional() }).parse(await c.req.json().catch(() => ({})));
-  return c.json(await prepareHearingNotice(Number(c.req.param('id')), { channel: body.channel }));
+  try {
+    return c.json(await prepareHearingNotice(Number(c.req.param('id')), { channel: body.channel }));
+  } catch (err) {
+    // 連絡先が無いときは、画面がその場で登録する欄を出せるよう依頼者を返す
+    if (err instanceof ClientUnreachableError) return c.json({ error: err.message, code: err.code, clientId: err.clientId }, 409);
+    throw err;
+  }
+});
+
+/** 依頼者の連絡先の登録状況と、各チャネルの接続状況（送れないときに何が足りないかを出す） */
+clientRoutes.get('/clients/:id/reachability', (c) => {
+  const row = db().select().from(schema.clients).where(eq(schema.clients.id, Number(c.req.param('id')))).get();
+  if (!row) return c.json({ error: 'not found' }, 404);
+  return c.json(clientReachability(row));
 });
 
 /** 保存済みの記録を AI で整理し直す（結果を返すだけ。保存は PUT で） */
