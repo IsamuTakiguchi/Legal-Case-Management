@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { taskInputSchema, TASK_STATUSES, WAITING_TASK_STATUSES } from '@lcm/shared';
 import { createTask, updateTask, nudgeTask, listTasks, importChatworkTasks, syncTaskToChatwork, bulkUpdateTasks, deleteTask } from '../services/tasks.js';
 import { openAlerts, resolveAlert } from '../services/alerts.js';
+import { replyToChatworkTask } from '../services/taskReply.js';
 import { db, schema } from '../db/index.js';
 import { eq, desc } from 'drizzle-orm';
 
@@ -46,6 +47,12 @@ taskRoutes.post('/tasks/:id/nudge', (c) => c.json(nudgeTask(Number(c.req.param('
 taskRoutes.post('/tasks/:id/sync-chatwork', async (c) => {
   await syncTaskToChatwork(Number(c.req.param('id')));
   return c.json({ ok: true });
+});
+
+/** Chatwork で振られたタスクのメッセージに、Chatwork の「返信」として送る */
+taskRoutes.post('/tasks/:id/chatwork-reply', async (c) => {
+  const body = z.object({ text: z.string().trim().min(1).max(10000), after: z.enum(['keep', 'done', 'waiting_staff']).default('keep') }).parse(await c.req.json());
+  return c.json(await replyToChatworkTask(Number(c.req.param('id')), body));
 });
 
 taskRoutes.post('/tasks/import-chatwork', async (c) => c.json(await importChatworkTasks()));
