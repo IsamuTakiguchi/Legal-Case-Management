@@ -40,7 +40,7 @@ const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean; 
   {
     key: 'ai_model',
     label: '使う AI モデル',
-    hint: '下書き・要約・判定に使うモデルです。Sonnet 5 は Opus 5.5 の半分の料金で、速く動きます。料金の実績は下の「API 利用料」で確認できます',
+    hint: '下書き・要約・判定に使うモデルです。Sonnet 5.5 は Opus 5.5 の半分の料金で、速く動きます。Fable 5.1 はいちばん賢いモデルですが、料金は Opus 5.5 の 2.5 倍です。料金の実績は下の「API 利用料」で確認できます',
     options: [
       { value: '', label: '既定（Opus 5.5）' },
       ...AI_MODELS.map((m) => ({ value: m.id, label: `${m.label}　入力 $${m.priceIn} / 出力 $${m.priceOut}（100万トークンあたり）` })),
@@ -49,7 +49,7 @@ const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean; 
   {
     key: 'ai_model_light',
     label: '軽い処理に使う AI モデル',
-    hint: '返信待ちの判定・日程の読み取り・受信ファイルの命名・事件の振り分けなど、短い判定だけに使うモデルです。ここを Sonnet 5 にすると、書面の下書きや事件サマリーは上のモデルのまま、利用料だけ下げられます',
+    hint: '返信待ちの判定・日程の読み取り・受信ファイルの命名・事件の振り分けなど、短い判定だけに使うモデルです。ここを Sonnet 5.5 にすると、書面の下書きや事件サマリーは上のモデルのまま、利用料だけ下げられます',
     options: [
       { value: '', label: '上と同じモデルを使う' },
       ...AI_MODELS.map((m) => ({ value: m.id, label: m.label })),

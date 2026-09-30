@@ -431,11 +431,18 @@ export const AI_MODELS = [
     priceOut: 20,
   },
   {
-    id: 'claude-sonnet-5',
-    label: 'Sonnet 5（速い・安い）',
+    id: 'claude-sonnet-5-5',
+    label: 'Sonnet 5.5（速い・安い）',
     hint: 'Opus の半分の料金。判定・仕分け・短い抽出なら十分',
     priceIn: 2,
     priceOut: 10,
+  },
+  {
+    id: 'claude-fable-5-1',
+    label: 'Fable 5.1（最上位・高額）',
+    hint: 'いちばん賢いが、料金は Opus の 2.5 倍で、答えるまで時間がかかることがある。難しい書面の下書きなどに',
+    priceIn: 10,
+    priceOut: 50,
   },
 ] as const;
 export type AiModelId = (typeof AI_MODELS)[number]['id'];
@@ -443,6 +450,8 @@ export const AI_MODEL_IDS = AI_MODELS.map((m) => m.id) as readonly string[];
 /** 以前の版で選べたモデル → いまの後継モデル（保存済みの設定や環境変数を読み替える） */
 export const AI_MODEL_ALIASES: Readonly<Record<string, AiModelId>> = {
   'claude-opus-5': 'claude-opus-5-5',
+  'claude-sonnet-5': 'claude-sonnet-5-5',
+  'claude-fable-5': 'claude-fable-5-1',
 };
 export function aiModelLabel(id: string): string {
   const current = AI_MODEL_ALIASES[id] ?? id;
