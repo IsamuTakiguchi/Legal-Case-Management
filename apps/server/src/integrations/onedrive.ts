@@ -161,15 +161,26 @@ async function token(): Promise<string> {
   return res.accessToken;
 }
 
-async function graph<T = unknown>(path: string, init: RequestInit = {}, raw = false): Promise<T> {
+/** 1 回の Graph 呼び出しの待ち時間の上限（ファイルの中身を受け取るときは長めに） */
+const GRAPH_TIMEOUT_MS = 60_000;
+const GRAPH_DOWNLOAD_TIMEOUT_MS = 120_000;
+/** 混雑（429・503）で待ってやり直す回数の上限。上限なしだと、混雑が続く間ずっと応答を返せず Railway が 502 を返す */
+const GRAPH_MAX_RETRIES = 3;
+
+async function graph<T = unknown>(path: string, init: RequestInit = {}, raw = false, attempt = 0): Promise<T> {
   const t = await token();
   const url = path.startsWith('http') ? path : `${GRAPH}${path}`;
-  const res = await fetch(url, { ...init, headers: { Authorization: `Bearer ${t}`, ...((init.headers as Record<string, string>) ?? {}) } });
-  if (res.status === 429 || res.status === 503) {
+  const res = await fetch(url, {
+    ...init,
+    headers: { Authorization: `Bearer ${t}`, ...((init.headers as Record<string, string>) ?? {}) },
+    signal: init.signal ?? AbortSignal.timeout(raw ? GRAPH_DOWNLOAD_TIMEOUT_MS : GRAPH_TIMEOUT_MS),
+  });
+  if ((res.status === 429 || res.status === 503) && attempt < GRAPH_MAX_RETRIES) {
     const wait = Number(res.headers.get('retry-after') ?? '2');
-    await new Promise((r) => setTimeout(r, Math.min(wait, 30) * 1000));
-    return graph<T>(path, init, raw);
+    await new Promise((r) => setTimeout(r, Math.min(Number.isFinite(wait) ? wait : 2, 10) * 1000));
+    return graph<T>(path, init, raw, attempt + 1);
   }
+  if (res.status === 429) throw new Error('OneDrive が混み合っています。少し待ってからもう一度お試しください');
   if (!res.ok) throw new Error(`Graph API エラー ${res.status} ${path}: ${await res.text()}`);
   if (raw) return res as unknown as T;
   if (res.status === 204) return undefined as T;
@@ -277,6 +288,7 @@ export async function uploadFile(folderPath: string, filename: string, data: Buf
       method: 'PUT',
       headers: { 'Content-Length': String(chunk.length), 'Content-Range': `bytes ${offset}-${end - 1}/${data.length}` },
       body: new Uint8Array(chunk),
+      signal: AbortSignal.timeout(GRAPH_DOWNLOAD_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`アップロードセッション失敗 ${res.status}: ${await res.text()}`);
     if (res.status === 201 || res.status === 200) last = (await res.json()) as DriveItem;

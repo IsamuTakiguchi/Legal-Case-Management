@@ -269,7 +269,7 @@ export const lineAdapter: ChannelAdapter = {
     const ref = att.ref as { messageId?: string; type?: string; url?: string };
     if (ref.url) {
       if (!isAllowedContentUrl(ref.url)) throw new Error('許可されていない外部コンテンツ URL です');
-      const res = await fetch(ref.url);
+      const res = await fetch(ref.url, { signal: AbortSignal.timeout(60_000) });
       if (!res.ok) throw new Error(`外部コンテンツ取得失敗 ${res.status}`);
       return Buffer.from(await res.arrayBuffer());
     }

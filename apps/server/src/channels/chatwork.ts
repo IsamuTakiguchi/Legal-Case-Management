@@ -250,7 +250,8 @@ export const chatworkAdapter: ChannelAdapter = {
   async fetchAttachment(att) {
     const ref = att.ref as { roomId: number; fileId: number };
     const info = await fileDownloadUrl(ref.roomId, ref.fileId);
-    const res = await fetch(info.download_url); // 30 秒以内に取得
+    // ダウンロード URL は 30 秒で切れる。応答が止まったまま待ち続けないよう上限を付ける
+    const res = await fetch(info.download_url, { signal: AbortSignal.timeout(60_000) });
     if (!res.ok) throw new Error(`Chatwork ファイル取得失敗 ${res.status}`);
     return Buffer.from(await res.arrayBuffer());
   },
