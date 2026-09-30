@@ -69,6 +69,8 @@ export interface ClientConfirmContext {
   sent: ClientConfirmRecord[];
   /** 送れない理由（依頼者未選択、連絡先なし など） */
   blocked: string | null;
+  /** 依頼者は決まっているが、メール・LINE が登録されていない（または未接続） */
+  needsContact: boolean;
 }
 
 type MessageRow = typeof schema.messages.$inferSelect;
@@ -151,8 +153,10 @@ export function clientConfirmContext(messageId: number, opts: { clientId?: numbe
   const blocked = !client
     ? 'どの依頼者への確認かを選んでください'
     : channels.length === 0
-      ? `${client.name}さんのメールアドレスか LINE が登録されていないか、Gmail・LINE が未設定です`
+      ? `${client.name}さんのメールアドレスか LINE が登録されていないか、Gmail・LINE がアプリに接続されていません`
       : null;
+  // 依頼者は決まっているが送る手段が無い → 画面でその場で連絡先を登録できるようにする
+  const needsContact = !!client && channels.length === 0;
 
   return {
     messageId: msg.id,
@@ -172,6 +176,7 @@ export function clientConfirmContext(messageId: number, opts: { clientId?: numbe
     staffReplyText: staffReply(client?.name ?? null, defaultChannel),
     sent: recordsOf(msg),
     blocked,
+    needsContact,
   };
 }
 

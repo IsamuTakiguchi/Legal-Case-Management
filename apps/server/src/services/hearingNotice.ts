@@ -27,6 +27,40 @@ export function availableChannels(client: ClientRow): { channel: Channel; to: st
   });
 }
 
+/** 依頼者に連絡する手段が無いとき（画面はその場で連絡先を登録する欄を出す） */
+export class ClientUnreachableError extends Error {
+  readonly code = 'client_unreachable';
+  constructor(readonly clientId: number, message: string) {
+    super(message);
+  }
+}
+
+/** チャネルが使えるか（アプリに接続済みか） */
+function channelConfigured(channel: Channel): boolean {
+  try {
+    return adapterFor(channel).isConfigured();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 依頼者の連絡先の登録状況と、各チャネルがアプリに接続済みか。
+ * 「送れない」ときに、何が足りないか（連絡先の登録か、チャネルの接続か）を画面で示すために使う
+ */
+export function clientReachability(client: ClientRow) {
+  return {
+    clientId: client.id,
+    clientName: client.name,
+    emails: client.emails,
+    lineUserId: client.lineUserId,
+    lineInvitedAt: client.lineInvitedAt ?? null,
+    chatworkRoomId: client.chatworkRoomId,
+    configured: { gmail: channelConfigured('gmail'), line: channelConfigured('line'), chatwork: channelConfigured('chatwork') },
+    channels: availableChannels(client),
+  };
+}
+
 /**
  * 依頼者本人との会話（そのチャネル）を返す。無ければ作る。
  * Gmail はスレッドがまだ無いので仮の ID（new:…）で作り、初回送信時に実際のスレッド ID に置き換わる
@@ -91,7 +125,7 @@ export async function prepareHearingNotice(noteId: number, opts: { channel?: Cha
   const client = d.select().from(schema.clients).where(eq(schema.clients.id, kase.clientId)).get();
   if (!client) throw new Error('依頼者が見つかりません');
   const channels = availableChannels(client);
-  if (channels.length === 0) throw new Error('依頼者の連絡先（メールアドレス・LINE・Chatwork ルーム）が登録されていないか、そのチャネルが未設定です');
+  if (channels.length === 0) throw new ClientUnreachableError(client.id, `${client.name}さんの連絡先（メールアドレス・LINE・Chatwork ルーム）が登録されていないか、そのチャネルがアプリに接続されていません`);
   const preferred = client.preferredChannel as Channel | null;
   const channel = opts.channel && channels.some((c) => c.channel === opts.channel) ? opts.channel : (channels.find((c) => c.channel === preferred)?.channel ?? channels[0].channel);
   const to = channels.find((c) => c.channel === channel)!.to;

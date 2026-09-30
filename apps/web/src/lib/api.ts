@@ -1,8 +1,11 @@
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** 応答の本文（code などで画面の出し分けに使う） */
+  data: Record<string, unknown> | null;
+  constructor(status: number, message: string, data: Record<string, unknown> | null = null) {
     super(message);
     this.status = status;
+    this.data = data;
   }
 }
 
@@ -20,7 +23,7 @@ async function handle<T>(res: Response): Promise<T> {
   }
   if (!res.ok) {
     const msg = (json as { error?: string })?.error ?? text ?? res.statusText;
-    throw new ApiError(res.status, msg);
+    throw new ApiError(res.status, msg, json && typeof json === 'object' ? (json as Record<string, unknown>) : null);
   }
   return json as T;
 }

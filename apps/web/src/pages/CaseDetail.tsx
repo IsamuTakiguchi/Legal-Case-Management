@@ -15,6 +15,7 @@ import { CaseStatusBadge } from './Cases';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 import { ChatworkTaskReply } from '../lib/ChatworkTaskReply';
 import { ContactMemoImport } from '../lib/ContactMemoImport';
+import { ClientContactSetup, unreachableClientId } from '../lib/ClientContactSetup';
 
 interface Note {
   id: number;
@@ -1129,7 +1130,12 @@ function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClo
         </button>
       </div>
       {prep.isLoading && <div className="text-sm text-slate-500">記録と次回期日をもとに下書きを作成中…</div>}
-      {prep.error && <div className="text-sm text-red-600">{(prep.error as Error).message}</div>}
+      {prep.error &&
+        (unreachableClientId(prep.error) ? (
+          <ClientContactSetup clientId={unreachableClientId(prep.error)!} onSaved={() => prep.refetch()} />
+        ) : (
+          <div className="text-sm text-red-600">{(prep.error as Error).message}</div>
+        ))}
       {n && (
         <>
           <textarea className="input min-h-44 text-sm" value={text} onChange={(e) => setText(e.target.value)} disabled={prep.isFetching} />
