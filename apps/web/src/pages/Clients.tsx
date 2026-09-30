@@ -4,7 +4,7 @@ import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useDraftRecord, clearDraft, DraftHint } from '../lib/draft';
 import { LineFriendPicker } from '../lib/LineFriendPicker';
-import { CHANNEL_LABEL, splitPhones, looksLikeCorporation, representativeLabel, type ClientEntityType } from '@lcm/shared';
+import { CHANNEL_LABEL, CASE_STATUS_LABEL, splitPhones, looksLikeCorporation, representativeLabel, type ClientEntityType } from '@lcm/shared';
 import { useSort, readingKey, SortHeader, type SortOption } from '../lib/sort';
 
 const CLIENT_SORTS: SortOption<ClientRow>[] = [
@@ -68,11 +68,11 @@ export default function Clients() {
   const [folderMsg, setFolderMsg] = useState('');
   // OneDrive 側でフォルダ名を変えたとき、アプリ側の紐付けを付け直す
   const syncFolders = useMutation({
-    mutationFn: () => api.post<{ checked: number; renamed: number; adopted: number; renames: { clientName: string; from: string; to: string }[] }>('/clients/folders/sync-names'),
+    mutationFn: () => api.post<{ checked: number; renamed: number; adopted: number; renames: { clientName: string; from: string; to: string; status?: { to: string } }[] }>('/clients/folders/sync-names'),
     onSuccess: (r) => {
       setFolderMsg(
         r.renamed > 0
-          ? `${r.renamed} 件のフォルダ名の変更を取り込みました: ${r.renames.map((x) => `${x.clientName}（${x.from} → ${x.to}）`).join('、')}`
+          ? `${r.renamed} 件のフォルダ名の変更を取り込みました: ${r.renames.map((x) => `${x.clientName}（${x.from} → ${x.to}${x.status ? `。事件の区分を「${CASE_STATUS_LABEL[x.status.to as keyof typeof CASE_STATUS_LABEL] ?? x.status.to}」に変更` : ''}）`).join('、')}`
           : `変更はありませんでした（${r.checked} 件を確認${r.adopted ? `、${r.adopted} 件のフォルダを新たに覚えました` : ''}）`,
       );
       qc.invalidateQueries({ queryKey: ['clients'] });
