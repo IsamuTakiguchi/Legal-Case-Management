@@ -45,7 +45,17 @@ export function CaseStatusBadge({ status }: { status: string }) {
 }
 
 export default function Cases() {
-  const [status, setStatus] = useState<string>('active');
+  // ダッシュボードの件数から ?status=consultation などで開ける。選び直したら URL も合わせる（戻るで元の区分に戻れる）
+  const [status, setStatusState] = useState<string>(() => {
+    const v = new URLSearchParams(location.search).get('status');
+    return v === 'all' ? '' : v && (CASE_STATUSES as readonly string[]).includes(v) ? v : 'active';
+  });
+  const setStatus = (v: string) => {
+    setStatusState(v);
+    const u = new URL(location.href);
+    u.searchParams.set('status', v || 'all');
+    history.replaceState(history.state, '', `${u.pathname}${u.search}`);
+  };
   const [creating, setCreating] = useState(false);
   const [q, setQ] = useState('');
   const all = useQuery({ queryKey: ['cases', 'all'], queryFn: () => api.get<CaseRow[]>('/cases') });
