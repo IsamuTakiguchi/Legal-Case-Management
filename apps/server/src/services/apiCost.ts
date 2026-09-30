@@ -26,6 +26,7 @@ const PRICES: { prefix: string; price: ModelPrice }[] = [
   { prefix: 'claude-opus-4-7', price: { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 } },
   { prefix: 'claude-opus-4-6', price: { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 } },
   { prefix: 'claude-opus-4', price: { input: 15, output: 75, cacheWrite: 18.75, cacheRead: 1.5 } },
+  { prefix: 'claude-sonnet-5-5', price: { input: 2, output: 10, cacheWrite: 2.5, cacheRead: 0.2 } },
   { prefix: 'claude-sonnet-5', price: { input: 2, output: 10, cacheWrite: 2.5, cacheRead: 0.2 } },
   { prefix: 'claude-sonnet-4-6', price: { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 } },
   { prefix: 'claude-sonnet-4', price: { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 } },
