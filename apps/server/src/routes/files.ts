@@ -72,12 +72,13 @@ fileRoutes.get('/attachments/:id/preview', async (c) => {
   const r = await attachmentPreview(Number(c.req.param('id')));
   if (r.kind === 'not_found') return c.json({ error: 'not found' }, 404);
   if (r.kind === 'ignored') return c.json({ error: '保存不要にしたファイルです' }, 410);
+  if (r.kind === 'busy') return c.json({ error: '画像の取得に時間がかかっています。少し待ってから開き直してください' }, 503);
   if (r.kind !== 'ok') return c.json({ error: '画像ではありません' }, 415);
   c.header('Content-Type', r.mime);
   c.header('Content-Disposition', 'inline');
   c.header('X-Content-Type-Options', 'nosniff');
   c.header('Cache-Control', 'private, max-age=86400');
-  return c.body(new Uint8Array(r.data));
+  return c.body(new Uint8Array(r.data.buffer as ArrayBuffer, r.data.byteOffset, r.data.byteLength));
 });
 
 // ---- 書式ライブラリ ----

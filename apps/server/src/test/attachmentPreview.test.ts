@@ -10,13 +10,22 @@ process.env.DATA_DIR = tmp;
 /** 取りに行った回数（控えが効いているかを見る） */
 const fetched: number[] = [];
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+/** 取得にかかる時間と、同時に取りに行った数 */
+const slow = { ms: 0, now: 0, max: 0 };
 vi.mock('../services/attachments.js', async (importActual) => {
   const actual = await importActual<typeof import('../services/attachments.js')>();
   return {
     ...actual,
     fetchAttachmentData: vi.fn(async (id: number) => {
       fetched.push(id);
-      return { data: PNG, filename: 'x', mime: null };
+      slow.now++;
+      slow.max = Math.max(slow.max, slow.now);
+      try {
+        if (slow.ms) await new Promise((r) => setTimeout(r, slow.ms));
+        return { data: PNG, filename: 'x', mime: null };
+      } finally {
+        slow.now--;
+      }
     }),
   };
 });
@@ -24,6 +33,7 @@ vi.mock('../services/attachments.js', async (importActual) => {
 const { openTestDatabase, closeDatabase, db, schema } = await import('../db/index.js');
 const { imagePreviewMime } = await import('@lcm/shared');
 const { createApp } = await import('../index.js');
+const { attachmentPreview, previewLimits } = await import('../services/attachmentPreview.js');
 const { setPassword } = await import('../auth/index.js');
 
 beforeAll(() => openTestDatabase());
@@ -86,5 +96,36 @@ describe('画像のプレビュー', () => {
     await ignoreAttachment(img);
     expect(fs.existsSync(cacheFile)).toBe(false);
     expect((await get(img)).status).toBe(410);
+  });
+});
+
+describe('画像の多い会話を開いたとき', () => {
+  const seed = (n: number) => {
+    const conv = db().insert(schema.conversations).values({ channel: 'line', externalThreadId: `U-many-${n}`, lastMessageAt: '2027-09-01T01:00:00.000Z' }).returning().get();
+    const msg = db().insert(schema.messages).values({ conversationId: conv.id, channel: 'line', externalId: `many-${n}`, direction: 'in', body: '[画像]', sentAt: '2027-09-01T01:00:00.000Z' }).returning().get();
+    return Array.from({ length: n }, (_, i) => db().insert(schema.attachments).values({ messageId: msg.id, filename: `p${i}.jpg`, mime: 'image/jpeg', status: 'held' }).returning().get().id);
+  };
+
+  it('元に取りに行くのは同時に 2 件まで（OneDrive の混雑や Chatwork の回数制限を招かない）', async () => {
+    const ids = seed(6);
+    slow.ms = 30;
+    slow.max = 0;
+    const rs = await Promise.all(ids.map((id) => attachmentPreview(id)));
+    expect(rs.every((r) => r.kind === 'ok')).toBe(true);
+    expect(slow.max).toBe(2);
+    slow.ms = 0;
+  });
+
+  it('時間がかかりすぎたら待たずに諦め（503）、取れた画像は次に開いたときすぐ出す', async () => {
+    const [id] = seed(1);
+    slow.ms = 200;
+    previewLimits.timeoutMs = 50;
+    expect((await attachmentPreview(id!)).kind).toBe('busy');
+    await new Promise((r) => setTimeout(r, 300));
+    const before = fetched.length;
+    expect((await attachmentPreview(id!)).kind).toBe('ok');
+    expect(fetched.length).toBe(before);
+    previewLimits.timeoutMs = 45_000;
+    slow.ms = 0;
   });
 });
