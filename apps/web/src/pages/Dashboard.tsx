@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { channelBadge, channelLabel, fmtDateTime, fmtRelative } from '../lib/format';
-import { ALERT_TYPE_LABEL, TASK_STATUS_LABEL, EVENT_KIND_LABEL, type AlertType, type TaskStatus, type EventKind, type TaskCounts } from '@lcm/shared';
+import { ALERT_TYPE_LABEL, TASK_STATUS_LABEL, EVENT_KIND_LABEL, type AlertType, type TaskStatus, type EventKind, type TaskCounts, CASE_STATUS_LABEL, type CaseStatus } from '@lcm/shared';
 import { Icon, type IconName } from '../lib/icons';
 import { alertLink } from '../lib/alertLink';
 import { DeadlineEditor } from '../lib/Deadline';
@@ -18,6 +18,8 @@ interface DashboardData {
   openTasks: number;
   /** 対応中と連絡待ちの内訳（期限切れを含む） */
   taskCounts?: TaskCounts;
+  /** 区分ごとの事件の件数 */
+  caseCounts?: Record<CaseStatus, number>;
   todaysEvents: { id: number; title: string; startAt: string; kind: string; clientName: string | null; location: string | null }[];
   /** 直前の行動（記録・送受信・タスク）。新しい順 */
   recent: RecentItem[];
@@ -92,6 +94,7 @@ export default function Dashboard() {
         <Stat label="未返信の会話" value={d.needsReply} to="/inbox?needsReply=1" icon="mail" tone={d.needsReply ? 'blue' : 'gray'} />
         <Stat label="要確認" value={d.alerts.length} to="/alerts" icon="alert" tone={d.alerts.length ? 'orange' : 'gray'} />
         <TaskSplit counts={d.taskCounts ?? { open: d.openTasks, waiting: d.waiting.length, waitingClient: d.waiting.filter((t) => t.status === 'waiting_client').length, waitingOther: d.waiting.filter((t) => t.status === 'waiting_other').length, waitingStaff: d.waiting.filter((t) => t.status === 'waiting_staff').length, openOverdue: 0, waitingOverdue: 0 }} />
+        {d.caseCounts && <CaseSplit counts={d.caseCounts} />}
       </div>
       <div className="stagger grid gap-4 md:grid-cols-2">
         <section className="card">
@@ -296,6 +299,43 @@ function TaskSplit({ counts }: { counts: TaskCounts }) {
         overdue: counts.waitingOverdue,
         sub: counts.waiting ? [`依頼者 ${counts.waitingClient}`, `相手方など ${counts.waitingOther}`, counts.waitingStaff ? `事務局 ${counts.waitingStaff}` : ''].filter(Boolean).join('・') : undefined,
       })}
+    </section>
+  );
+}
+
+/** 事件の件数（相談・進行事件・残務処理）。押すとその区分の事件一覧を開く。終了事件は小さく添える */
+function CaseSplit({ counts }: { counts: Record<CaseStatus, number> }) {
+  const parts: { status: CaseStatus; icon: IconName; tone: keyof typeof STAT_TONE }[] = [
+    { status: 'consultation', icon: 'chat', tone: 'orange' },
+    { status: 'active', icon: 'scale', tone: 'blue' },
+    { status: 'wrapup', icon: 'doc', tone: 'green' },
+  ];
+  const open = counts.consultation + counts.active + counts.wrapup;
+  return (
+    <section className="card col-span-2 md:col-span-4" aria-label="事件の件数">
+      <div className="mb-2 flex items-baseline gap-2">
+        <h2 className="text-sm font-semibold">事件</h2>
+        <span className="text-xs text-[var(--text-3)]">未終了 {open} 件</span>
+        <Link to="/cases?status=closed" className="ml-auto text-xs text-[var(--text-3)] hover:text-[var(--accent)] hover:underline">
+          終了事件 {counts.closed} 件
+        </Link>
+      </div>
+      <div className="grid grid-cols-3 gap-2 sm:gap-3">
+        {parts.map((p) => {
+          const t = STAT_TONE[counts[p.status] ? p.tone : 'gray'];
+          return (
+            <Link key={p.status} to={`/cases?status=${p.status}`} className="card-press flex min-w-0 items-center gap-3 rounded-[14px] p-1 hover:bg-[var(--surface-2)]" aria-label={`${CASE_STATUS_LABEL[p.status]} ${counts[p.status]} 件`}>
+              <span className={`hidden h-11 w-11 shrink-0 items-center justify-center rounded-[14px] sm:inline-flex ${t.icon}`}>
+                <Icon name={p.icon} className="h-[22px] w-[22px]" strokeWidth={1.9} />
+              </span>
+              <div className="min-w-0">
+                <div className="eyebrow">{CASE_STATUS_LABEL[p.status]}</div>
+                <div className={`mt-1 text-[30px] font-semibold leading-none tabular-nums tracking-[-0.03em] ${t.value}`}>{counts[p.status]}</div>
+              </div>
+            </Link>
+          );
+        })}
+      </div>
     </section>
   );
 }

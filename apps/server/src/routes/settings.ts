@@ -18,6 +18,7 @@ import { channelSchema, countTasks } from '@lcm/shared';
 import { model as aiModel } from '../integrations/anthropic.js';
 import { openAlerts } from '../services/alerts.js';
 import { listTasks } from '../services/tasks.js';
+import { caseStatusCounts } from '../services/cases.js';
 import { todaysEvents } from '../services/court.js';
 import { db, schema } from '../db/index.js';
 import { and, eq, gt } from 'drizzle-orm';
@@ -243,6 +244,7 @@ settingsRoutes.get('/dashboard', (c) => {
     activeTasks,
     openTasks,
     taskCounts,
+    caseCounts: caseStatusCounts(),
     todaysEvents: todaysEvents(),
     recent: recentActivity(12),
     lineQuota: isConfigured('line') ? lineQuotaStatus() : null,

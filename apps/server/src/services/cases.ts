@@ -1,8 +1,8 @@
-import { and, eq, desc, gt, inArray } from 'drizzle-orm';
+import { and, eq, desc, gt, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/index.js';
 import { generateStructured, generateText } from '../integrations/anthropic.js';
-import { formatJaDateTime, WAITING_FOR, CASE_NOTE_KIND_LABEL, OPEN_CASE_STATUSES, CASE_CONTACT_ROLE_LABEL, taskStatusForWaiting, ACTIVE_TASK_STATUSES, parseJaDate, formatWareki, type CaseInput, type CaseNoteInput, type CaseNoteKind, type CaseContactRole, type TaskStatus } from '@lcm/shared';
+import { formatJaDateTime, WAITING_FOR, CASE_NOTE_KIND_LABEL, OPEN_CASE_STATUSES, CASE_CONTACT_ROLE_LABEL, taskStatusForWaiting, ACTIVE_TASK_STATUSES, parseJaDate, formatWareki, CASE_STATUSES, type CaseStatus, type CaseInput, type CaseNoteInput, type CaseNoteKind, type CaseContactRole, type TaskStatus } from '@lcm/shared';
 import { createTask, chatworkReplyable } from './tasks.js';
 import { syncClientFolderWithStatus } from './clientFolders.js';
 import { logger } from '../logger.js';
@@ -81,6 +81,14 @@ export function updateCase(id: number, patch: Partial<CaseInput & { caseType: st
     });
   }
   return db().select().from(schema.cases).where(eq(schema.cases.id, id)).get()!;
+}
+
+/** 区分ごとの事件の件数（相談・進行事件・残務処理・終了事件）。ダッシュボードで使う */
+export function caseStatusCounts(): Record<CaseStatus, number> {
+  const out = Object.fromEntries(CASE_STATUSES.map((st) => [st, 0])) as Record<CaseStatus, number>;
+  const rows = db().select({ status: schema.cases.status, n: sql<number>`count(*)` }).from(schema.cases).groupBy(schema.cases.status).all();
+  for (const r of rows) if (r.status in out) out[r.status as CaseStatus] = Number(r.n);
+  return out;
 }
 
 export function listCases(filter: { clientId?: number; status?: string }) {
