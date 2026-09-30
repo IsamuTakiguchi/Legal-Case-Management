@@ -18,6 +18,7 @@ import { findDuplicateClients, mergeClients } from '../services/clientMerge.js';
 import { clientFolderParents, defaultClientFolderRel, syncClientFolderName, syncClientFolderNames, rememberClientFolderId, adoptClientFolderPath, renameClientFolder } from '../services/clientFolders.js';
 import { logger } from '../logger.js';
 import { listContacts, createContact, updateContact, deleteContact, contactBriefs } from '../services/contacts.js';
+import { readContactMemo, importContactMemo } from '../services/contactMemo.js';
 import { prepareHearingNotice } from '../services/hearingNotice.js';
 import { listCaseHolds, attachHoldSetToCase } from '../services/court.js';
 import { joinPath, getItemByPath } from '../integrations/onedrive.js';
@@ -268,7 +269,7 @@ clientRoutes.put('/case-types', async (c) => {
 // ---- 事件 ----
 clientRoutes.get('/cases', (c) => c.json(listCases({ clientId: c.req.query('clientId') ? Number(c.req.query('clientId')) : undefined, status: c.req.query('status') || undefined })));
 
-const caseExtra = { caseType: z.string().optional(), stage: z.string().optional().nullable(), policy: z.string().optional().nullable(), staffId: z.number().int().nullable().optional(), chatworkRoomId: z.number().int().nullable().optional() };
+const caseExtra = { caseType: z.string().optional(), stage: z.string().optional().nullable(), policy: z.string().optional().nullable(), staffId: z.number().int().nullable().optional(), chatworkRoomId: z.number().int().nullable().optional(), accidentDate: z.string().max(40).nullable().optional() };
 
 clientRoutes.post('/cases', async (c) => {
   const body = caseInputSchema.extend(caseExtra).parse(await c.req.json());
@@ -290,6 +291,20 @@ clientRoutes.post('/cases/:id/holds/:sessionId/attach', (c) => c.json(attachHold
 // ---- 事件の関係者（相手方・相手方代理人など） ----
 clientRoutes.get('/cases/:id/contacts', (c) => c.json(listContacts(Number(c.req.param('id')))));
 clientRoutes.post('/cases/:id/contacts', async (c) => c.json(createContact(Number(c.req.param('id')), caseContactInputSchema.parse(await c.req.json()))));
+/** 貼り付けたメモ（事故日・保険会社の担当者・電話・FAX など）を読み取る（まだ登録しない） */
+clientRoutes.post('/cases/:id/contacts/parse', async (c) => {
+  const body = z.object({ text: z.string().trim().min(1).max(20000) }).parse(await c.req.json());
+  return c.json(await readContactMemo(body.text));
+});
+
+/** 読み取った内容（画面で確かめたもの）を登録する */
+clientRoutes.post('/cases/:id/contacts/import', async (c) => {
+  const contact = caseContactInputSchema.pick({ role: true, name: true, organization: true, department: true, phone: true, fax: true, emails: true });
+  const body = z.object({ accidentDate: z.string().max(40).nullable().optional(), contacts: z.array(contact).max(100) }).parse(await c.req.json());
+  const contacts = body.contacts.map((x) => ({ ...x, organization: x.organization ?? null, department: x.department ?? null, phone: x.phone ?? null, fax: x.fax ?? null }));
+  return c.json(importContactMemo(Number(c.req.param('id')), { accidentDate: body.accidentDate, contacts }));
+});
+
 clientRoutes.put('/contacts/:id', async (c) => c.json(updateContact(Number(c.req.param('id')), caseContactInputSchema.partial().parse(await c.req.json()))));
 clientRoutes.delete('/contacts/:id', (c) => {
   deleteContact(Number(c.req.param('id')));

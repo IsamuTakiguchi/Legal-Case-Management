@@ -59,6 +59,8 @@ export const cases = sqliteTable('cases', {
   staffId: integer('staff_id'),
   /** この事件専用の Chatwork グループチャット */
   chatworkRoomId: integer('chatwork_room_id'),
+  /** 事故日（交通事故の事件。YYYY-MM-DD） */
+  accidentDate: text('accident_date'),
   createdAt: text('created_at').notNull().default(now()),
   updatedAt: text('updated_at').notNull().default(now()),
 });
@@ -78,6 +80,9 @@ export const caseContacts = sqliteTable(
     lineUserId: text('line_user_id'),
     chatworkAccountId: integer('chatwork_account_id'),
     phone: text('phone'),
+    fax: text('fax'),
+    /** 担当の区分（物損・人損など） */
+    department: text('department'),
     note: text('note'),
     createdAt: text('created_at').notNull().default(now()),
     updatedAt: text('updated_at').notNull().default(now()),

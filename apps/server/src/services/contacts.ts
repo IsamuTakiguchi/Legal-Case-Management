@@ -36,6 +36,8 @@ export function createContact(caseId: number, input: CaseContactInput): ContactR
       lineUserId: input.lineUserId?.trim() || null,
       chatworkAccountId: input.chatworkAccountId ?? null,
       phone: input.phone?.trim() || null,
+      fax: input.fax?.trim() || null,
+      department: input.department?.trim() || null,
       note: input.note?.trim() || null,
     })
     .returning()
@@ -52,6 +54,8 @@ export function updateContact(id: number, patch: Partial<CaseContactInput>): Con
   if (patch.lineUserId !== undefined) set.lineUserId = patch.lineUserId?.trim() || null;
   if (patch.chatworkAccountId !== undefined) set.chatworkAccountId = patch.chatworkAccountId ?? null;
   if (patch.phone !== undefined) set.phone = patch.phone?.trim() || null;
+  if (patch.fax !== undefined) set.fax = patch.fax?.trim() || null;
+  if (patch.department !== undefined) set.department = patch.department?.trim() || null;
   if (patch.note !== undefined) set.note = patch.note?.trim() || null;
   db().update(schema.caseContacts).set(set).where(eq(schema.caseContacts.id, id)).run();
   const row = getContact(id);
