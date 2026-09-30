@@ -280,6 +280,12 @@ export const tasks = sqliteTable(
     lastNudgedAt: text('last_nudged_at'),
     chatworkRoomId: integer('chatwork_room_id'),
     chatworkTaskId: integer('chatwork_task_id'),
+    /** Chatwork でタスクを作ったメッセージと、振った人（返信を送る先） */
+    chatworkMessageId: text('chatwork_message_id'),
+    chatworkAssignedById: integer('chatwork_assigned_by_id'),
+    chatworkAssignedByName: text('chatwork_assigned_by_name'),
+    /** そのメッセージに Chatwork で最後に返信した日時 */
+    chatworkRepliedAt: text('chatwork_replied_at'),
     dueAt: text('due_at'),
     completedAt: text('completed_at'),
     createdAt: text('created_at').notNull().default(now()),

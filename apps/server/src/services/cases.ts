@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { db, schema } from '../db/index.js';
 import { generateStructured, generateText } from '../integrations/anthropic.js';
 import { formatJaDateTime, WAITING_FOR, CASE_NOTE_KIND_LABEL, OPEN_CASE_STATUSES, CASE_CONTACT_ROLE_LABEL, taskStatusForWaiting, ACTIVE_TASK_STATUSES, type CaseInput, type CaseNoteInput, type CaseNoteKind, type CaseContactRole, type TaskStatus } from '@lcm/shared';
-import { createTask } from './tasks.js';
+import { createTask, chatworkReplyable } from './tasks.js';
 import { syncClientFolderWithStatus } from './clientFolders.js';
 import { logger } from '../logger.js';
 
@@ -100,7 +100,7 @@ export function getCase(id: number) {
   const client = db().select().from(schema.clients).where(eq(schema.clients.id, c.clientId)).get();
   const caseType = db().select().from(schema.caseTypes).where(eq(schema.caseTypes.key, c.caseType)).get();
   const notes = db().select().from(schema.caseNotes).where(eq(schema.caseNotes.caseId, id)).orderBy(desc(schema.caseNotes.occurredAt)).all();
-  const tasks = db().select().from(schema.tasks).where(eq(schema.tasks.caseId, id)).orderBy(desc(schema.tasks.updatedAt)).all();
+  const tasks = db().select().from(schema.tasks).where(eq(schema.tasks.caseId, id)).orderBy(desc(schema.tasks.updatedAt)).all().map((t) => ({ ...t, chatworkReplyable: chatworkReplyable(t) }));
   const events = db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.caseId, id)).orderBy(desc(schema.calendarEvents.startAt)).all();
   const conversations = client ? db().select().from(schema.conversations).where(eq(schema.conversations.clientId, client.id)).orderBy(desc(schema.conversations.lastMessageAt)).all() : [];
   const staff = c.staffId ? (db().select().from(schema.staffMembers).where(eq(schema.staffMembers.id, c.staffId)).get() ?? null) : null;

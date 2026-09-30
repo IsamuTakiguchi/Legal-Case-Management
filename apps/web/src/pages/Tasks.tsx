@@ -11,6 +11,7 @@ import { TASK_STATUSES, TASK_STATUS_LABEL, taskDeadline, isWaitingStatus, type T
 import { useSort, readingKey, type SortOption } from '../lib/sort';
 import { Icon } from '../lib/icons';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
+import { ChatworkTaskReply } from '../lib/ChatworkTaskReply';
 
 interface Task {
   id: number;
@@ -26,6 +27,9 @@ interface Task {
   followUpAt: string | null;
   dueAt: string | null;
   chatworkTaskId: number | null;
+  chatworkReplyable?: boolean;
+  chatworkAssignedByName?: string | null;
+  chatworkRepliedAt?: string | null;
   updatedAt: string;
 }
 
@@ -306,6 +310,8 @@ export default function Tasks() {
                         )}
                         {t.chatworkTaskId && <span className="badge badge-chatwork ml-1">CW</span>}
                         <TaskEditButton className="ml-2" onClick={() => setEditingId(t.id)} />
+                        <ChatworkTaskReply task={t} onDone={refresh} onSent={setMsg} />
+                        {t.chatworkReplyable && t.chatworkAssignedByName && <div className="text-[11px] text-slate-500">{t.chatworkAssignedByName}さんから（Chatwork）</div>}
                         {t.note && <TaskNote text={t.note} />}
                       </>
                     )}

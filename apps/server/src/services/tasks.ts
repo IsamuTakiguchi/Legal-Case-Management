@@ -1,7 +1,7 @@
 import { and, eq, desc, inArray, lt, isNotNull } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { addBusinessDays, formatJaDateTime, TASK_STATUS_LABEL, isWaitingStatus, WAITING_TASK_STATUSES, ACTIVE_TASK_STATUSES, type TaskInput, type TaskStatus } from '@lcm/shared';
-import { getSettingInt, holidaySet } from './settings.js';
+import { getSettingInt, holidaySet, getSyncState } from './settings.js';
 import { upsertAlert, resolveAlertsByKeyPrefix } from './alerts.js';
 import { isConfigured } from '../config.js';
 import * as cw from '../channels/chatwork.js';
@@ -167,7 +167,21 @@ export function listTasks(filter: { status?: TaskStatus | 'active' | 'waiting'; 
     .where(conds.length ? and(...conds) : undefined)
     .orderBy(desc(schema.tasks.updatedAt))
     .all();
-  return rows.map((r) => ({ ...r.task, clientName: r.clientName ?? null, caseTitle: r.caseTitle ?? null }));
+  const me = chatworkReplyMe();
+  return rows.map((r) => ({ ...r.task, clientName: r.clientName ?? null, caseTitle: r.caseTitle ?? null, chatworkReplyable: chatworkReplyable(r.task, me) }));
+}
+
+function chatworkReplyMe(): number | null {
+  const v = getSyncState('chatwork:myAccountId');
+  return v ? Number(v) : null;
+}
+
+/**
+ * Chatwork で人から振られたタスクか（元のメッセージに返信できるか）。
+ * 自分で自分に振ったタスクや、アプリから事務局に振ったタスクは対象外
+ */
+export function chatworkReplyable(t: Pick<TaskRow, 'chatworkTaskId' | 'chatworkRoomId' | 'chatworkMessageId' | 'chatworkAssignedById'>, me: number | null = chatworkReplyMe()): boolean {
+  return !!(t.chatworkTaskId && t.chatworkRoomId && t.chatworkMessageId && t.chatworkAssignedById && t.chatworkAssignedById !== me);
 }
 
 /** 受信があった会話に紐付く返信待ちタスクを検知 */
@@ -255,6 +269,15 @@ export function chatworkTaskTitle(body: string): string {
   return head.slice(0, 120) || '（無題のタスク）';
 }
 
+/** タスクを作った Chatwork のメッセージと、振った人（あとでそのメッセージに返信するため） */
+export function chatworkSource(t: cw.ChatworkTask) {
+  return {
+    chatworkMessageId: t.message_id ?? null,
+    chatworkAssignedById: t.assigned_by_account?.account_id ?? null,
+    chatworkAssignedByName: t.assigned_by_account?.name ?? null,
+  };
+}
+
 /** Chatwork の自分のタスクを取り込む（既存運用を壊さない） */
 export async function importChatworkTasks(): Promise<{ imported: number; completed: number }> {
   if (!isConfigured('chatwork')) return { imported: 0, completed: 0 };
@@ -263,7 +286,11 @@ export async function importChatworkTasks(): Promise<{ imported: number; complet
   const openIds = new Set(open.map((t) => t.task_id));
   for (const t of open) {
     const existing = db().select().from(schema.tasks).where(eq(schema.tasks.chatworkTaskId, t.task_id)).get();
-    if (existing) continue;
+    if (existing) {
+      // 以前の版で取り込んだタスクには、返信先（元のメッセージ・振った人）が入っていないので足す
+      if (!existing.chatworkMessageId && t.message_id) db().update(schema.tasks).set(chatworkSource(t)).where(eq(schema.tasks.id, existing.id)).run();
+      continue;
+    }
     const client = db().select().from(schema.clients).where(eq(schema.clients.chatworkRoomId, t.room.room_id)).get();
     db()
       .insert(schema.tasks)
@@ -274,6 +301,7 @@ export async function importChatworkTasks(): Promise<{ imported: number; complet
         status: 'open',
         chatworkRoomId: t.room.room_id,
         chatworkTaskId: t.task_id,
+        ...chatworkSource(t),
         dueAt: t.limit_time ? new Date(t.limit_time * 1000).toISOString() : null,
       })
       .run();
