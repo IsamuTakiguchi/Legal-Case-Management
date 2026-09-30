@@ -7,3 +7,4 @@ export * from './quotedText.js';
 export * from './phone.js';
 export * from './links.js';
 export * from './taskCounts.js';
+export * from './images.js';

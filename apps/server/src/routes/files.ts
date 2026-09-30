@@ -5,6 +5,7 @@ import { listAttachments, assignAttachment, processAttachment, retryFailedAttach
 import { indexForms, searchForms, updateForm, formStats, draftFromForms } from '../services/forms.js';
 import { formDraftRequestSchema } from '@lcm/shared';
 import { storage } from '../integrations/storage.js';
+import { attachmentPreview } from '../services/attachmentPreview.js';
 import { db, schema } from '../db/index.js';
 import { eq } from 'drizzle-orm';
 
@@ -64,6 +65,19 @@ fileRoutes.get('/attachments/:id/download', async (c) => {
   c.header('Content-Type', mime ?? 'application/octet-stream');
   c.header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
   return c.body(new Uint8Array(data));
+});
+
+/** 画像のプレビュー（会話画面にその場で表示する）。画像以外は返さない */
+fileRoutes.get('/attachments/:id/preview', async (c) => {
+  const r = await attachmentPreview(Number(c.req.param('id')));
+  if (r.kind === 'not_found') return c.json({ error: 'not found' }, 404);
+  if (r.kind === 'ignored') return c.json({ error: '保存不要にしたファイルです' }, 410);
+  if (r.kind !== 'ok') return c.json({ error: '画像ではありません' }, 415);
+  c.header('Content-Type', r.mime);
+  c.header('Content-Disposition', 'inline');
+  c.header('X-Content-Type-Options', 'nosniff');
+  c.header('Cache-Control', 'private, max-age=86400');
+  return c.body(new Uint8Array(r.data));
 });
 
 // ---- 書式ライブラリ ----
