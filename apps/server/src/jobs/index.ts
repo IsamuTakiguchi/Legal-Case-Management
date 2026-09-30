@@ -99,11 +99,11 @@ export const JOBS: JobDef[] = [
   { name: 'housekeeping', label: 'ジョブ履歴の整理（60 日より古いものを削除）', cron: '50 16 * * *', run: async () => ({ deleted: pruneJobRuns(60) }), enabled: () => true },
   {
     name: 'clientFolderSync',
-    label: 'OneDrive のフォルダ名の変更を取り込む',
+    label: 'OneDrive のフォルダ名の変更・区分フォルダ間の移動を取り込む',
     cron: '45 * * * *',
     run: async () => {
       const r = await syncClientFolderNames();
-      return { renamed: r.renamed, adopted: r.adopted };
+      return { renamed: r.renamed, adopted: r.adopted, statusChanged: r.renames.filter((x) => x.status).length };
     },
     enabled: () => true,
     quiet: true,

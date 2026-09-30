@@ -273,6 +273,87 @@ export interface FolderRename {
   clientName: string;
   from: string;
   to: string;
+  /** 別の区分フォルダへ移されていて、事件の区分もそれに合わせたとき */
+  status?: { to: CaseStatus; changed: CaseStatusChange[] };
+}
+
+// ---- OneDrive の区分フォルダ → アプリの事件の区分 ----
+
+export interface CaseStatusChange {
+  caseId: number;
+  title: string;
+  from: CaseStatus;
+  to: CaseStatus;
+}
+
+/** 依頼者フォルダの相対パス（区分フォルダ/依頼者フォルダ）から、その区分。区分フォルダの外（顧問等・フラット）なら null */
+export function statusOfFolderRel(rel: string | null | undefined): CaseStatus | null {
+  const r = (rel ?? '').trim();
+  if (!r || r.startsWith('/')) return null;
+  const { parent } = splitRel(r);
+  if (!parent) return null;
+  const map = statusFolderMap();
+  return (CASE_STATUSES.find((st) => map[st] === parent) as CaseStatus | undefined) ?? null;
+}
+
+/**
+ * 依頼者フォルダが置かれた区分に、その依頼者の事件の区分を合わせる（フォルダの区分＝依頼者の実効区分になるようにする）。
+ * - フォルダの区分より「進んだ」区分の事件（例: フォルダが終了事件なのに進行事件）は、フォルダの区分にする
+ * - それでもフォルダの区分の事件が無ければ（例: 終了事件だけの依頼者のフォルダが進行事件へ戻された）、
+ *   いちばん最近更新した事件をフォルダの区分にする（相談の事件があればそちらを優先。受任＝相談から進行事件）
+ * フォルダは動かさない（OneDrive 側が正）。変えた事件は記録に残す
+ */
+export function alignCaseStatusToFolder(clientId: number, target: CaseStatus, reason: string): CaseStatusChange[] {
+  const cases = db().select().from(schema.cases).where(eq(schema.cases.clientId, clientId)).all();
+  if (!cases.length) return [];
+  const rank = (st: string) => STATUS_RANK[st as CaseStatus] ?? 9;
+  const changes: CaseStatusChange[] = [];
+  for (const k of cases) if (rank(k.status) < STATUS_RANK[target]) changes.push({ caseId: k.id, title: k.title, from: k.status as CaseStatus, to: target });
+  const hasTarget = cases.some((k) => k.status === target) || changes.length > 0;
+  if (!hasTarget) {
+    const byRecent = [...cases].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const pick = (target === 'active' ? byRecent.find((k) => k.status === 'consultation') : undefined) ?? byRecent[0]!;
+    changes.push({ caseId: pick.id, title: pick.title, from: pick.status as CaseStatus, to: target });
+  }
+  const now = new Date().toISOString();
+  for (const ch of changes) {
+    db().update(schema.cases).set({ status: ch.to, updatedAt: now }).where(eq(schema.cases.id, ch.caseId)).run();
+    db()
+      .insert(schema.caseNotes)
+      .values({ caseId: ch.caseId, clientId, kind: 'progress', occurredAt: now, rawText: reason, gist: `区分を「${CASE_STATUS_LABEL[ch.from]}」から「${CASE_STATUS_LABEL[ch.to]}」に変更（${reason}）`, createdBy: 'system' })
+      .run();
+  }
+  if (changes.length) logger.info({ clientId, target, changes: changes.length }, 'OneDrive のフォルダの区分に合わせて事件の区分を変えました');
+  return changes;
+}
+
+/** フォルダの置き場所（区分）と、アプリの事件の区分が食い違っている依頼者 */
+export function folderStatusMismatches(): { clientId: number; clientName: string; folder: string; folderStatus: CaseStatus; appStatus: CaseStatus; caseCount: number }[] {
+  if (!hasStatusLayout()) return [];
+  const out: ReturnType<typeof folderStatusMismatches> = [];
+  for (const c of db().select().from(schema.clients).all()) {
+    const folderStatus = statusOfFolderRel(c.onedriveFolderPath);
+    if (!folderStatus) continue;
+    const caseCount = db().select({ n: sql<number>`count(*)` }).from(schema.cases).where(eq(schema.cases.clientId, c.id)).get()?.n ?? 0;
+    if (!caseCount) continue;
+    const appStatus = clientEffectiveStatus(c.id);
+    if (appStatus !== folderStatus) out.push({ clientId: c.id, clientName: c.name, folder: c.onedriveFolderPath!, folderStatus, appStatus, caseCount: Number(caseCount) });
+  }
+  return out;
+}
+
+/** 画面で選んだ依頼者について、事件の区分をフォルダの区分に合わせる */
+export function applyFolderStatuses(clientIds: number[]): { clients: number; changed: CaseStatusChange[] } {
+  const wanted = new Set(clientIds);
+  const changed: CaseStatusChange[] = [];
+  let clients = 0;
+  for (const m of folderStatusMismatches()) {
+    if (!wanted.has(m.clientId)) continue;
+    const r = alignCaseStatusToFolder(m.clientId, m.folderStatus, `OneDrive で依頼者フォルダが「${statusFolderMap()[m.folderStatus]}」にあるため`);
+    if (r.length) clients++;
+    changed.push(...r);
+  }
+  return { clients, changed };
 }
 
 /** 依頼者フォルダの OneDrive 上のパス（「/」で始まる指定は絶対パス、それ以外は依頼者ルートからの相対） */
@@ -294,7 +375,15 @@ function applyNewFolderPath(client: { id: number; name: string; onedriveFolderPa
     db().run(sql`update form_templates set path = ${newFolder} || substr(path, ${oldFolder.length + 1}) where path like ${oldFolder + '/%'}`);
   }
   logger.info({ clientId: client.id, from, to: newRel }, 'OneDrive 側のフォルダ名の変更を取り込みました');
-  return { clientId: client.id, clientName: client.name, from, to: newRel };
+  const out: FolderRename = { clientId: client.id, clientName: client.name, from, to: newRel };
+  // 別の区分フォルダへ移されていたら、事件の区分もフォルダに合わせる（OneDrive 側での整理をアプリに反映する）
+  const before = statusOfFolderRel(from);
+  const after = statusOfFolderRel(newRel);
+  if (after && after !== before) {
+    const changed = alignCaseStatusToFolder(client.id, after, `OneDrive で依頼者フォルダが「${splitRel(newRel).parent}」へ移されたため`);
+    if (changed.length) out.status = { to: after, changed };
+  }
+  return out;
 }
 
 /**

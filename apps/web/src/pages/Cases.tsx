@@ -115,6 +115,7 @@ export default function Cases() {
         </button>
         {q && <span className="self-center text-xs text-slate-500">「{q}」で検索中</span>}
       </div>
+      <FolderStatusSync />
       <CaseBulkBar
         ids={picked.map((c) => c.id)}
         onClear={() => setSelected(new Set())}
@@ -183,6 +184,118 @@ export default function Cases() {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+interface FolderMismatch {
+  clientId: number;
+  clientName: string;
+  folder: string;
+  folderStatus: CaseStatus;
+  appStatus: CaseStatus;
+  caseCount: number;
+}
+interface FolderRename {
+  clientName: string;
+  from: string;
+  to: string;
+  status?: { to: CaseStatus; changed: { title: string; from: CaseStatus; to: CaseStatus }[] };
+}
+
+/**
+ * OneDrive の区分フォルダ（相談・進行事件・残務処理・終了事件）と事件の区分を合わせる。
+ * フォルダを別の区分へ移すと 1 時間ごとの取り込みで区分も変わる。すぐ反映したいときは「OneDrive から取り込む」。
+ * 以前から食い違っている依頼者は、ここで確かめてから合わせる
+ */
+function FolderStatusSync() {
+  const qc = useQueryClient();
+  const mism = useQuery({ queryKey: ['folder-status-mismatches'], queryFn: () => api.get<FolderMismatch[]>('/clients/folders/status-mismatches') });
+  const [picked, setPicked] = useState<Set<number> | null>(null);
+  const [open, setOpen] = useState(false);
+  const [msg, setMsg] = useState('');
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['cases'] });
+    qc.invalidateQueries({ queryKey: ['folder-status-mismatches'] });
+    qc.invalidateQueries({ queryKey: ['dashboard'] });
+  };
+  const sync = useMutation({
+    mutationFn: () => api.post<{ checked: number; renamed: number; renames: FolderRename[] }>('/clients/folders/sync-names'),
+    onSuccess: (r) => {
+      const moved = r.renames.filter((x) => x.status);
+      setMsg(
+        moved.length
+          ? `OneDrive での移動に合わせて区分を変えました: ${moved.map((x) => `${x.clientName}（${CASE_STATUS_LABEL[x.status!.to]}）`).join('、')}`
+          : r.renamed
+            ? `フォルダ名の変更を ${r.renamed} 件取り込みました（区分の変更はありません）`
+            : `OneDrive 側の変更はありませんでした（${r.checked} 件を確認）`,
+      );
+      refresh();
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
+  const align = useMutation({
+    mutationFn: (ids: number[]) => api.post<{ clients: number; changed: unknown[] }>('/clients/folders/align-status', { clientIds: ids }),
+    onSuccess: (r) => {
+      setMsg(`${r.clients} 人の依頼者の事件（${r.changed.length} 件）を、フォルダの区分に合わせました`);
+      setOpen(false);
+      setPicked(null);
+      refresh();
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
+  const list = mism.data ?? [];
+  const sel = picked ?? new Set(list.map((m) => m.clientId));
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+        <button type="button" className="btn btn-sm" onClick={() => sync.mutate()} disabled={sync.isPending} title="OneDrive で依頼者フォルダを別の区分フォルダへ移したら、事件の区分もそれに合わせます（1 時間ごとにも自動で取り込みます）">
+          {sync.isPending ? 'OneDrive を確認中…' : 'OneDrive から取り込む'}
+        </button>
+        {list.length > 0 && (
+          <button type="button" className="text-orange-700 underline" onClick={() => setOpen((v) => !v)}>
+            フォルダの区分と違う依頼者が {list.length} 人います
+          </button>
+        )}
+        {msg && <span className="fade-in text-green-700">{msg}</span>}
+      </div>
+      {open && list.length > 0 && (
+        <div className="fade-in card space-y-2 border-orange-200 text-sm">
+          <div className="text-xs text-slate-600">OneDrive の依頼者フォルダが置かれている区分に、事件の区分を合わせます（フォルダは動かしません）。合わせない依頼者はチェックを外してください。</div>
+          <ul className="space-y-1">
+            {list.map((m) => (
+              <li key={m.clientId} className="flex flex-wrap items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={sel.has(m.clientId)}
+                  onChange={(e) => {
+                    const next = new Set(sel);
+                    if (e.target.checked) next.add(m.clientId);
+                    else next.delete(m.clientId);
+                    setPicked(next);
+                  }}
+                  aria-label={`${m.clientName} を合わせる`}
+                />
+                <Link to={`/clients/${m.clientId}`} className="font-medium hover:underline">
+                  {m.clientName}
+                </Link>
+                <span className="text-xs text-slate-500">
+                  アプリ: <CaseStatusBadge status={m.appStatus} /> → フォルダ: <CaseStatusBadge status={m.folderStatus} />
+                </span>
+                <span className="truncate text-xs text-slate-400">{m.folder}</span>
+              </li>
+            ))}
+          </ul>
+          <div className="flex gap-2">
+            <button type="button" className="btn btn-sm btn-primary" onClick={() => align.mutate([...sel])} disabled={!sel.size || align.isPending}>
+              {align.isPending ? '変更中…' : `${sel.size} 人をフォルダの区分に合わせる`}
+            </button>
+            <button type="button" className="btn btn-sm" onClick={() => setOpen(false)}>
+              閉じる
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
