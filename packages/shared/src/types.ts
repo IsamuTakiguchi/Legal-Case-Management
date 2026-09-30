@@ -67,11 +67,13 @@ export const ATTACHMENT_STATUSES = ['pending', 'stored', 'unassigned', 'failed']
 export type AttachmentStatus = (typeof ATTACHMENT_STATUSES)[number];
 
 /** 事件の関係者の役割 */
-export const CASE_CONTACT_ROLES = ['opponent', 'opponent_counsel', 'court', 'insurer', 'other'] as const;
+export const CASE_CONTACT_ROLES = ['opponent', 'opponent_counsel', 'opponent_insurer', 'client_insurer', 'court', 'insurer', 'other'] as const;
 export type CaseContactRole = (typeof CASE_CONTACT_ROLES)[number];
 export const CASE_CONTACT_ROLE_LABEL: Record<CaseContactRole, string> = {
   opponent: '相手方',
   opponent_counsel: '相手方代理人',
+  opponent_insurer: '相手方保険会社',
+  client_insurer: '依頼者側保険会社',
   court: '裁判所',
   insurer: '保険会社',
   other: 'その他',
@@ -85,6 +87,9 @@ export const caseContactInputSchema = z.object({
   lineUserId: z.string().nullable().optional(),
   chatworkAccountId: z.number().int().nullable().optional(),
   phone: z.string().nullable().optional(),
+  fax: z.string().nullable().optional(),
+  /** 担当の区分（物損・人損など） */
+  department: z.string().nullable().optional(),
   note: z.string().nullable().optional(),
 });
 export type CaseContactInput = z.infer<typeof caseContactInputSchema>;

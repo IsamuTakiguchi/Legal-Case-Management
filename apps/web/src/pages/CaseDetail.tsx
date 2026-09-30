@@ -10,10 +10,11 @@ import { LongText } from '../lib/LongText';
 import { TaskDeadlineSelect } from '../lib/Deadline';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { fmtDateTime, fmtDate, fmtYen, fmtBytes, toLocalInput, fromLocalInput, channelLabel } from '../lib/format';
-import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, messageLink, ACTIVE_TASK_STATUSES, taskStatusForWaiting, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
+import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, messageLink, ACTIVE_TASK_STATUSES, taskStatusForWaiting, formatWareki, parseJaDate, addYearsIso, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 import { ChatworkTaskReply } from '../lib/ChatworkTaskReply';
+import { ContactMemoImport } from '../lib/ContactMemoImport';
 
 interface Note {
   id: number;
@@ -46,6 +47,7 @@ interface CaseData {
   nextHearingAt: string | null;
   staffId: number | null;
   chatworkRoomId: number | null;
+  accidentDate: string | null;
   staff: { id: number; name: string } | null;
   notes: Note[];
   tasks: { id: number; title: string; note: string | null; status: string; dueAt: string | null; followUpAt: string | null; chatworkTaskId: number | null; chatworkReplyable?: boolean; chatworkAssignedByName?: string | null; chatworkRepliedAt?: string | null }[];
@@ -88,18 +90,18 @@ export default function CaseDetail() {
   const holds = useCaseHolds(id ? Number(id) : null);
   const types = useQuery({ queryKey: ['case-types'], queryFn: () => api.get<{ key: string; label: string }[]>('/case-types') });
   const c = d.data;
-  const [form, setForm] = useState({ title: '', caseType: '', courtName: '', caseNumber: '', stage: '', policy: '', status: 'active', staffId: '', chatworkRoomId: '' });
+  const [form, setForm] = useState({ title: '', caseType: '', courtName: '', caseNumber: '', stage: '', policy: '', status: 'active', staffId: '', chatworkRoomId: '', accidentDate: '' });
   useEffect(() => {
-    if (c) setForm({ title: c.title, caseType: c.caseType?.key ?? 'general_civil', courtName: c.courtName ?? '', caseNumber: c.caseNumber ?? '', stage: c.stage ?? '', policy: c.policy ?? '', status: c.status, staffId: c.staffId ? String(c.staffId) : '', chatworkRoomId: c.chatworkRoomId ? String(c.chatworkRoomId) : '' });
+    if (c) setForm({ title: c.title, caseType: c.caseType?.key ?? 'general_civil', courtName: c.courtName ?? '', caseNumber: c.caseNumber ?? '', stage: c.stage ?? '', policy: c.policy ?? '', status: c.status, staffId: c.staffId ? String(c.staffId) : '', chatworkRoomId: c.chatworkRoomId ? String(c.chatworkRoomId) : '', accidentDate: formatWareki(c.accidentDate, 'short') });
   }, [c]);
   // 入力途中の内容はこの端末に自動保存する（保存前に画面を離れても消えない）
   const caseBase = c
-    ? { title: c.title, caseType: c.caseType?.key ?? 'general_civil', courtName: c.courtName ?? '', caseNumber: c.caseNumber ?? '', stage: c.stage ?? '', policy: c.policy ?? '', status: c.status, staffId: c.staffId ? String(c.staffId) : '', chatworkRoomId: c.chatworkRoomId ? String(c.chatworkRoomId) : '' }
+    ? { title: c.title, caseType: c.caseType?.key ?? 'general_civil', courtName: c.courtName ?? '', caseNumber: c.caseNumber ?? '', stage: c.stage ?? '', policy: c.policy ?? '', status: c.status, staffId: c.staffId ? String(c.staffId) : '', chatworkRoomId: c.chatworkRoomId ? String(c.chatworkRoomId) : '', accidentDate: formatWareki(c.accidentDate, 'short') }
     : null;
   const caseDraft = useDraftRecord(id ? `case:${id}:edit` : null, form, setForm, caseBase);
   const staffList = useQuery({ queryKey: ['staff'], queryFn: () => api.get<{ id: number; name: string }[]>('/staff') });
   const save = useMutation({
-    mutationFn: () => api.put(`/cases/${id}`, { ...form, staffId: form.staffId ? Number(form.staffId) : null, chatworkRoomId: form.chatworkRoomId ? Number(form.chatworkRoomId) : null }),
+    mutationFn: () => api.put(`/cases/${id}`, { ...form, staffId: form.staffId ? Number(form.staffId) : null, chatworkRoomId: form.chatworkRoomId ? Number(form.chatworkRoomId) : null, accidentDate: form.accidentDate.trim() || null }),
     onSuccess: () => {
       caseDraft.clear();
       qc.invalidateQueries({ queryKey: ['case', id] });
@@ -122,6 +124,7 @@ export default function CaseDetail() {
           </Link>
         )}
         <span className="badge badge-gray">{c.caseType?.label}</span>
+        {c.accidentDate && <span className="text-sm text-slate-600">事故日: {formatWareki(c.accidentDate)}</span>}
         {c.nextHearingAt && <span className="text-sm text-slate-600">次回期日: {fmtDateTime(c.nextHearingAt)}</span>}
       </div>
       <div className="flex gap-1 border-b border-slate-200">
@@ -186,6 +189,7 @@ export default function CaseDetail() {
               </select>
               <input className="input" placeholder="裁判所" value={form.courtName} onChange={(e) => setForm({ ...form, courtName: e.target.value })} />
               <input className="input" placeholder="事件番号" value={form.caseNumber} onChange={(e) => setForm({ ...form, caseNumber: e.target.value })} />
+              {(form.caseType === 'traffic' || c.accidentDate) && <AccidentDateField value={form.accidentDate} onChange={(v) => setForm({ ...form, accidentDate: v })} />}
               <input className="input" placeholder="現在の段階（例: 第2回弁論準備、受任通知送付済）" value={form.stage} onChange={(e) => setForm({ ...form, stage: e.target.value })} />
               <select className="input" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
                 {CASE_STATUSES.map((s) => (
@@ -219,6 +223,7 @@ export default function CaseDetail() {
               <button className="btn btn-primary w-full justify-center" onClick={() => save.mutate()} disabled={save.isPending}>
                 保存
               </button>
+              {save.error && <div className="fade-in text-xs text-red-600">{(save.error as Error).message}</div>}
             </section>
             <section className="card text-sm">
               <div className="mb-2 flex items-center">
@@ -230,7 +235,7 @@ export default function CaseDetail() {
               {c.summary ? <div className="whitespace-pre-wrap text-slate-700">{c.summary}</div> : <div className="text-slate-500">未生成</div>}
               {c.summaryGeneratedAt && <div className="mt-1 text-xs text-slate-400">生成 {fmtDateTime(c.summaryGeneratedAt)}</div>}
             </section>
-            <ContactsSection caseId={c.id} />
+            <ContactsSection caseId={c.id} traffic={c.caseType?.key === 'traffic'} />
             <section className="card text-sm">
               <h2 className="mb-2 font-semibold">未了タスク</h2>
               <ul className="mb-3 space-y-1">
@@ -697,9 +702,39 @@ interface Contact {
   lineUserId: string | null;
   chatworkAccountId: number | null;
   phone: string | null;
+  fax: string | null;
+  department: string | null;
   note: string | null;
 }
-const EMPTY_CONTACT = { role: 'opponent_counsel', name: '', organization: '', emails: '', phone: '', note: '' };
+const EMPTY_CONTACT = { role: 'opponent_counsel', name: '', organization: '', department: '', emails: '', phone: '', fax: '', note: '' };
+const roleOrder = (role: string) => {
+  const i = (CASE_CONTACT_ROLES as readonly string[]).indexOf(role);
+  return i < 0 ? 99 : i;
+};
+
+/**
+ * 事故日の入力。「R5.9.10」「令和5年9月10日」「2023/9/10」のどれでも入れられ、読み取った日付と消滅時効の目安を下に出す
+ */
+function AccidentDateField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const iso = parseJaDate(value);
+  return (
+    <div>
+      <label className="label">事故日</label>
+      <input className="input" value={value} onChange={(e) => onChange(e.target.value)} placeholder="例: R5.9.10、令和5年9月10日、2023/9/10" />
+      {value.trim() && !iso && <div className="mt-0.5 text-xs text-orange-700">日付として読めません（例: R5.9.10）</div>}
+      {iso && (
+        <div className="mt-0.5 space-y-0.5 text-xs text-slate-500">
+          <div>
+            {formatWareki(iso)}（{iso.replace(/-/g, '/')}）
+          </div>
+          <div title="民法 724 条・724 条の 2。損害と加害者を知った時から。後遺障害分は症状固定日から数えるのが一般的です">
+            時効の目安（事故日から）: 物損 3 年 {formatWareki(addYearsIso(iso, 3), 'short')}／人身 5 年 {formatWareki(addYearsIso(iso, 5), 'short')}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** 事件の関係者（相手方・相手方代理人・裁判所など）。登録したメールアドレス等からの連絡は自動でこの事件に紐付く */
 /** 事件ページから、この事件のタスクを直接追加する */
@@ -785,17 +820,19 @@ function CaseTaskForm({ caseId, hasStaff, onDone }: { caseId: number; hasStaff: 
   );
 }
 
-function ContactsSection({ caseId }: { caseId: number }) {
+function ContactsSection({ caseId, traffic }: { caseId: number; traffic: boolean }) {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['contacts', String(caseId)], queryFn: () => api.get<Contact[]>(`/cases/${caseId}/contacts`) });
   const [editing, setEditing] = useState<number | 'new' | null>(null);
   const [form, setForm] = useState(EMPTY_CONTACT);
   const [err, setErr] = useState('');
+  const [pasting, setPasting] = useState(false);
+  const [notice, setNotice] = useState('');
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['contacts'] });
     qc.invalidateQueries({ queryKey: ['case', String(caseId)] });
   };
-  const body = () => ({ role: form.role, name: form.name, organization: form.organization || null, emails: form.emails.split(/[\s,、;]+/).filter(Boolean), phone: form.phone || null, note: form.note || null });
+  const body = () => ({ role: form.role, name: form.name, organization: form.organization || null, department: form.department || null, emails: form.emails.split(/[\s,、;]+/).filter(Boolean), phone: form.phone || null, fax: form.fax || null, note: form.note || null });
   const save = useMutation({
     mutationFn: () => (editing === 'new' ? api.post(`/cases/${caseId}/contacts`, body()) : api.put(`/contacts/${editing}`, body())),
     onSuccess: () => {
@@ -808,24 +845,39 @@ function ContactsSection({ caseId }: { caseId: number }) {
   const remove = useMutation({ mutationFn: (id: number) => api.del(`/contacts/${id}`), onSuccess: refresh, onError: (e) => setErr((e as Error).message) });
   const startEdit = (x: Contact) => {
     setEditing(x.id);
-    setForm({ role: x.role, name: x.name, organization: x.organization ?? '', emails: x.emails.join(', '), phone: x.phone ?? '', note: x.note ?? '' });
+    setForm({ role: x.role, name: x.name, organization: x.organization ?? '', department: x.department ?? '', emails: x.emails.join(', '), phone: x.phone ?? '', fax: x.fax ?? '', note: x.note ?? '' });
   };
   return (
     <section className="card text-sm">
       <div className="mb-2 flex items-center gap-2">
-        <h2 className="font-semibold">関係者（相手方・代理人など）</h2>
+        <h2 className="font-semibold">{traffic ? '関係者（保険会社・相手方など）' : '関係者（相手方・代理人など）'}</h2>
+        <button className="btn btn-sm ml-auto" onClick={() => setPasting((v) => !v)} title="メモ（事故日・担当者・電話・FAX）を貼り付けてまとめて登録">
+          メモから登録
+        </button>
         <button
-          className="btn btn-sm ml-auto"
+          className="btn btn-sm"
           onClick={() => {
             setEditing('new');
-            setForm(EMPTY_CONTACT);
+            setForm(traffic ? { ...EMPTY_CONTACT, role: 'opponent_insurer' } : EMPTY_CONTACT);
           }}
         >
           追加
         </button>
       </div>
+      {pasting && (
+        <ContactMemoImport
+          caseId={caseId}
+          onClose={() => setPasting(false)}
+          onDone={(summary) => {
+            setPasting(false);
+            setNotice(summary);
+            refresh();
+          }}
+        />
+      )}
+      {notice && <div className="fade-in mb-2 text-xs text-green-700">{notice}</div>}
       <ul className="space-y-2">
-        {q.data?.map((x) => (
+        {[...(q.data ?? [])].sort((a, b) => roleOrder(a.role) - roleOrder(b.role)).map((x) => (
           <li key={x.id} className="rounded border border-slate-100 p-2">
             {editing === x.id ? (
               <ContactForm form={form} setForm={setForm} onSave={() => save.mutate()} onCancel={() => setEditing(null)} busy={save.isPending} />
@@ -834,12 +886,18 @@ function ContactsSection({ caseId }: { caseId: number }) {
                 <span className="badge badge-orange shrink-0">{CASE_CONTACT_ROLE_LABEL[x.role as keyof typeof CASE_CONTACT_ROLE_LABEL] ?? x.role}</span>
                 <div className="min-w-0 flex-1">
                   <div className="font-medium">
+                    {x.organization && x.organization !== x.name && <span className="mr-1">{x.organization}</span>}
+                    {x.department && <span className="mr-1 text-xs text-slate-500">{x.department}担当</span>}
                     {x.name}
-                    {x.organization && <span className="ml-1 text-xs text-slate-500">{x.organization}</span>}
                   </div>
                   <div className="text-xs text-slate-500">
+                    {x.phone && (
+                      <a className="mr-2 whitespace-nowrap hover:underline" href={`tel:${x.phone.replace(/[^\d+]/g, '')}`}>
+                        TEL {x.phone}
+                      </a>
+                    )}
+                    {x.fax && <span className="mr-2 whitespace-nowrap">FAX {x.fax}</span>}
                     {x.emails.join(', ')}
-                    {x.phone && <span className="ml-2">☎ {x.phone}</span>}
                     {x.lineUserId && <span className="ml-2 badge badge-line">LINE 連携済</span>}
                     {x.chatworkAccountId && <span className="ml-2 badge badge-chatwork">Chatwork 連携済</span>}
                   </div>
@@ -883,11 +941,17 @@ function ContactForm({ form, setForm, onSave, onCancel, busy }: { form: typeof E
             </option>
           ))}
         </select>
-        <input className="input flex-1" placeholder="名前" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        <input className="input flex-1" placeholder="名前（担当者）" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
       </div>
-      <input className="input" placeholder="所属（法律事務所名・会社名など）" value={form.organization} onChange={(e) => setForm({ ...form, organization: e.target.value })} />
+      <div className="flex flex-wrap gap-1">
+        <input className="input min-w-0 flex-1" placeholder="所属（保険会社・法律事務所名など）" value={form.organization} onChange={(e) => setForm({ ...form, organization: e.target.value })} />
+        <input className="input w-28" placeholder="担当（物損・人損）" value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} />
+      </div>
+      <div className="flex flex-wrap gap-1">
+        <input className="input min-w-0 flex-1" placeholder="電話番号" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+        <input className="input min-w-0 flex-1" placeholder="FAX 番号" value={form.fax} onChange={(e) => setForm({ ...form, fax: e.target.value })} />
+      </div>
       <input className="input" placeholder="メールアドレス（複数はカンマ区切り）" value={form.emails} onChange={(e) => setForm({ ...form, emails: e.target.value })} />
-      <input className="input" placeholder="電話番号" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
       <input className="input" placeholder="メモ" value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} />
       <div className="flex gap-2">
         <button className="btn btn-primary btn-sm" onClick={onSave} disabled={!form.name.trim() || busy}>
