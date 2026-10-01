@@ -583,6 +583,26 @@ export async function cancelHoldSet(sessionId: number) {
   resolveAlertsByKeyPrefix(`scheduling_stale:${sessionId}`);
 }
 
+/**
+ * 仮押さえた候補のうち 1 つだけを取り消す（カレンダーからも消す）。
+ * 候補が残らなければ日程調整そのものを取り消す
+ */
+export async function cancelHoldCandidate(sessionId: number, eventId: number): Promise<{ remaining: number }> {
+  const session = db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, sessionId)).get();
+  if (!session) throw new Error('日程調整が見つかりません');
+  if (session.state !== 'proposing') throw new Error('この日程調整はすでに確定・取消済みです');
+  const ev = db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, eventId)).get();
+  if (!ev || !session.candidates.some((c) => c.eventId === ev.googleEventId)) throw new Error('この日程調整の候補ではありません');
+  await removeCalendarEvent(ev.id);
+  const rest = session.candidates.filter((c) => c.eventId !== ev.googleEventId);
+  if (!rest.length) {
+    await cancelHoldSet(sessionId);
+    return { remaining: 0 };
+  }
+  db().update(schema.schedulingSessions).set({ candidates: rest, updatedAt: new Date().toISOString() }).where(eq(schema.schedulingSessions.id, sessionId)).run();
+  return { remaining: rest.length };
+}
+
 // ---- 事件ページから仮押さえを扱う ----
 
 export interface CaseHoldCandidate {
