@@ -547,6 +547,14 @@ function CaseHolds({
     },
     onError: fail,
   });
+  const cancelOne = useMutation({
+    mutationFn: (v: { sessionId: number; eventId: number }) => api.post<{ remaining: number }>(`/calendar/holds/${v.sessionId}/candidates/${v.eventId}/cancel`),
+    onSuccess: (r) => {
+      refresh();
+      setMsg({ kind: 'ok', text: r.remaining ? `この候補の仮押さえを取り消しました（残り ${r.remaining} 件）` : '最後の候補だったので、日程調整を取り消しました' });
+    },
+    onError: fail,
+  });
   const attach = useMutation({
     mutationFn: (sessionId: number) => api.post(`/cases/${caseId}/holds/${sessionId}/attach`),
     onSuccess: () => {
@@ -689,7 +697,20 @@ function CaseHolds({
                     >
                       この候補で確定
                     </button>
-                  ) : (
+                  ) : null}
+                  {v.eventId && (
+                    <button
+                      className="btn btn-sm"
+                      disabled={cancelOne.isPending}
+                      title="この候補だけ仮押さえを取り消します（ほかの候補は残ります）"
+                      onClick={() => {
+                        if (window.confirm(`${fmtSlot(v.startAt, v.endAt)} の仮押さえだけを取り消しますか？${s.candidates.length <= 1 ? '\n最後の候補なので、日程調整も取り消されます。' : ''}`)) cancelOne.mutate({ sessionId: s.sessionId, eventId: v.eventId! });
+                      }}
+                    >
+                      この候補を取消
+                    </button>
+                  )}
+                  {!v.eventId && (
                     <span className="ml-auto text-xs text-slate-400">カレンダーにありません</span>
                   )}
                 </li>

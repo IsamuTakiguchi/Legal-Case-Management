@@ -492,6 +492,33 @@ describe('複数候補の仮押さえ', () => {
   });
 });
 
+describe('仮押さえの一部取消', () => {
+  it('候補を 1 つだけ取り消すとほかは残り、最後の 1 つを取り消すと日程調整も取り消しになる', async () => {
+    const { createHoldSet, cancelHoldCandidate, listCalendarEvents } = await import('../services/court.js');
+    const client = db().insert(schema.clients).values({ name: '一部 取消', kana: 'いちぶ とりけし' }).returning().get();
+    const day = (n: number, h: number) => new Date(Date.now() + n * 86400_000 + h * 3600_000).toISOString();
+    const r = await createHoldSet({ title: '打合せ', kind: 'meeting', clientId: client.id, slots: [{ startAt: day(2, 1), endAt: day(2, 2) }, { startAt: day(3, 1), endAt: day(3, 2) }, { startAt: day(4, 1), endAt: day(4, 2) }] });
+    const session = () => db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, r.sessionId)).get()!;
+    const listed = () => listCalendarEvents(new Date(), new Date(Date.now() + 7 * 86400_000), { clientId: client.id });
+
+    expect(await cancelHoldCandidate(r.sessionId, r.events[1].id)).toEqual({ remaining: 2 });
+    expect(listed().map((e) => e.id).sort()).toEqual([r.events[0].id, r.events[2].id].sort());
+    expect(listed()[0].sessionCandidates).toBe(2);
+    expect(session().state).toBe('proposing');
+    expect(session().candidates.length).toBe(2);
+    await expect(cancelHoldCandidate(r.sessionId, r.events[1].id)).rejects.toThrow('候補ではありません');
+
+    await cancelHoldCandidate(r.sessionId, r.events[0].id);
+    expect(await cancelHoldCandidate(r.sessionId, r.events[2].id)).toEqual({ remaining: 0 });
+    expect(listed().length).toBe(0);
+    expect(session().state).toBe('cancelled');
+    await expect(cancelHoldCandidate(r.sessionId, r.events[2].id)).rejects.toThrow('確定・取消済み');
+
+    db().delete(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, r.sessionId)).run();
+    db().delete(schema.clients).where(eq(schema.clients.id, client.id)).run();
+  });
+});
+
 describe('会話からの予定登録', () => {
   it('確定なら 1 件を依頼者・進行中の事件に紐付けて登録し、候補なら仮押さえにする', async () => {
     const { registerScheduleFromConversation } = await import('../services/scheduleExtract.js');

@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { proposeSlotsSchema, confirmSlotSchema, nextHearingInputSchema, EVENT_KINDS, schedulePreferencesSchema } from '@lcm/shared';
 import { proposeSlots, confirmSlot, cancelSession, listSessions, findFreeSlots, extractChosenSlot } from '../services/scheduling.js';
-import { syncCalendar, checkPostEvents, resolveNextHearing, listCourtDocs, listClientFolder, upcomingEvents, relinkEvent, listCalendarEvents, createCalendarEvent, editCalendarEvent, removeCalendarEvent, createHoldSet, confirmHold, cancelHoldSet, startReschedule, setHoldSetLocation } from '../services/court.js';
+import { syncCalendar, checkPostEvents, resolveNextHearing, listCourtDocs, listClientFolder, upcomingEvents, relinkEvent, listCalendarEvents, createCalendarEvent, editCalendarEvent, removeCalendarEvent, createHoldSet, confirmHold, cancelHoldSet, cancelHoldCandidate, startReschedule, setHoldSetLocation } from '../services/court.js';
 import { createZoomMeeting } from '../integrations/zoom.js';
 import { extractScheduleFromConversation, registerScheduleFromConversation, extractSchedulePreferences } from '../services/scheduleExtract.js';
 import { holdProposalContext, draftHoldProposal, sendHoldProposal } from '../services/holdProposal.js';
@@ -194,6 +194,11 @@ schedulingRoutes.post('/calendar/holds/:sessionId/cancel', async (c) => {
   await cancelHoldSet(Number(c.req.param('sessionId')));
   return c.json({ ok: true });
 });
+
+/** 仮押さえの候補を 1 つだけ取り消す */
+schedulingRoutes.post('/calendar/holds/:sessionId/candidates/:eventId/cancel', async (c) =>
+  c.json(await cancelHoldCandidate(Number(c.req.param('sessionId')), Number(c.req.param('eventId')))),
+);
 
 schedulingRoutes.delete('/calendar/events/:id', async (c) => {
   await removeCalendarEvent(Number(c.req.param('id')));

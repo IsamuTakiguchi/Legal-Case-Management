@@ -157,6 +157,14 @@ export default function Calendar() {
     },
     onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
   });
+  const cancelOne = useMutation({
+    mutationFn: (v: { sessionId: number; eventId: number }) => api.post<{ remaining: number }>(`/calendar/holds/${v.sessionId}/candidates/${v.eventId}/cancel`),
+    onSuccess: (r) => {
+      invalidate();
+      setMsg({ kind: 'ok', text: r.remaining ? `この候補の仮押さえを取り消しました（残り ${r.remaining} 件）` : '最後の候補だったので、日程調整を取り消しました' });
+    },
+    onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
+  });
   const sync = useMutation({
     mutationFn: () => api.post<{ synced: number }>('/calendar/sync'),
     onSuccess: (r) => {
@@ -306,6 +314,16 @@ export default function Calendar() {
                             }}
                           >
                             この候補で確定
+                          </button>
+                          <button
+                            className="btn btn-sm"
+                            disabled={cancelOne.isPending}
+                            title="この候補だけ仮押さえを取り消します（ほかの候補は残ります）"
+                            onClick={() => {
+                              if (window.confirm(`この候補の仮押さえだけを取り消しますか？${e.sessionCandidates <= 1 ? '\n最後の候補なので、日程調整も取り消されます。' : ''}`)) cancelOne.mutate({ sessionId: e.sessionId!, eventId: e.id });
+                            }}
+                          >
+                            この候補を取消
                           </button>
                           <button
                             className="btn btn-sm"
