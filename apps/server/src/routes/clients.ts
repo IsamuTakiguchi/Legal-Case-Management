@@ -5,7 +5,7 @@ import { isConfigured } from '../config.js';
 import { z } from 'zod';
 import { eq, desc } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { normalizePhones, clientInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputSchema, creditorEventInputSchema, CREDITOR_IMPORT_FIELDS, caseContactInputSchema, staffAskDraftSchema, staffAskSendSchema, TASK_STATUSES, EVENT_KINDS, CASE_STATUSES, looksLikeCorporation } from '@lcm/shared';
+import { normalizePhones, clientInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputSchema, creditorEventInputSchema, CREDITOR_IMPORT_FIELDS, caseContactInputSchema, staffAskDraftSchema, staffAskSendSchema, TASK_STATUSES, EVENT_KINDS, CASE_STATUSES, looksLikeCorporation, provisionalClientName } from '@lcm/shared';
 import { searchClients } from '../services/identity.js';
 import { storage, FolderNotFoundError } from '../integrations/storage.js';
 import { clientFolder } from '../services/attachments.js';
@@ -129,7 +129,9 @@ clientRoutes.put('/clients/:id', async (c) => {
   // 実際に送られてきた項目だけを書き換える
   const input = Object.fromEntries(Object.entries(parsed).filter(([k]) => k in raw)) as typeof parsed;
   if (input.lineUserId) assertLineFriendFree(input.lineUserId, id);
-  const before = db().select({ path: schema.clients.onedriveFolderPath }).from(schema.clients).where(eq(schema.clients.id, id)).get();
+  const before = db().select({ path: schema.clients.onedriveFolderPath, name: schema.clients.name, provisional: schema.clients.provisional }).from(schema.clients).where(eq(schema.clients.id, id)).get();
+  // 氏名未確認の依頼者の名前を直したら、氏名が分かったものとして扱う（明示の指定があればそちら）
+  if (before?.provisional && input.name !== undefined && input.name.trim() !== before.name && input.provisional === undefined) input.provisional = false;
   db().update(schema.clients)
     .set({ ...input, ...(input.emails ? { emails: normalizeEmails(input.emails) } : {}), ...(input.phones ? { phones: normalizePhones(input.phones) } : {}), updatedAt: new Date().toISOString() })
     .where(eq(schema.clients.id, id))
@@ -281,7 +283,19 @@ clientRoutes.get('/cases', (c) => c.json(listCases({ clientId: c.req.query('clie
 const caseExtra = { caseType: z.string().optional(), stage: z.string().optional().nullable(), policy: z.string().optional().nullable(), staffId: z.number().int().nullable().optional(), chatworkRoomId: z.number().int().nullable().optional(), accidentDate: z.string().max(40).nullable().optional() };
 
 clientRoutes.post('/cases', async (c) => {
-  const body = caseInputSchema.extend(caseExtra).parse(await c.req.json());
+  const raw = (await c.req.json()) as Record<string, unknown>;
+  // 当事者の氏名が分からない相談（紹介者からの代理相談など）は、仮の呼び名で「氏名未確認」の依頼者を作って事件を付ける
+  const provisional = z.object({ label: z.string().trim().max(100).optional().nullable() }).nullable().optional().parse(raw.provisionalClient);
+  if (provisional !== undefined && provisional !== null) {
+    const body = caseInputSchema.omit({ clientId: true }).extend(caseExtra).parse(raw);
+    const client = db()
+      .insert(schema.clients)
+      .values({ name: provisionalClientName(provisional.label, body.referrer), provisional: true, notes: body.referrer ? `紹介者: ${body.referrer}` : null })
+      .returning()
+      .get();
+    return c.json(createCase({ ...body, clientId: client.id }));
+  }
+  const body = caseInputSchema.extend(caseExtra).parse(raw);
   return c.json(createCase(body));
 });
 

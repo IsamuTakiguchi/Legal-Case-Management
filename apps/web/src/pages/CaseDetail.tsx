@@ -36,7 +36,7 @@ interface CaseData {
   id: number;
   title: string;
   caseType: { key: string; label: string; hasCreditors: boolean; creditorStages: string[] } | null;
-  client: { id: number; name: string } | null;
+  client: { id: number; name: string; provisional?: boolean } | null;
   courtName: string | null;
   caseNumber: string | null;
   status: string;
@@ -49,6 +49,7 @@ interface CaseData {
   staffId: number | null;
   chatworkRoomId: number | null;
   accidentDate: string | null;
+  referrer: string | null;
   staff: { id: number; name: string } | null;
   notes: Note[];
   tasks: { id: number; title: string; note: string | null; status: string; dueAt: string | null; followUpAt: string | null; chatworkTaskId: number | null; chatworkReplyable?: boolean; chatworkAssignedByName?: string | null; chatworkRepliedAt?: string | null }[];
@@ -91,18 +92,18 @@ export default function CaseDetail() {
   const holds = useCaseHolds(id ? Number(id) : null);
   const types = useQuery({ queryKey: ['case-types'], queryFn: () => api.get<{ key: string; label: string }[]>('/case-types') });
   const c = d.data;
-  const [form, setForm] = useState({ title: '', caseType: '', courtName: '', caseNumber: '', stage: '', policy: '', status: 'active', staffId: '', chatworkRoomId: '', accidentDate: '' });
+  const [form, setForm] = useState({ title: '', caseType: '', courtName: '', caseNumber: '', stage: '', policy: '', status: 'active', staffId: '', chatworkRoomId: '', accidentDate: '', referrer: '' });
   useEffect(() => {
-    if (c) setForm({ title: c.title, caseType: c.caseType?.key ?? 'general_civil', courtName: c.courtName ?? '', caseNumber: c.caseNumber ?? '', stage: c.stage ?? '', policy: c.policy ?? '', status: c.status, staffId: c.staffId ? String(c.staffId) : '', chatworkRoomId: c.chatworkRoomId ? String(c.chatworkRoomId) : '', accidentDate: formatWareki(c.accidentDate, 'short') });
+    if (c) setForm({ title: c.title, caseType: c.caseType?.key ?? 'general_civil', courtName: c.courtName ?? '', caseNumber: c.caseNumber ?? '', stage: c.stage ?? '', policy: c.policy ?? '', status: c.status, staffId: c.staffId ? String(c.staffId) : '', chatworkRoomId: c.chatworkRoomId ? String(c.chatworkRoomId) : '', accidentDate: formatWareki(c.accidentDate, 'short'), referrer: c.referrer ?? '' });
   }, [c]);
   // 入力途中の内容はこの端末に自動保存する（保存前に画面を離れても消えない）
   const caseBase = c
-    ? { title: c.title, caseType: c.caseType?.key ?? 'general_civil', courtName: c.courtName ?? '', caseNumber: c.caseNumber ?? '', stage: c.stage ?? '', policy: c.policy ?? '', status: c.status, staffId: c.staffId ? String(c.staffId) : '', chatworkRoomId: c.chatworkRoomId ? String(c.chatworkRoomId) : '', accidentDate: formatWareki(c.accidentDate, 'short') }
+    ? { title: c.title, caseType: c.caseType?.key ?? 'general_civil', courtName: c.courtName ?? '', caseNumber: c.caseNumber ?? '', stage: c.stage ?? '', policy: c.policy ?? '', status: c.status, staffId: c.staffId ? String(c.staffId) : '', chatworkRoomId: c.chatworkRoomId ? String(c.chatworkRoomId) : '', accidentDate: formatWareki(c.accidentDate, 'short'), referrer: c.referrer ?? '' }
     : null;
   const caseDraft = useDraftRecord(id ? `case:${id}:edit` : null, form, setForm, caseBase);
   const staffList = useQuery({ queryKey: ['staff'], queryFn: () => api.get<{ id: number; name: string }[]>('/staff') });
   const save = useMutation({
-    mutationFn: () => api.put(`/cases/${id}`, { ...form, staffId: form.staffId ? Number(form.staffId) : null, chatworkRoomId: form.chatworkRoomId ? Number(form.chatworkRoomId) : null, accidentDate: form.accidentDate.trim() || null }),
+    mutationFn: () => api.put(`/cases/${id}`, { ...form, staffId: form.staffId ? Number(form.staffId) : null, chatworkRoomId: form.chatworkRoomId ? Number(form.chatworkRoomId) : null, accidentDate: form.accidentDate.trim() || null, referrer: form.referrer.trim() || null }),
     onSuccess: () => {
       caseDraft.clear();
       qc.invalidateQueries({ queryKey: ['case', id] });
@@ -124,6 +125,12 @@ export default function CaseDetail() {
             {c.client.name}
           </Link>
         )}
+        {c.client?.provisional && (
+          <Link to={`/clients/${c.client.id}`} className="badge badge-orange" title="当事者の氏名がまだ分かっていません。依頼者ページで確定できます">
+            氏名未確認
+          </Link>
+        )}
+        {c.referrer && <span className="text-sm text-slate-600">紹介: {c.referrer}</span>}
         <span className="badge badge-gray">{c.caseType?.label}</span>
         {c.accidentDate && <span className="text-sm text-slate-600">事故日: {formatWareki(c.accidentDate)}</span>}
         {c.nextHearingAt && <span className="text-sm text-slate-600">次回期日: {fmtDateTime(c.nextHearingAt)}</span>}
@@ -190,6 +197,7 @@ export default function CaseDetail() {
               </select>
               <input className="input" placeholder="裁判所" value={form.courtName} onChange={(e) => setForm({ ...form, courtName: e.target.value })} />
               <input className="input" placeholder="事件番号" value={form.caseNumber} onChange={(e) => setForm({ ...form, caseNumber: e.target.value })} />
+              <input className="input" placeholder="紹介者（任意）" value={form.referrer} onChange={(e) => setForm({ ...form, referrer: e.target.value })} aria-label="紹介者" />
               {(form.caseType === 'traffic' || c.accidentDate) && <AccidentDateField value={form.accidentDate} onChange={(v) => setForm({ ...form, accidentDate: v })} />}
               <input className="input" placeholder="現在の段階（例: 第2回弁論準備、受任通知送付済）" value={form.stage} onChange={(e) => setForm({ ...form, stage: e.target.value })} />
               <select className="input" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>

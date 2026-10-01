@@ -13,6 +13,7 @@ interface CaseRow {
   clientId: number;
   clientName: string;
   clientKana: string | null;
+  clientProvisional?: boolean;
   caseType: string;
   caseTypeLabel: string;
   hasCreditors: boolean;
@@ -160,6 +161,7 @@ export default function Cases() {
                   <Link to={`/clients/${c.clientId}`} className="hover:underline">
                     {c.clientName}
                   </Link>
+                  {c.clientProvisional && <span className="badge badge-orange ml-1">氏名未確認</span>}
                 </td>
                 <td className="px-4 py-2">
                   <CaseStatusBadge status={c.status} />
@@ -387,10 +389,21 @@ function NewCaseForm({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const nav = useNavigate();
   const types = useQuery({ queryKey: ['case-types'], queryFn: () => api.get<{ key: string; label: string }[]>('/case-types') });
-  const [form, setForm] = useState({ clientId: '', title: '', caseType: 'general_civil', status: 'active', courtName: '', caseNumber: '' });
+  const [form, setForm] = useState({ clientId: '', title: '', caseType: 'general_civil', status: 'active', courtName: '', caseNumber: '', referrer: '' });
+  // 当事者の氏名がまだ分からない相談（紹介者からの代理相談など）
+  const [unknownClient, setUnknownClient] = useState(false);
+  const [provisionalLabel, setProvisionalLabel] = useState('');
   const [err, setErr] = useState('');
   const create = useMutation({
-    mutationFn: () => api.post<{ id: number }>('/cases', { ...form, clientId: Number(form.clientId), courtName: form.courtName || null, caseNumber: form.caseNumber || null }),
+    mutationFn: () =>
+      api.post<{ id: number }>('/cases', {
+        ...form,
+        clientId: unknownClient ? undefined : Number(form.clientId),
+        provisionalClient: unknownClient ? { label: provisionalLabel.trim() || null } : undefined,
+        courtName: form.courtName || null,
+        caseNumber: form.caseNumber || null,
+        referrer: form.referrer.trim() || null,
+      }),
     onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ['cases'] });
       qc.invalidateQueries({ queryKey: ['client', form.clientId] });
@@ -404,8 +417,8 @@ function NewCaseForm({ onClose }: { onClose: () => void }) {
       className="card space-y-3 border-blue-200"
       onSubmit={(e) => {
         e.preventDefault();
-        if (!form.clientId) {
-          setErr('依頼者を選んでください');
+        if (!unknownClient && !form.clientId) {
+          setErr('依頼者を選んでください（氏名が分からない場合は「当事者の氏名が未確認」にチェック）');
           return;
         }
         create.mutate();
@@ -420,14 +433,38 @@ function NewCaseForm({ onClose }: { onClose: () => void }) {
       <div className="grid gap-3 md:grid-cols-2">
         <div>
           <label className="label">依頼者（登録済みから選ぶ）</label>
-          <ClientPicker value={form.clientId} onChange={(v) => setForm({ ...form, clientId: v })} emptyLabel="依頼者を選択…" selectClassName="min-w-48 flex-1" autoFocus />
+          {unknownClient ? (
+            <input className="input" value={provisionalLabel} onChange={(e) => setProvisionalLabel(e.target.value)} placeholder={`仮の呼び名（空なら「（氏名未確認）${form.referrer.trim() ? `${form.referrer.trim().replace(/(さん|様|氏)$/, '')}さん` : '紹介者'}紹介の相談者」）`} aria-label="仮の呼び名" />
+          ) : (
+            <ClientPicker value={form.clientId} onChange={(v) => setForm({ ...form, clientId: v })} emptyLabel="依頼者を選択…" selectClassName="min-w-48 flex-1" autoFocus />
+          )}
+          <label className="mt-1 flex items-center gap-1 text-sm">
+            <input
+              type="checkbox"
+              checked={unknownClient}
+              onChange={(e) => {
+                setUnknownClient(e.target.checked);
+                // 氏名未確認はたいてい相談段階
+                if (e.target.checked && form.status === 'active') setForm({ ...form, status: 'consultation' });
+              }}
+            />
+            当事者の氏名が未確認（紹介者からの代理相談など）
+          </label>
           <div className="mt-1 text-xs text-slate-500">
-            新しい依頼者の場合は{' '}
-            <Link to="/clients" className="text-blue-700 hover:underline">
-              依頼者ページ
-            </Link>{' '}
-            で先に登録してください。
+            {unknownClient ? (
+              '仮の依頼者（氏名未確認）を作って記録します。氏名が分かったら、依頼者ページで確定するか、登録済みの依頼者にまとめられます。'
+            ) : (
+              <>
+                新しい依頼者の場合は{' '}
+                <Link to="/clients" className="text-blue-700 hover:underline">
+                  依頼者ページ
+                </Link>{' '}
+                で先に登録してください。
+              </>
+            )}
           </div>
+          <label className="label mt-2">紹介者（任意）</label>
+          <input className="input" value={form.referrer} onChange={(e) => setForm({ ...form, referrer: e.target.value })} placeholder="例: 〇〇税理士、△△さん" />
         </div>
         <div className="space-y-3">
           <div>
