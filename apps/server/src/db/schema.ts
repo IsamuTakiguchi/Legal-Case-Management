@@ -9,6 +9,8 @@ export const clients = sqliteTable('clients', {
   kana: text('kana'),
   /** individual=個人 / corporation=法人 */
   entityType: text('entity_type').notNull().default('individual'),
+  /** 氏名がまだ分からない（紹介者からの代理相談など）。名前は仮の呼び名 */
+  provisional: integer('provisional', { mode: 'boolean' }).notNull().default(false),
   /** 法人の代表者（肩書・氏名・かな） */
   representativeTitle: text('representative_title'),
   representativeName: text('representative_name'),
@@ -59,6 +61,8 @@ export const cases = sqliteTable('cases', {
   staffId: integer('staff_id'),
   /** この事件専用の Chatwork グループチャット */
   chatworkRoomId: integer('chatwork_room_id'),
+  /** 紹介者（紹介者からの代理相談など） */
+  referrer: text('referrer'),
   /** 事故日（交通事故の事件。YYYY-MM-DD） */
   accidentDate: text('accident_date'),
   createdAt: text('created_at').notNull().default(now()),

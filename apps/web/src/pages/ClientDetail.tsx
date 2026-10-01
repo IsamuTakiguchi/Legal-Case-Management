@@ -8,6 +8,7 @@ import { Icon } from '../lib/icons';
 import { ClientForm, clientFormDraftKey, type ClientRow } from './Clients';
 import { EVENT_KIND_LABEL, TASK_STATUS_LABEL, type EventKind, type TaskStatus, CASE_STATUSES, CASE_STATUS_LABEL, telHref, representativeLabel } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
+import { ClientPicker } from '../lib/ClientPicker';
 import { LineInvitePanel } from '../lib/LineInvite';
 
 interface Detail extends ClientRow {
@@ -71,6 +72,7 @@ export default function ClientDetail() {
           ← 依頼者
         </Link>
         <h1 className="text-xl font-bold">{c.name}</h1>
+        {c.provisional && <span className="badge badge-orange">氏名未確認</span>}
         {c.entityType === 'corporation' && <span className="badge badge-gray">法人</span>}
         {c.kana && <span className="text-sm text-slate-500">{c.kana}</span>}
         <button className="btn btn-sm ml-auto" onClick={() => setEdit(!edit)}>
@@ -99,6 +101,7 @@ export default function ClientDetail() {
           onInviteChanged={() => qc.invalidateQueries({ queryKey: ['client', id] })}
         />
       )}
+      {c.provisional && <ProvisionalClientPanel clientId={c.id} name={c.name} />}
       <ContactCard c={c} onEdit={() => setEdit(true)} />
       <div className="grid gap-4 md:grid-cols-2">
         <section className="card">
@@ -432,5 +435,62 @@ function FolderEditor({ clientId, currentPath, currentFolder, exists, onDone, on
       )}
       {err && <div className="text-xs text-red-600">{err}</div>}
     </div>
+  );
+}
+
+/**
+ * 氏名未確認の依頼者（紹介者からの代理相談など）。氏名が分かったら名前を確定するか、
+ * すでに登録している依頼者だった場合はそちらにまとめる（事件・記録・会話などを引き継ぐ）
+ */
+function ProvisionalClientPanel({ clientId, name }: { clientId: number; name: string }) {
+  const qc = useQueryClient();
+  const nav = useNavigate();
+  const [newName, setNewName] = useState('');
+  const [kana, setKana] = useState('');
+  const [mergeInto, setMergeInto] = useState('');
+  const [err, setErr] = useState('');
+  const confirmName = useMutation({
+    mutationFn: () => api.put(`/clients/${clientId}`, { name: newName.trim(), kana: kana.trim() || null, provisional: false }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['client', String(clientId)] });
+      qc.invalidateQueries({ queryKey: ['clients'] });
+      qc.invalidateQueries({ queryKey: ['cases'] });
+    },
+    onError: (e) => setErr((e as Error).message),
+  });
+  const merge = useMutation({
+    mutationFn: () => api.post('/clients/merge', { keepId: Number(mergeInto), mergeIds: [clientId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['clients'] });
+      qc.invalidateQueries({ queryKey: ['cases'] });
+      nav(`/clients/${mergeInto}`);
+    },
+    onError: (e) => setErr((e as Error).message),
+  });
+  return (
+    <section className="card space-y-2 border-orange-200 bg-orange-50/50 text-sm">
+      <div className="font-medium text-orange-900">当事者の氏名がまだ分かっていない依頼者です（「{name}」は仮の呼び名）</div>
+      <div className="text-xs text-orange-800">氏名が分かったら、ここで確定してください。事件・記録はそのまま引き継がれます。</div>
+      <div className="flex flex-wrap items-center gap-2">
+        <input className="input w-48" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="氏名（例: 山田 太郎）" aria-label="確定する氏名" />
+        <input className="input w-40" value={kana} onChange={(e) => setKana(e.target.value)} placeholder="読み（任意）" aria-label="読み" />
+        <button type="button" className="btn btn-sm btn-primary" onClick={() => confirmName.mutate()} disabled={!newName.trim() || confirmName.isPending}>
+          氏名を確定
+        </button>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-slate-600">すでに登録している依頼者だった場合:</span>
+        <ClientPicker value={mergeInto} onChange={setMergeInto} emptyLabel="まとめ先の依頼者を選択…" selectClassName="w-56" />
+        <button
+          type="button"
+          className="btn btn-sm"
+          onClick={() => confirm('この依頼者の事件・記録・会話・タスクを、選んだ依頼者にまとめます。この仮の依頼者は消えます。よろしいですか？') && merge.mutate()}
+          disabled={!mergeInto || mergeInto === String(clientId) || merge.isPending}
+        >
+          その依頼者にまとめる
+        </button>
+      </div>
+      {err && <div className="text-xs text-red-600">{err}</div>}
+    </section>
   );
 }

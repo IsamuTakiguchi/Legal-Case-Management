@@ -41,6 +41,7 @@ export function createCase(input: CaseInput & { caseType?: string; stage?: strin
       policy: input.policy ?? null,
       staffId: input.staffId ?? null,
       chatworkRoomId: input.chatworkRoomId ?? null,
+      referrer: input.referrer?.trim() || null,
     })
     .returning()
     .get();
@@ -60,7 +61,7 @@ export function updateCase(
   if (!cur) throw new Error('事件が見つかりません');
   const now = new Date().toISOString();
   const set: Partial<typeof schema.cases.$inferInsert> = { updatedAt: now };
-  for (const k of ['title', 'courtName', 'caseNumber', 'status', 'caseType', 'stage', 'staffId', 'chatworkRoomId'] as const) {
+  for (const k of ['title', 'courtName', 'caseNumber', 'status', 'caseType', 'stage', 'staffId', 'chatworkRoomId', 'referrer'] as const) {
     if (patch[k] !== undefined) (set as Record<string, unknown>)[k] = patch[k] ?? null;
   }
   // 事故日は「R5.9.10」「令和5年9月10日」なども受け付けて YYYY-MM-DD で持つ
@@ -135,7 +136,7 @@ export function listCases(filter: { clientId?: number; status?: string }) {
   if (filter.status === 'open') conds.push(inArray(schema.cases.status, OPEN_CASE_STATUSES));
   else if (filter.status) conds.push(eq(schema.cases.status, filter.status));
   return db()
-    .select({ c: schema.cases, clientName: schema.clients.name, clientKana: schema.clients.kana, caseTypeLabel: schema.caseTypes.label, hasCreditors: schema.caseTypes.hasCreditors, staffName: schema.staffMembers.name })
+    .select({ c: schema.cases, clientName: schema.clients.name, clientKana: schema.clients.kana, clientProvisional: schema.clients.provisional, caseTypeLabel: schema.caseTypes.label, hasCreditors: schema.caseTypes.hasCreditors, staffName: schema.staffMembers.name })
     .from(schema.cases)
     .innerJoin(schema.clients, eq(schema.clients.id, schema.cases.clientId))
     .leftJoin(schema.caseTypes, eq(schema.caseTypes.key, schema.cases.caseType))
@@ -143,7 +144,7 @@ export function listCases(filter: { clientId?: number; status?: string }) {
     .where(conds.length ? and(...conds) : undefined)
     .orderBy(desc(schema.cases.updatedAt))
     .all()
-    .map((r) => ({ ...r.c, clientName: r.clientName, clientKana: r.clientKana, caseTypeLabel: r.caseTypeLabel ?? r.c.caseType, hasCreditors: !!r.hasCreditors, staffName: r.staffName ?? null }));
+    .map((r) => ({ ...r.c, clientName: r.clientName, clientKana: r.clientKana, clientProvisional: !!r.clientProvisional, caseTypeLabel: r.caseTypeLabel ?? r.c.caseType, hasCreditors: !!r.hasCreditors, staffName: r.staffName ?? null }));
 }
 
 export function getCase(id: number) {

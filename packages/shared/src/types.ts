@@ -129,6 +129,8 @@ export const clientInputSchema = z.object({
   onedriveFolderPath: z.string().optional().nullable(),
   preferredChannel: channelSchema.optional().nullable(),
   notes: z.string().optional().nullable(),
+  /** 氏名がまだ分からない（紹介者からの代理相談など）。名前は仮の呼び名 */
+  provisional: z.boolean().optional(),
 });
 export type ClientInput = z.infer<typeof clientInputSchema>;
 
@@ -138,8 +140,18 @@ export const caseInputSchema = z.object({
   courtName: z.string().optional().nullable(),
   caseNumber: z.string().optional().nullable(),
   status: z.enum(['consultation', 'active', 'wrapup', 'closed']).default('active'),
+  /** 紹介者 */
+  referrer: z.string().trim().max(200).optional().nullable(),
 });
 export type CaseInput = z.infer<typeof caseInputSchema>;
+
+/** 氏名が分からない依頼者の仮の呼び名（入力が無ければ紹介者から作る） */
+export function provisionalClientName(label: string | null | undefined, referrer: string | null | undefined): string {
+  const l = (label ?? '').trim();
+  if (l) return l;
+  const r = (referrer ?? '').trim().replace(/(さん|様|氏)$/, '');
+  return r ? `（氏名未確認）${r}さん紹介の相談者` : '（氏名未確認）相談者';
+}
 
 export const sendMessageSchema = z.object({
   text: z.string().min(1),

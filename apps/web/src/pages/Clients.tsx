@@ -36,6 +36,8 @@ export interface ClientRow {
   onedriveFolderPath: string | null;
   preferredChannel: string | null;
   notes: string | null;
+  /** 氏名がまだ分からない（紹介者からの代理相談など） */
+  provisional?: boolean;
   updatedAt?: string;
 }
 
@@ -154,6 +156,7 @@ export default function Clients() {
                   <Link to={`/clients/${c.id}`} className="font-medium text-blue-700 hover:underline">
                     {c.name}
                   </Link>
+                  {c.provisional && <span className="badge badge-orange ml-2">氏名未確認</span>}
                   {c.kana && <span className="ml-2 text-xs text-slate-500">{c.kana}</span>}
                   {representativeLabel(c) && <div className="text-xs text-slate-500">代表者: {representativeLabel(c)}</div>}
                 </td>
