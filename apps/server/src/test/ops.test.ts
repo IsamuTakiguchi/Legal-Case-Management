@@ -1422,7 +1422,7 @@ describe('タスクの一括処理と、記録からのタスク化の単位', (
     expect(task.title).toBe('依頼者に和解案を説明する ほか 1 件');
     expect(task.note).toContain('・相手方へ回答する（期限 2026-09-18）');
     expect(task.note).toContain('和解案 300 万円の提示あり');
-    expect(task.followUpAt).toBe(new Date('2026-09-12T09:00:00+09:00').toISOString());
+    expect(task.dueAt).toBe(new Date('2026-09-12T09:00:00+09:00').toISOString());
     // 1 件だけ選ぶと「ほか」は付かない
     const one = await addCaseNote(
       { caseId: kase.id, kind: 'memo', rawText: 'y', theirSaid: [], ourSaid: [], decisions: [], nextActions: actions, attachments: [], waitingFor: 'none' },

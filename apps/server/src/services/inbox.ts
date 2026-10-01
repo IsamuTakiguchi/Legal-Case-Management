@@ -421,6 +421,8 @@ export function getConversation(id: number) {
       /** 事務局の質問から依頼者に確認を送った記録（Chatwork の受信のみ） */
       clientConfirms: conv.channel === 'chatwork' ? ((m.raw as { clientConfirms?: { channel: string; conversationId: number; at: string }[] } | null)?.clientConfirms ?? []) : [],
       replyTo: replyTargetOf(m, messages),
+      /** アプリの外（LINE アプリなど）で送ったものを手で記録したもの */
+      manual: !!(m.raw as { manual?: boolean } | null)?.manual,
       attachments: atts.filter((a) => a.messageId === m.id),
       clientName: m.clientId ? (msgClients.find((c) => c.id === m.clientId)?.name ?? null) : null,
       caseTitle: m.caseId ? (msgCases.find((c) => c.id === m.caseId)?.title ?? null) : null,

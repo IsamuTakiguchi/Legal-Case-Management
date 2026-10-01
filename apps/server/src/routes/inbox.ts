@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { recordSentElsewhere } from '../services/manualRecord.js';
 import { eq, desc } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { listConversations, getConversation, markRead, setNeedsReply, archiveConversation, bulkUpdateConversations, linkMessage, setMessageDirection, staleUnanswered, clearStaleUnanswered } from '../services/inbox.js';
@@ -266,6 +267,12 @@ inboxRoutes.post('/conversations/:id/send', async (c) => {
   }
   const result = await sendToConversation(id, input);
   return c.json(result);
+});
+
+/** LINE アプリなど、アプリの外で送ったメッセージを記録する（相手には送らない） */
+inboxRoutes.post('/conversations/:id/record-sent', async (c) => {
+  const body = z.object({ text: z.string().max(20000), sentAt: z.string().datetime({ offset: true }).nullable().optional() }).parse(await c.req.json());
+  return c.json(await recordSentElsewhere(Number(c.req.param('id')), body));
 });
 
 /** 送信予約の一覧（未送信のもの） */

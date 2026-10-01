@@ -62,7 +62,9 @@ describe('記録をタスクにする', () => {
     const t = db().select().from(schema.tasks).where(eq(schema.tasks.id, r.tasks[0]!.id)).get()!;
     expect(t.title).toBe('依頼者に和解案を伝える ほか 1 件');
     expect(t.status).toBe('open');
-    expect(t.followUpAt).toBe(new Date('2027-09-01T09:00:00+09:00').toISOString());
+    // 対応中のタスクの期限は期日（dueAt）に入る（連絡待ちの期限とは別の欄）
+    expect(t.dueAt).toBe(new Date('2027-09-01T09:00:00+09:00').toISOString());
+    expect(t.followUpAt).toBeNull();
     // まとめたときは、どちらのアクションも同じタスクに紐付く
     expect(new Set(r.note.nextActions.map((a) => a.taskId))).toEqual(new Set([r.tasks[0]!.id]));
     expect(t.note).toContain('依頼者に和解案を伝える（期限 2027-08-05）');
@@ -106,7 +108,7 @@ describe('AI の案を直して登録する', () => {
     });
     expect(r.tasks).toHaveLength(2);
     const tasks = db().select().from(schema.tasks).where(eq(schema.tasks.caseId, kase.id)).all();
-    expect(tasks.map((t) => [t.title, t.status, (t.followUpAt ?? '').slice(0, 10)])).toEqual([
+    expect(tasks.map((t) => [t.title, t.status, ((t.status === 'open' ? t.dueAt : t.followUpAt) ?? '').slice(0, 10)])).toEqual([
       ['依頼者に和解案を説明して意向を確認', 'open', new Date('2027-08-06T09:00:00+09:00').toISOString().slice(0, 10)],
       ['相手方代理人へ回答', 'waiting_other', new Date('2027-08-09T09:00:00+09:00').toISOString().slice(0, 10)],
     ]);

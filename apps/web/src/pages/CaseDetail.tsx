@@ -10,7 +10,7 @@ import { LongText } from '../lib/LongText';
 import { TaskDeadlineSelect } from '../lib/Deadline';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { fmtDateTime, fmtDate, fmtYen, fmtBytes, toLocalInput, fromLocalInput, channelLabel } from '../lib/format';
-import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, messageLink, ACTIVE_TASK_STATUSES, taskStatusForWaiting, formatWareki, parseJaDate, addYearsIso, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
+import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, messageLink, ACTIVE_TASK_STATUSES, taskStatusForWaiting, formatWareki, parseJaDate, addYearsIso, taskDeadline, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 import { ChatworkTaskReply } from '../lib/ChatworkTaskReply';
@@ -243,7 +243,7 @@ export default function CaseDetail() {
                 {c.tasks
                   .filter((t) => t.status !== 'done')
                   .map((t) => {
-                    const limit = t.status === 'open' ? (t.dueAt ?? t.followUpAt) : (t.followUpAt ?? t.dueAt);
+                    const limit = taskDeadline(t);
                     const over = limit ? new Date(limit).getTime() < Date.now() : false;
                     if (editingTask === t.id)
                       return (
@@ -272,6 +272,7 @@ export default function CaseDetail() {
                             {t.status === 'open' ? '期日' : '期限'} {fmtDate(limit)}
                           </span>
                         )}
+                        {t.status !== 'open' && t.dueAt && t.dueAt !== limit && <span className="whitespace-nowrap text-xs text-slate-500">期日 {fmtDate(t.dueAt)}</span>}
                         <ChatworkTaskReply
                           task={t}
                           onDone={() => {

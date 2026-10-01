@@ -68,3 +68,44 @@ describe('事件ページからタスクを追加する', () => {
     expect(t.clientId).toBe(b.id);
   });
 });
+
+describe('対応中から連絡待ちにしても期日は消えない', () => {
+  it('依頼者の返信待ちにすると「いつまで待つか」が入り、期日はそのまま。対応中に戻すと元の期日に戻る', async () => {
+    const { updateTask } = await import('../services/tasks.js');
+    const { taskDeadline } = await import('@lcm/shared');
+    const t = await createTask({ ...base, title: '準備書面の提出', status: 'open', dueAt: DUE, followUpAt: null });
+    const w = updateTask(t.id, { status: 'waiting_client' });
+    expect(w.dueAt).toBe(DUE);
+    expect(w.followUpAt).toBeTruthy();
+    expect(w.followUpAt).not.toBe(DUE);
+    // 返信待ちの間は「いつまで待つか」が期限
+    expect(taskDeadline(w)).toBe(w.followUpAt);
+    const back = updateTask(t.id, { status: 'open' });
+    expect(back.dueAt).toBe(DUE);
+    expect(taskDeadline(back)).toBe(DUE);
+  });
+
+  it('期日を古い欄（返信待ちの期限）に持っていたタスクも、返信待ちにする前に期日へ移して残す', async () => {
+    const { updateTask } = await import('../services/tasks.js');
+    const { db, schema } = await import('../db/index.js');
+    const old = db().insert(schema.tasks).values({ title: '古いタスク', status: 'open', followUpAt: DUE }).returning().get();
+    const w = updateTask(old.id, { status: 'waiting_client' });
+    expect(w.dueAt).toBe(DUE);
+    expect(w.followUpAt).not.toBe(DUE);
+  });
+
+  it('連絡待ちにするときに「いつまで待つか」を指定でき、期日は別に直せる', async () => {
+    const { updateTask } = await import('../services/tasks.js');
+    const t = await createTask({ ...base, title: '和解案の検討', status: 'open', dueAt: DUE, followUpAt: null });
+    const until = '2027-10-01T01:00:00.000Z';
+    const w = updateTask(t.id, { status: 'waiting_client', followUpAt: until });
+    expect([w.followUpAt, w.dueAt]).toEqual([until, DUE]);
+    const moved = updateTask(t.id, { dueAt: '2027-10-10T01:00:00.000Z' });
+    expect([moved.followUpAt, moved.dueAt]).toEqual([until, '2027-10-10T01:00:00.000Z']);
+  });
+
+  it('対応中で追加するとき、期日を「いつまで待つか」の欄で渡されても期日に入れる', async () => {
+    const t = await createTask({ ...base, title: '記録から', status: 'open', dueAt: null, followUpAt: DUE });
+    expect([t.dueAt, t.followUpAt]).toEqual([DUE, null]);
+  });
+});
