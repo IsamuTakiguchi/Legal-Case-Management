@@ -33,8 +33,9 @@ export async function createTask(input: TaskInput): Promise<TaskRow> {
       conversationId: input.conversationId ?? null,
       status: input.status,
       waitingSince: waiting ? now : null,
-      followUpAt: waiting ? (input.followUpAt ?? defaultFollowUp().toISOString()) : (input.followUpAt ?? null),
-      dueAt: input.dueAt ?? null,
+      // 対応中のタスクの期限は期日（dueAt）に持つ。連絡待ちの期限（followUpAt）とは分ける
+      followUpAt: waiting ? (input.followUpAt ?? defaultFollowUp().toISOString()) : null,
+      dueAt: input.dueAt ?? (waiting ? null : (input.followUpAt ?? null)),
     })
     .returning()
     .get();
@@ -74,6 +75,8 @@ export function updateTask(id: number, patch: Partial<TaskInput> & { status?: Ta
     if (waiting) {
       set.waitingSince = now;
       set.followUpAt = patch.followUpAt ?? defaultFollowUp().toISOString();
+      // 対応中の期日を連絡待ちの期限の欄に持っていた古いタスクは、上書きする前に期日へ移して残す
+      if (!isWaitingStatus(cur.status) && !cur.dueAt && cur.followUpAt && patch.dueAt === undefined) set.dueAt = cur.followUpAt;
     }
     if (patch.status === 'done') {
       set.completedAt = now;

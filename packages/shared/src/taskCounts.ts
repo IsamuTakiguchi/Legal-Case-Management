@@ -16,9 +16,13 @@ export function isWaitingStatus(status: string): boolean {
   return (WAITING_TASK_STATUSES as readonly string[]).includes(status);
 }
 
-/** 期限。連絡待ちは「いつまで待つか」、対応中は期日を優先する */
+/**
+ * 期限。連絡待ちは「いつまで待つか」（無ければ期日）、対応中は期日だけを見る。
+ * 期日（dueAt）とは別に、連絡待ちの期限（followUpAt）を持つ。返信待ちにしても期日は消さず、
+ * 対応中に戻したときに、前の返信待ちの期限を期日と取り違えないようにする
+ */
 export function taskDeadline(t: TaskLike): string | null {
-  return (isWaitingStatus(t.status) ? (t.followUpAt ?? t.dueAt) : (t.dueAt ?? t.followUpAt)) ?? null;
+  return (isWaitingStatus(t.status) ? (t.followUpAt ?? t.dueAt) : t.dueAt) ?? null;
 }
 
 export interface TaskCounts {

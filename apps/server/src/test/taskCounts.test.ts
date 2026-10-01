@@ -33,10 +33,12 @@ describe('タスクの件数を「対応中」と「連絡待ち」に分ける'
     expect(c).toEqual({ open: 3, waiting: 4, waitingClient: 2, waitingOther: 1, waitingStaff: 1, openOverdue: 1, waitingOverdue: 2 });
   });
 
-  it('期限は、連絡待ちなら「いつまで待つか」、対応中なら期日を先に見る', () => {
+  it('期限は、連絡待ちなら「いつまで待つか」（無ければ期日）、対応中なら期日だけを見る', () => {
     expect(taskDeadline({ status: 'waiting_client', followUpAt: 'A', dueAt: 'B' })).toBe('A');
+    expect(taskDeadline({ status: 'waiting_client', dueAt: 'B' })).toBe('B');
     expect(taskDeadline({ status: 'open', followUpAt: 'A', dueAt: 'B' })).toBe('B');
-    expect(taskDeadline({ status: 'open', followUpAt: 'A' })).toBe('A');
+    // 対応中に戻したタスクに残っている前の「いつまで待つか」は、期日として扱わない
+    expect(taskDeadline({ status: 'open', followUpAt: 'A' })).toBeNull();
     expect(taskDeadline({ status: 'open' })).toBeNull();
   });
 

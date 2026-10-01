@@ -52,6 +52,8 @@ interface Message {
   caseId?: number | null;
   clientName?: string | null;
   caseTitle?: string | null;
+  /** LINE アプリなど、アプリの外で送ったものを手で記録したもの */
+  manual?: boolean;
 }
 interface Conv {
   id: number;
@@ -134,6 +136,9 @@ export default function Conversation() {
   const [confirmFor, setConfirmFor] = useState<number | null>(null);
   const [quoteOf, setQuoteOf] = useState<Message | null>(null);
   const [showTimer, setShowTimer] = useState(false);
+  // LINE アプリで送った分を記録する欄（送った時刻）
+  const [showRecord, setShowRecord] = useState(false);
+  const [recordAt, setRecordAt] = useState('');
   const [sendAt, setSendAt] = useState('');
   // よく使う時刻のどれを押したか（「1 時間後」は時刻が進むと値が変わるので、選択中の表示はこれで見る）
   const [sendPreset, setSendPreset] = useState<string | null>(null);
@@ -180,6 +185,21 @@ export default function Conversation() {
       setText(d.generatedText);
       setDraftId(d.id);
       setMsg(null);
+    },
+    onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
+  });
+
+  // LINE公式アカウントのアプリ・管理画面から送った分は T-Lex に届かないので、送った文を記録だけする
+  const recordSent = useMutation({
+    mutationFn: () => api.post<{ messageId: number }>(`/conversations/${id}/record-sent`, { text, sentAt: recordAt ? fromLocalInput(recordAt) : null }),
+    onSuccess: () => {
+      setText('');
+      textDraft.clear();
+      setDraftId(null);
+      setShowRecord(false);
+      setRecordAt('');
+      setMsg({ kind: 'ok', text: 'LINE アプリで送った内容を記録しました（LINE には送っていません）' });
+      invalidate();
     },
     onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
   });
@@ -423,6 +443,7 @@ export default function Conversation() {
               <div className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${m.direction === 'out' ? 'bg-blue-600 text-white' : 'bg-slate-100'} ${m.id === spotlightMessage ? 'spotlight-ring' : ''}`}>
                 <div className={`mb-1 text-xs ${m.direction === 'out' ? 'text-blue-100' : 'text-slate-500'}`}>
                   {m.direction === 'out' ? '自分' : (m.senderName ?? name)} ・ {fmtDateTime(m.sentAt)}
+                  {m.manual && <span title="LINE アプリなどで送ったものを、あとから T-Lex に記録しました"> ・ アプリ外で送信（記録）</span>}
                   {c.channel === 'chatwork' && m.direction === 'in' && (
                     <span className="ml-1 rounded bg-white/70 px-1 text-[10px] text-slate-500" title="取込範囲のどの条件で受信箱に入ったか">
                       取込理由: {SCOPE_REASON_LABEL[m.scopeReason ?? 'none'] ?? m.scopeReason}
@@ -657,8 +678,37 @@ export default function Conversation() {
                 <Icon name="clock" className="h-4 w-4" />
                 時刻を指定
               </button>
+              {c.channel === 'line' && (
+                <button
+                  className={`btn ${showRecord ? 'text-[var(--accent)]' : ''}`}
+                  onClick={() => {
+                    setShowRecord(!showRecord);
+                    setShowTimer(false);
+                    if (!recordAt) setRecordAt(toLocalInput(new Date().toISOString()));
+                  }}
+                  title="LINE公式アカウントのアプリ・管理画面から送ったメッセージは T-Lex に届かないため、送った文をここに記録します"
+                  aria-expanded={showRecord}
+                >
+                  LINE アプリで送った分を記録
+                </button>
+              )}
             </div>
           </div>
+          {showRecord && (
+            <div className="fade-in space-y-1.5 rounded-[10px] bg-black/[0.03] px-3 py-2 text-sm">
+              <div className="text-xs text-slate-600">
+                LINE公式アカウントのアプリや管理画面のチャットから送ったメッセージは、LINE の仕組み上 T-Lex に届きません。送った文を上の欄に貼り付けて記録すると、この会話に「自分の送信」として残ります（LINE には送りません）。
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-slate-500">送った日時:</span>
+                <input type="datetime-local" className="input w-auto" value={recordAt} max={toLocalInput(new Date().toISOString())} onChange={(e) => setRecordAt(e.target.value)} aria-label="LINE アプリで送った日時" />
+                <button className="btn btn-primary" onClick={() => recordSent.mutate()} disabled={!text.trim() || recordSent.isPending}>
+                  {recordSent.isPending ? '記録中…' : '記録する（送信はしません）'}
+                </button>
+                {!text.trim() && <span className="text-xs text-slate-400">先に上の欄へ送った文を入れてください</span>}
+              </div>
+            </div>
+          )}
           {showTimer && (
             <div className="fade-in flex flex-wrap items-center gap-2 rounded-[10px] bg-black/[0.03] px-3 py-2 text-sm">
               <span className="text-xs text-slate-500">送信する時刻:</span>
@@ -1213,9 +1263,12 @@ function TaskMini({ conversationId, clientId }: { conversationId: number; client
             </div>
             <div className="pl-5">
               {t.status === 'open' ? (
-                <DeadlineEditor compact label="期日:" value={t.dueAt ?? t.followUpAt} onChange={(iso) => setDue.mutate({ id: t.id, dueAt: iso })} />
+                <DeadlineEditor compact label="期日:" value={t.dueAt} onChange={(iso) => setDue.mutate({ id: t.id, dueAt: iso })} />
               ) : (
-                <DeadlineEditor compact label="いつまで待つ:" value={t.followUpAt} onChange={(iso) => setDeadline.mutate({ id: t.id, followUpAt: iso })} />
+                <>
+                  <DeadlineEditor compact label="いつまで待つ:" value={t.followUpAt} onChange={(iso) => setDeadline.mutate({ id: t.id, followUpAt: iso })} />
+                  {t.dueAt && <DeadlineEditor compact label="期日:" value={t.dueAt} onChange={(iso) => setDue.mutate({ id: t.id, dueAt: iso })} />}
+                </>
               )}
             </div>
           </li>
