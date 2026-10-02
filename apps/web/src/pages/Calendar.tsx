@@ -5,7 +5,7 @@ import { EVENT_KINDS, EVENT_KIND_LABEL, type EventKind } from '@lcm/shared';
 import { api } from '../lib/api';
 import { useDraftGroup, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
-import { HoldForm, HoldLocationEditor, type RescheduleTarget } from '../lib/HoldForm';
+import { HoldForm, HoldLocationEditor, HoldAddCandidates, type RescheduleTarget } from '../lib/HoldForm';
 import { toLocalInput, fromLocalInput } from '../lib/format';
 
 interface Ev {
@@ -114,6 +114,8 @@ export default function Calendar() {
   const [editing, setEditing] = useState<Ev | 'new' | null>(null);
   const [holdOpen, setHoldOpen] = useState(false);
   const [rescheduling, setRescheduling] = useState<RescheduleTarget | null>(null);
+  // 候補を足すフォームを開いている予定（その予定の行の下に出す）
+  const [addingAt, setAddingAt] = useState<number | null>(null);
   const range = useMemo(() => rangeFor(view, anchor), [view, anchor]);
   const list = useQuery({
     queryKey: ['calendar', range.from, range.to],
@@ -335,6 +337,9 @@ export default function Calendar() {
                           >
                             全候補を取消
                           </button>
+                          <button className="btn btn-sm" onClick={() => setAddingAt(addingAt === e.id ? null : e.id)} title="この日程調整に候補日時を足します">
+                            候補を追加
+                          </button>
                           <HoldLocationEditor
                             sessionId={e.sessionId}
                             location={e.location}
@@ -397,6 +402,22 @@ export default function Calendar() {
                     </div>
                   )}
                   {e.description && <div className="mt-0.5 line-clamp-2 whitespace-pre-wrap text-xs text-slate-500 md:pl-[6.5rem]">{e.description}</div>}
+                  {addingAt === e.id && e.sessionId && (
+                    <div className="md:pl-[6.5rem]">
+                      <HoldAddCandidates
+                        sessionId={e.sessionId}
+                        after={(list.data ?? []).filter((x) => x.sessionId === e.sessionId).reduce((m, x) => (x.startAt > m ? x.startAt : m), e.startAt)}
+                        minutes={Math.round((new Date(e.endAt).getTime() - new Date(e.startAt).getTime()) / 60_000)}
+                        onClose={() => setAddingAt(null)}
+                        onSaved={(text) => {
+                          setAddingAt(null);
+                          invalidate();
+                          setMsg({ kind: 'ok', text });
+                        }}
+                        onError={(text) => setMsg({ kind: 'err', text })}
+                      />
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>
