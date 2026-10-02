@@ -519,6 +519,46 @@ describe('仮押さえの一部取消', () => {
   });
 });
 
+describe('仮押さえの候補追加', () => {
+  it('調整中の仮押さえに候補を足すと、同じ件名・依頼者・事件で登録され、確定するとまとめて消える', async () => {
+    const { createHoldSet, addHoldCandidates, confirmHold, listCalendarEvents } = await import('../services/court.js');
+    const client = db().insert(schema.clients).values({ name: '追加 次郎', kana: 'ついか じろう' }).returning().get();
+    const kase = db().insert(schema.cases).values({ clientId: client.id, title: '追加テスト事件', caseType: 'civil', status: 'active' }).returning().get();
+    const base = Math.floor(Date.now() / 60_000) * 60_000;
+    const day = (n: number, h: number) => new Date(base + n * 86400_000 + h * 3600_000).toISOString();
+    const r = await createHoldSet({ title: '打合せ', kind: 'meeting', clientId: client.id, caseId: kase.id, location: '事務所', slots: [{ startAt: day(2, 1), endAt: day(2, 2) }, { startAt: day(4, 1), endAt: day(4, 2) }] });
+    const session = () => db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, r.sessionId)).get()!;
+
+    // 1 件は既存と同じ日時なのでとばす
+    const added = await addHoldCandidates(r.sessionId, [{ startAt: day(3, 1), endAt: day(3, 2) }, { startAt: day(2, 1), endAt: day(2, 2) }]);
+    expect(added.events.length).toBe(1);
+    expect(added.skipped).toBe(1);
+    expect(added.total).toBe(3);
+    const ev = added.events[0];
+    expect(ev.title).toBe('追加 打合せ 仮');
+    expect(ev.status).toBe('tentative');
+    expect(ev.kind).toBe('hold');
+    expect(ev.caseId).toBe(kase.id);
+    expect(ev.location).toBe('事務所');
+    expect(session().candidates.map((c) => c.eventId)).toEqual([r.events[0].googleEventId, ev.googleEventId, r.events[1].googleEventId]);
+    const listed = listCalendarEvents(new Date(), new Date(Date.now() + 7 * 86400_000), { clientId: client.id });
+    expect(listed.every((e) => e.sessionId === r.sessionId && e.sessionCandidates === 3)).toBe(true);
+    await expect(addHoldCandidates(r.sessionId, [{ startAt: day(3, 1), endAt: day(3, 2) }])).rejects.toThrow('すべて候補に入っています');
+
+    // 足した候補で確定すると、もとの候補は消える
+    await confirmHold(r.sessionId, ev.id);
+    const after = listCalendarEvents(new Date(), new Date(Date.now() + 7 * 86400_000), { clientId: client.id });
+    expect(after.map((e) => e.id)).toEqual([ev.id]);
+    expect(after[0].title).toBe('追加 打合せ');
+    await expect(addHoldCandidates(r.sessionId, [{ startAt: day(5, 1), endAt: day(5, 2) }])).rejects.toThrow('確定・取消済み');
+
+    db().delete(schema.calendarEvents).where(eq(schema.calendarEvents.id, ev.id)).run();
+    db().delete(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, r.sessionId)).run();
+    db().delete(schema.cases).where(eq(schema.cases.id, kase.id)).run();
+    db().delete(schema.clients).where(eq(schema.clients.id, client.id)).run();
+  });
+});
+
 describe('会話からの予定登録', () => {
   it('確定なら 1 件を依頼者・進行中の事件に紐付けて登録し、候補なら仮押さえにする', async () => {
     const { registerScheduleFromConversation } = await import('../services/scheduleExtract.js');

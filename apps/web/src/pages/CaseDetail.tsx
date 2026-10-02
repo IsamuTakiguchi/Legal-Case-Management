@@ -5,7 +5,7 @@ import { api } from '../lib/api';
 import { useSpotlight } from '../lib/spotlight';
 import { useDraftRecord, useDraftGroup, useDraft, DraftHint } from '../lib/draft';
 import { RoomPicker } from '../lib/RoomPicker';
-import { HoldForm, HoldLocationEditor, fmtEventRange, type RescheduleTarget } from '../lib/HoldForm';
+import { HoldForm, HoldLocationEditor, HoldAddCandidates, fmtEventRange, type RescheduleTarget } from '../lib/HoldForm';
 import { LongText } from '../lib/LongText';
 import { TaskDeadlineSelect } from '../lib/Deadline';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
@@ -522,6 +522,8 @@ function CaseHolds({
   const q = useCaseHolds(caseId);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [adding, setAdding] = useState(false);
+  // 候補を足している日程調整
+  const [addingTo, setAddingTo] = useState<number | null>(null);
   // 候補日の打診を開いている日程調整
   const [proposing, setProposing] = useState<number | null>(null);
   const refresh = () => {
@@ -644,7 +646,7 @@ function CaseHolds({
                 全候補を取消
               </button>
             </div>
-            <div className="mb-1">
+            <div className="mb-1 flex flex-wrap items-center gap-2">
               <HoldLocationEditor
                 sessionId={s.sessionId}
                 location={s.location}
@@ -655,7 +657,26 @@ function CaseHolds({
                 }}
                 onError={(text) => setMsg({ kind: 'err', text })}
               />
+              {addingTo !== s.sessionId && (
+                <button className="text-xs text-blue-700 hover:underline" onClick={() => setAddingTo(s.sessionId)} title="この日程調整に候補日時を足します">
+                  ＋ 候補を追加
+                </button>
+              )}
             </div>
+            {addingTo === s.sessionId && (
+              <HoldAddCandidates
+                sessionId={s.sessionId}
+                after={s.candidates[s.candidates.length - 1]?.startAt ?? new Date().toISOString()}
+                minutes={s.candidates[0] ? Math.round((new Date(s.candidates[0].endAt).getTime() - new Date(s.candidates[0].startAt).getTime()) / 60_000) : 60}
+                onClose={() => setAddingTo(null)}
+                onSaved={(text) => {
+                  setAddingTo(null);
+                  refresh();
+                  setMsg({ kind: 'ok', text });
+                }}
+                onError={(text) => setMsg({ kind: 'err', text })}
+              />
+            )}
             {s.rescheduleOf && (
               <div className="mb-1 rounded bg-blue-50 px-2 py-1 text-xs text-blue-900">
                 いまの予定は <b>{fmtEventRange(s.rescheduleOf.startAt, s.rescheduleOf.endAt)}</b>。候補を確定すると、この予定は消えて新しい日時に置き換わります。

@@ -584,6 +584,58 @@ export async function cancelHoldSet(sessionId: number) {
 }
 
 /**
+ * 調整中の仮押さえに候補を足す。件名・依頼者・事件・場所・説明は、いまある候補の予定に合わせる。
+ * 同じ日時の候補はとばす。途中で失敗したら、この呼び出しで足した分は消す
+ */
+export async function addHoldCandidates(sessionId: number, slots: { startAt: string; endAt: string }[]) {
+  const session = db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, sessionId)).get();
+  if (!session) throw new Error('日程調整が見つかりません');
+  if (session.state !== 'proposing') throw new Error('この日程調整はすでに確定・取消済みです');
+  if (!slots.length) throw new Error('候補日時を 1 つ以上入れてください');
+  for (const sl of slots) assertRange(sl.startAt, sl.endAt);
+  const base = session.candidates
+    .map((c) => (c.eventId ? db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.googleEventId, c.eventId)).get() : undefined))
+    .find((r) => r);
+  const client = session.clientId ? db().select().from(schema.clients).where(eq(schema.clients.id, session.clientId)).get() : null;
+  const title = base?.title ?? holdSetTitle({ title: session.kind, exactTitle: holdMeta.get(sessionId)?.confirmedTitle ?? null }, client?.name ?? null).hold;
+  const location = base?.location ?? (session.web ? webLocation(webMeetingProvider(), session.location) : session.location);
+  const description = base?.description ?? [session.web ? 'WEB 会議（確定したときに会議 URL を発行します）' : '', `日程調整中（アプリで管理: セッション ${session.id}）`].filter(Boolean).join('\n');
+  const minute = (iso: string) => Math.floor(new Date(iso).getTime() / 60_000);
+  const taken = new Set(session.candidates.map((c) => minute(c.startAt)));
+  const fresh = [...slots]
+    .sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime())
+    .filter((sl) => {
+      const t = minute(sl.startAt);
+      if (taken.has(t)) return false;
+      taken.add(t);
+      return true;
+    });
+  if (!fresh.length) throw new Error('入れた日時はすべて候補に入っています');
+  const events = [];
+  try {
+    for (const sl of fresh) {
+      events.push(
+        await createCalendarEvent({ title, startAt: sl.startAt, endAt: sl.endAt, kind: 'hold', clientId: base?.clientId ?? session.clientId ?? null, caseId: base?.caseId ?? null, location, description, tentative: true }),
+      );
+    }
+  } catch (err) {
+    logger.warn({ err, sessionId, created: events.length }, '仮押さえの候補追加に失敗。追加した分を取り消します');
+    for (const ev of events) await removeCalendarEvent(ev.id).catch(() => undefined);
+    throw err;
+  }
+  // 足している間に確定・取消されていないか、最新の状態に足す
+  const latest = db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, sessionId)).get();
+  if (!latest || latest.state !== 'proposing') {
+    for (const ev of events) await removeCalendarEvent(ev.id).catch(() => undefined);
+    throw new Error('この日程調整はすでに確定・取消済みです');
+  }
+  const candidates = [...latest.candidates, ...events.map((ev) => ({ startAt: ev.startAt, endAt: ev.endAt, eventId: ev.googleEventId }))].sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime());
+  db().update(schema.schedulingSessions).set({ candidates, updatedAt: new Date().toISOString() }).where(eq(schema.schedulingSessions.id, sessionId)).run();
+  logger.info({ sessionId, added: events.length }, '仮押さえに候補を追加しました');
+  return { sessionId, events, skipped: slots.length - fresh.length, total: candidates.length };
+}
+
+/**
  * 仮押さえた候補のうち 1 つだけを取り消す（カレンダーからも消す）。
  * 候補が残らなければ日程調整そのものを取り消す
  */

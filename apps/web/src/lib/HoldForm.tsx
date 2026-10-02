@@ -365,3 +365,105 @@ export function HoldLocationEditor({ sessionId, location, web, compact, onSaved,
     </form>
   );
 }
+
+/**
+ * 調整中の仮押さえに候補を足す。件名・依頼者・事件・場所は、いまある候補と同じになる。
+ * after は既定の候補を置く基準（いまある候補の最後の日時）。minutes は既定の所要時間
+ */
+export function HoldAddCandidates({ sessionId, after, minutes, onClose, onSaved, onError }: { sessionId: number; after: string; minutes: number; onClose: () => void; onSaved: (msg: string) => void; onError: (msg: string) => void }) {
+  const dur = Math.max(15, minutes || 60);
+  const plus = (local: string, m: number) => toLocalInput(new Date(new Date(fromLocalInput(local)).getTime() + m * 60_000).toISOString());
+  const first = toLocalInput(new Date(new Date(after).getTime() + 86400_000).toISOString());
+  const [slots, setSlots] = useState<{ start: string; end: string }[]>([{ start: first, end: plus(first, dur) }]);
+  const [text, setText] = useState('');
+  const [textErr, setTextErr] = useState<string[]>([]);
+  const [touched, setTouched] = useState(false);
+  const readText = () => {
+    const r = parseHoldText(text, { defaultMinutes: dur });
+    setTextErr(r.errors);
+    if (r.slots.length) {
+      const parsed = r.slots.map((x) => ({ start: toLocalInput(x.startAt), end: toLocalInput(x.endAt) }));
+      // 手を付けていない既定の 1 行は置き換える
+      setSlots((touched ? [...slots, ...parsed] : parsed).slice(0, 10));
+      setTouched(true);
+      setText('');
+    }
+  };
+  const save = useMutation({
+    mutationFn: () =>
+      api.post<{ events: unknown[]; skipped: number; total: number }>(`/calendar/holds/${sessionId}/candidates`, {
+        slots: slots
+          .filter((v) => v.start)
+          .map((v) => {
+            const start = new Date(fromLocalInput(v.start));
+            const end = v.end ? new Date(fromLocalInput(v.end)) : new Date(start.getTime() + dur * 60_000);
+            return { startAt: start.toISOString(), endAt: (end > start ? end : new Date(start.getTime() + dur * 60_000)).toISOString() };
+          }),
+      }),
+    onSuccess: (r) => onSaved(`候補を ${r.events.length} 件追加しました（候補は全部で ${r.total} 件）${r.skipped ? `。${r.skipped} 件はすでに候補にある日時なので追加していません` : ''}`),
+    onError: (e) => onError((e as Error).message),
+  });
+  return (
+    <form
+      className="fade-in mt-1 w-full space-y-2 rounded-md border border-blue-200 bg-blue-50/40 p-2 text-sm"
+      onSubmit={(e) => {
+        e.preventDefault();
+        save.mutate();
+      }}
+    >
+      <div className="text-xs text-slate-600">追加した候補も同じ件名で仮押さえします。依頼者・事件・場所はいまの候補と同じです。</div>
+      <div className="flex flex-wrap items-start gap-2">
+        <textarea className="input min-h-12 flex-1 text-sm" value={text} onChange={(e) => setText(e.target.value)} placeholder={'まとめて入力（例: 12/21（月）10～11：30　13～15）'} aria-label="追加する候補をまとめて入力" />
+        <button type="button" className="btn btn-sm" onClick={readText} disabled={!text.trim()}>
+          読み取る
+        </button>
+      </div>
+      {textErr.length > 0 && <div className="text-xs text-red-600">{textErr.join(' / ')}</div>}
+      <div className="space-y-1.5">
+        {slots.map((v, i) => (
+          <div key={i} className="flex flex-wrap items-center gap-2">
+            <input
+              type="datetime-local"
+              className="input w-auto"
+              value={v.start}
+              aria-label="追加する候補の開始"
+              onChange={(e) => {
+                const start = e.target.value;
+                const prevDur = Math.max(15, (new Date(fromLocalInput(v.end)).getTime() - new Date(fromLocalInput(v.start)).getTime()) / 60_000 || dur);
+                setTouched(true);
+                setSlots(slots.map((x, j) => (j === i ? { start, end: start ? plus(start, prevDur) : x.end } : x)));
+              }}
+              required
+            />
+            <span className="text-slate-400">〜</span>
+            <input type="datetime-local" className="input w-auto" value={v.end} aria-label="追加する候補の終了" onChange={(e) => setSlots(slots.map((x, j) => (j === i ? { ...x, end: e.target.value } : x)))} />
+            <button type="button" className="btn btn-sm" onClick={() => setSlots(slots.filter((_, j) => j !== i))} disabled={slots.length <= 1} aria-label="この行を外す">
+              ×
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="btn btn-sm"
+          disabled={slots.length >= 10}
+          onClick={() => {
+            const last = slots[slots.length - 1];
+            const start = last?.start ? plus(last.start, 24 * 60) : first;
+            setTouched(true);
+            setSlots([...slots, { start, end: plus(start, dur) }]);
+          }}
+        >
+          ＋ 行を足す
+        </button>
+      </div>
+      <div className="flex gap-2">
+        <button className="btn btn-sm btn-primary" disabled={save.isPending || !slots.some((v) => v.start)}>
+          {save.isPending ? '仮押さえ中…' : `${slots.filter((v) => v.start).length} 件を候補に追加`}
+        </button>
+        <button type="button" className="btn btn-sm" onClick={onClose}>
+          やめる
+        </button>
+      </div>
+    </form>
+  );
+}
