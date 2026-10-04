@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { createSession, destroySession, isAuthenticated, verifyPassword, setPassword, requireAuth, cookieSecure, currentSessionId, clientIp, loginLockedFor, recordLoginFailure, clearLoginFailures } from '../auth/index.js';
+import { createSession, destroySession, isAuthenticated, verifyPassword, passwordLoginEnabled, setPassword, requireAuth, cookieSecure, currentSessionId, clientIp, loginLockedFor, recordLoginFailure, clearLoginFailures } from '../auth/index.js';
 import { googleAuthUrl, handleGoogleCallback, disconnectGoogle, googleLoginUrl, verifyGoogleLogin, googleAccount } from '../integrations/google.js';
-import { isConfigured } from '../config.js';
-import { getSetting } from '../services/settings.js';
+import { env, isConfigured } from '../config.js';
+import { getSetting, setSetting } from '../services/settings.js';
 import { msAuthUrl, handleMsCallback, disconnectMs, startDeviceCodeFlow, deviceCodeStatus } from '../integrations/onedrive.js';
 import { saveCredentials } from '../services/credentials.js';
 import { resetIntegrationCaches } from '../integrations/reset.js';
@@ -14,7 +14,23 @@ import { runOnboardingAfterGoogle, runOnboardingAfterMicrosoft } from '../servic
 
 export const authRoutes = new Hono();
 
-authRoutes.get('/me', (c) => c.json({ authenticated: isAuthenticated(c), googleLogin: isConfigured('google') }));
+authRoutes.get('/me', (c) => c.json({ authenticated: isAuthenticated(c), googleLogin: isConfigured('google'), passwordLogin: passwordLoginEnabled() }));
+
+/** パスワードでのログインを止める・戻す（止めると Google ログインだけになる） */
+authRoutes.get('/password-login', requireAuth, (c) =>
+  c.json({ disabled: getSetting('password_login_disabled') === 'true', emergencyOverride: env().ALLOW_PASSWORD_LOGIN, googleLogin: isConfigured('google'), allowedEmails: loginAllowedEmails() }),
+);
+authRoutes.post('/password-login', requireAuth, async (c) => {
+  const body = z.object({ disabled: z.boolean() }).parse(await c.req.json());
+  if (body.disabled) {
+    // 締め出し防止: Google でログインできる状態になっていなければ止めさせない
+    if (!isConfigured('google')) return c.json({ error: 'Google のクライアント ID が未設定のため、止められません。先に初期設定で Google を設定してください' }, 400);
+    if (loginAllowedEmails().length === 0) return c.json({ error: 'Google ログインを許可するメールアドレスがありません。先に登録するか、Google に接続してください' }, 400);
+  }
+  setSetting('password_login_disabled', body.disabled ? 'true' : '');
+  logger.info({ disabled: body.disabled }, body.disabled ? 'パスワードでのログインを止めました' : 'パスワードでのログインを再開しました');
+  return c.json({ disabled: body.disabled });
+});
 
 /** Google でログインできるメールアドレス一覧（設定が空なら「Google に接続」したアカウント） */
 export function loginAllowedEmails(): string[] {
@@ -35,6 +51,7 @@ authRoutes.get('/google/login/start', (c) => {
 });
 
 authRoutes.post('/login', async (c) => {
+  if (!passwordLoginEnabled()) return c.json({ error: 'パスワードでのログインは止めています。Google アカウントでログインしてください' }, 403);
   const ip = clientIp(c);
   const locked = loginLockedFor(ip);
   if (locked > 0) return c.json({ error: `試行回数が多すぎます。${Math.ceil(locked / 60)} 分後に再度お試しください` }, 429);

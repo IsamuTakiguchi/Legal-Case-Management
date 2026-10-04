@@ -32,6 +32,11 @@ export function setPassword(pw: string, keepSessionId?: string | null) {
   else db().delete(schema.sessions).run();
 }
 
+/** パスワードでのログインを受け付けるか。設定で止めていても、環境変数 ALLOW_PASSWORD_LOGIN=true なら受け付ける（締め出されたとき用） */
+export function passwordLoginEnabled(): boolean {
+  return env().ALLOW_PASSWORD_LOGIN || getSetting('password_login_disabled') !== 'true';
+}
+
 /** Cookie の Secure 属性。本番は常に付ける（公開 URL の設定値に依存させない） */
 export function cookieSecure(): boolean {
   return process.env.NODE_ENV === 'production' || env().PUBLIC_BASE_URL.startsWith('https://');

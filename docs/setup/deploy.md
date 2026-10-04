@@ -29,6 +29,7 @@ Dockerfile をそのまま使います（`railway.json` がビルド方法とヘ
 
 - 変数や Volume を追加すると自動で再デプロイされます。数分待ってから URL を開いてください
 - Generate Domain のポート入力に 8787 以外が表示される場合は、Variables に `PORT` = `8787` を追加してから再度設定してください
+- Google ログインを設定したら、**設定 → ログイン → パスワードでのログイン → 止める** でパスワードでのログインを止められます。Google でログインできなくなったときは、Variables に `ALLOW_PASSWORD_LOGIN` = `true` を追加すると一時的にパスワードで入れます（用が済んだら消してください）
 - Volume の内容（`/data/app.db` と `/data/session_secret`）がすべてのデータです。Railway の Volume 画面からバックアップ（スナップショット）を取れます
 - リージョンは Settings → Deploy → Region で **Southeast Asia (Singapore)** を選ぶと日本から最も近くなります
 
