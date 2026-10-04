@@ -15,6 +15,8 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
   const [googleLogin, setGoogleLogin] = useState<boolean | null>(null);
   const [showPassword, setShowPassword] = useState(false);
+  // パスワードでのログインを止めているときは、パスワード欄を出さない
+  const [passwordLogin, setPasswordLogin] = useState(true);
   useEffect(() => {
     const p = new URLSearchParams(location.search);
     const e = p.get('error');
@@ -24,9 +26,10 @@ export default function Login() {
       setShowPassword(true);
     }
     api
-      .get<{ authenticated: boolean; googleLogin: boolean }>('/auth/me')
+      .get<{ authenticated: boolean; googleLogin: boolean; passwordLogin?: boolean }>('/auth/me')
       .then((r) => {
         setGoogleLogin(r.googleLogin);
+        setPasswordLogin(r.passwordLogin !== false);
         if (!r.googleLogin) setShowPassword(true);
       })
       .catch(() => {
@@ -73,12 +76,12 @@ export default function Login() {
             Google アカウントでログイン
           </a>
         )}
-        {googleLogin && !showPassword && (
+        {googleLogin && passwordLogin && !showPassword && (
           <button type="button" className="w-full text-center text-xs text-slate-500 hover:underline" onClick={() => setShowPassword(true)}>
             パスワードでログイン
           </button>
         )}
-        {showPassword && (
+        {showPassword && passwordLogin && (
           <form onSubmit={submit} className="space-y-3">
             <div>
               <label className="label">パスワード</label>

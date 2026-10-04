@@ -884,13 +884,14 @@ export default function Settings() {
         <h2 className="mb-1 font-semibold">ログイン</h2>
         <p className="mb-3 text-xs text-slate-500">
           Google のクライアント ID を設定すると、ログイン画面に「Google アカウントでログイン」が出ます。許可するアドレスが空のときは「Google に接続」したアカウント
-          {s?.google.account ? `（${s.google.account}）` : ''}だけがログインできます。パスワードでのログインも引き続き使えます。
+          {s?.google.account ? `（${s.google.account}）` : ''}だけがログインできます。
         </p>
         <label className="label">Google ログインを許可するメールアドレス（複数は改行）</label>
         <textarea className="input" rows={2} value={form.login_google_emails ?? ''} onChange={(e) => setForm({ ...form, login_google_emails: e.target.value })} placeholder={s?.google.account ?? 'example@gmail.com'} />
         <button className="btn btn-primary mt-3" onClick={() => save.mutate()} disabled={save.isPending}>
           保存
         </button>
+        <PasswordLoginSwitch />
       </section>
 
       <section className="card">
@@ -1272,6 +1273,52 @@ function ChatworkIntake({ cw }: { cw: Status['chatwork'] }) {
           「自分宛だけ」なのに理由が記録されていない受信があります。この版より前に取り込んだものなら、上の「取込済みの分を確認する」で片付きます。この版になってから増えるようなら、取り込んだメッセージを開いて「取込理由」を見てください。
         </div>
       )}
+    </div>
+  );
+}
+
+/** パスワードでのログインを止める・戻す。止めると Google アカウントでのログインだけになる */
+function PasswordLoginSwitch() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['password-login'], queryFn: () => api.get<{ disabled: boolean; emergencyOverride: boolean; googleLogin: boolean; allowedEmails: string[] }>('/auth/password-login') });
+  const [err, setErr] = useState('');
+  const set = useMutation({
+    mutationFn: (disabled: boolean) => api.post<{ disabled: boolean }>('/auth/password-login', { disabled }),
+    onSuccess: () => {
+      setErr('');
+      qc.invalidateQueries({ queryKey: ['password-login'] });
+    },
+    onError: (e) => setErr((e as Error).message),
+  });
+  const d = q.data;
+  if (!d) return null;
+  return (
+    <div className="mt-4 border-t border-slate-100 pt-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium">パスワードでのログイン</span>
+        <span className={`badge ${d.disabled ? 'badge-blue' : 'badge-orange'}`}>{d.disabled ? '止めています（Google ログインだけ）' : '使えます'}</span>
+        {d.disabled ? (
+          <button className="btn btn-sm" disabled={set.isPending} onClick={() => window.confirm('パスワードでのログインを再開しますか？') && set.mutate(false)}>
+            再開する
+          </button>
+        ) : (
+          <button
+            className="btn btn-sm btn-primary"
+            disabled={set.isPending || !d.googleLogin || d.allowedEmails.length === 0}
+            onClick={() => window.confirm(`パスワードでのログインを止めますか？\n以後は次の Google アカウントでだけログインできます:\n${d.allowedEmails.join('\n')}`) && set.mutate(true)}
+          >
+            止める
+          </button>
+        )}
+      </div>
+      <p className="mt-1 text-xs text-slate-500">
+        止めると、ログイン画面からパスワード欄が消え、パスワードを知っていても入れなくなります。
+        {!d.disabled && (!d.googleLogin || d.allowedEmails.length === 0) && ' Google ログインの設定（クライアント ID と許可するアドレス）が済むと止められます。'}
+        {d.disabled && ` ログインできるのは ${d.allowedEmails.join('、')} です。`}
+        Google でログインできなくなったときは、Railway の Variables に ALLOW_PASSWORD_LOGIN = true を追加すると、一時的にパスワードで入れます（入れたら消してください）。
+      </p>
+      {d.emergencyOverride && <div className="mt-1 text-xs text-orange-700">いま ALLOW_PASSWORD_LOGIN が設定されているため、止めていてもパスワードで入れる状態です。用が済んだら Railway の Variables から消してください。</div>}
+      {err && <div className="mt-1 text-xs text-red-600">{err}</div>}
     </div>
   );
 }
