@@ -2,6 +2,7 @@ import { and, eq, desc, gt, sql, inArray, isNull, isNotNull } from 'drizzle-orm'
 import { db, schema } from '../db/index.js';
 import type { InboundMessage } from '../channels/types.js';
 import { findClientByIdentity, raiseUnlinkedContact, cleanDisplayName } from './identity.js';
+import { findPersonByIdentity } from './clientPersons.js';
 import { isLineGroupThread } from '../channels/line.js';
 import { processAttachment } from './attachments.js';
 import { logger } from '../logger.js';
@@ -55,6 +56,8 @@ export async function ingestMessage(
     const client = contactHit
       ? (d.select().from(schema.clients).where(eq(schema.clients.id, contactHit.kase.clientId)).get() ?? null)
       : (findClientByIdentity(m.identity) ?? (roomCase ? (d.select().from(schema.clients).where(eq(schema.clients.id, roomCase.clientId)).get() ?? null) : null));
+    // 法人の担当者との会話なら、その担当者を控える（宛先の選択や表示に使う）
+    const person = client && !contactHit ? findPersonByIdentity(m.identity, { thread: true }) : null;
     conv = d
       .insert(schema.conversations)
       .values({
@@ -63,6 +66,7 @@ export async function ingestMessage(
         clientId: client?.id ?? null,
         caseId: contactHit?.kase.id ?? null,
         contactId: contactHit?.contact.id ?? null,
+        clientPersonId: person && person.clientId === client?.id ? person.id : null,
         subject: m.subject ?? null,
         counterpartName,
         counterpartAddress,
@@ -83,8 +87,10 @@ export async function ingestMessage(
     } else {
       const client = findClientByIdentity(m.identity) ?? (roomCase ? (d.select().from(schema.clients).where(eq(schema.clients.id, roomCase.clientId)).get() ?? null) : null);
       if (client) {
-        d.update(schema.conversations).set({ clientId: client.id }).where(eq(schema.conversations.id, conv.id)).run();
-        conv = { ...conv, clientId: client.id };
+        const person = findPersonByIdentity(m.identity, { thread: true });
+        const clientPersonId = person && person.clientId === client.id ? person.id : null;
+        d.update(schema.conversations).set({ clientId: client.id, clientPersonId }).where(eq(schema.conversations.id, conv.id)).run();
+        conv = { ...conv, clientId: client.id, clientPersonId };
       } else if (m.direction === 'in' && !staff) {
         raiseUnlinkedContact(conv.id, m.identity, counterpartName ?? conv.counterpartName, unlinkedInfo);
       }

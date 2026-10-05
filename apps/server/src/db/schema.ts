@@ -34,6 +34,34 @@ export const clients = sqliteTable('clients', {
   updatedAt: text('updated_at').notNull().default(now()),
 });
 
+/**
+ * 法人の依頼者の担当者（代表者とは別に、窓口になる社員など）。担当者ごとに連絡先が違うことがある。
+ * 担当者のメール・LINE・Chatwork から届いた連絡は、その法人（依頼者）の連絡として扱う
+ */
+export const clientPersons = sqliteTable(
+  'client_persons',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    clientId: integer('client_id').notNull().references(() => clients.id),
+    name: text('name').notNull(),
+    kana: text('kana'),
+    /** 部署・役職（例: 総務部 課長） */
+    title: text('title'),
+    emails: text('emails', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    phones: text('phones', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    lineUserId: text('line_user_id'),
+    chatworkAccountId: integer('chatwork_account_id'),
+    /** この担当者とやり取りする Chatwork ルーム（ダイレクトチャットなど） */
+    chatworkRoomId: integer('chatwork_room_id'),
+    /** 主担当（依頼者に連絡するときの既定の宛先） */
+    primary: integer('is_primary', { mode: 'boolean' }).notNull().default(false),
+    note: text('note'),
+    createdAt: text('created_at').notNull().default(now()),
+    updatedAt: text('updated_at').notNull().default(now()),
+  },
+  (t) => [index('client_person_client').on(t.clientId)],
+);
+
 export const caseTypes = sqliteTable('case_types', {
   key: text('key').primaryKey(),
   label: text('label').notNull(),
@@ -213,6 +241,8 @@ export const conversations = sqliteTable(
     caseId: integer('case_id').references(() => cases.id),
     /** 相手が依頼者ではなく事件の関係者（相手方代理人など）のとき */
     contactId: integer('contact_id').references(() => caseContacts.id),
+    /** 法人の依頼者の担当者とのやり取りなら、その担当者 */
+    clientPersonId: integer('client_person_id').references(() => clientPersons.id),
     subject: text('subject'),
     counterpartName: text('counterpart_name'),
     counterpartAddress: text('counterpart_address'),

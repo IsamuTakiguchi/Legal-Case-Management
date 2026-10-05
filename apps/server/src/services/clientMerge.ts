@@ -1,5 +1,5 @@
 import { normalizePhones } from '@lcm/shared';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { logger } from '../logger.js';
 
@@ -167,6 +167,9 @@ export function mergeClients(keepId: number, sourceIds: number[]): MergeResult {
       d.update(schema.calendarEvents).set({ clientId: keepId }).where(eq(schema.calendarEvents.clientId, src.id)).run();
       d.update(schema.styleSamples).set({ clientId: keepId }).where(eq(schema.styleSamples.clientId, src.id)).run();
       d.update(schema.formTemplates).set({ clientId: keepId }).where(eq(schema.formTemplates.clientId, src.id)).run();
+      // 法人の担当者も残す側へ（主担当は残す側にいればそちらを優先）
+      const keepHasPrimary = !!d.select().from(schema.clientPersons).where(and(eq(schema.clientPersons.clientId, keepId), eq(schema.clientPersons.primary, true))).get();
+      d.update(schema.clientPersons).set({ clientId: keepId, ...(keepHasPrimary ? { primary: false } : {}), updatedAt: now }).where(eq(schema.clientPersons.clientId, src.id)).run();
 
       // 要確認（アラート）の中の依頼者 ID も付け替える
       for (const a of d.select().from(schema.alerts).all()) {

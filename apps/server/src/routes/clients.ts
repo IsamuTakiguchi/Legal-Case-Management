@@ -5,7 +5,7 @@ import { isConfigured } from '../config.js';
 import { z } from 'zod';
 import { eq, desc } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { normalizePhones, clientInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputSchema, creditorEventInputSchema, CREDITOR_IMPORT_FIELDS, caseContactInputSchema, staffAskDraftSchema, staffAskSendSchema, TASK_STATUSES, EVENT_KINDS, CASE_STATUSES, looksLikeCorporation, provisionalClientName } from '@lcm/shared';
+import { normalizePhones, clientInputSchema, clientPersonInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputSchema, creditorEventInputSchema, CREDITOR_IMPORT_FIELDS, caseContactInputSchema, staffAskDraftSchema, staffAskSendSchema, TASK_STATUSES, EVENT_KINDS, CASE_STATUSES, looksLikeCorporation, provisionalClientName } from '@lcm/shared';
 import { searchClients } from '../services/identity.js';
 import { storage, FolderNotFoundError } from '../integrations/storage.js';
 import { clientFolder } from '../services/attachments.js';
@@ -26,6 +26,7 @@ import { joinPath, getItemByPath } from '../integrations/onedrive.js';
 import { listLineFriends, syncLineFollowers, linkLineFriendToClient, assertLineFriendFree, markClientLineInvited, listLineWaitingClients } from '../services/lineFriends.js';
 import { lineInvite, lineInviteMessage } from '../services/lineInvite.js';
 import { getSetting } from '../services/settings.js';
+import { listClientPersons, createClientPerson, updateClientPerson, deleteClientPerson } from '../services/clientPersons.js';
 import { repairLineGroupConversations } from '../services/lineGroups.js';
 import { classifyClientMessages, classifyMessageCase } from '../services/caseClassify.js';
 
@@ -77,8 +78,23 @@ clientRoutes.get('/clients/:id', (c) => {
   const conversations = convRows.map((v) => ({ ...v, contact: v.contactId ? (briefs.get(v.contactId) ?? null) : null }));
   const tasks = db().select().from(schema.tasks).where(eq(schema.tasks.clientId, id)).orderBy(desc(schema.tasks.updatedAt)).all();
   const events = db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.clientId, id)).orderBy(desc(schema.calendarEvents.startAt)).limit(20).all();
-  return c.json({ ...row, cases, conversations, tasks, events, folder: clientFolder(row) });
+  return c.json({ ...row, cases, conversations, tasks, events, persons: listClientPersons(id), folder: clientFolder(row) });
 });
+
+// ---- 法人の担当者（代表者とは別の窓口。担当者ごとに連絡先を持つ） ----
+clientRoutes.get('/clients/:id/persons', (c) => c.json(listClientPersons(Number(c.req.param('id')))));
+clientRoutes.post('/clients/:id/persons', async (c) => {
+  const body = clientPersonInputSchema.parse(await c.req.json());
+  return c.json(createClientPerson(Number(c.req.param('id')), { ...body, phones: normalizePhones(body.phones) }));
+});
+clientRoutes.put('/client-persons/:id', async (c) => {
+  const raw = (await c.req.json()) as Record<string, unknown>;
+  const parsed = clientPersonInputSchema.partial().parse(raw);
+  // 送られてきた項目だけ変える（partial でも既定値 [] が入るので、メールや電話を消してしまわないように）
+  const body = Object.fromEntries(Object.entries(parsed).filter(([k]) => k in raw)) as typeof parsed;
+  return c.json(updateClientPerson(Number(c.req.param('id')), body.phones ? { ...body, phones: normalizePhones(body.phones) } : body));
+});
+clientRoutes.delete('/client-persons/:id', (c) => c.json({ ok: deleteClientPerson(Number(c.req.param('id'))) }));
 
 /** 依頼者のメッセージを事件ごとに振り分け直す（AI）。all=1 で振り分け済みも判定し直す */
 clientRoutes.post('/clients/:id/classify-messages', async (c) => c.json(await classifyClientMessages(Number(c.req.param('id')), { all: c.req.query('all') === '1' })));
@@ -466,9 +482,9 @@ clientRoutes.post('/case-notes/:id/tasks', async (c) => {
 
 /** 期日の記録から、依頼者への期日連絡の下書きを用意する（送信は /conversations/:id/send） */
 clientRoutes.post('/case-notes/:id/hearing-notice', async (c) => {
-  const body = z.object({ channel: z.enum(['gmail', 'line', 'chatwork']).optional() }).parse(await c.req.json().catch(() => ({})));
+  const body = z.object({ channel: z.enum(['gmail', 'line', 'chatwork']).optional(), personId: z.number().int().nullable().optional() }).parse(await c.req.json().catch(() => ({})));
   try {
-    return c.json(await prepareHearingNotice(Number(c.req.param('id')), { channel: body.channel }));
+    return c.json(await prepareHearingNotice(Number(c.req.param('id')), { channel: body.channel, personId: body.personId }));
   } catch (err) {
     // 連絡先が無いときは、画面がその場で登録する欄を出せるよう依頼者を返す
     if (err instanceof ClientUnreachableError) return c.json({ error: err.message, code: err.code, clientId: err.clientId }, 409);

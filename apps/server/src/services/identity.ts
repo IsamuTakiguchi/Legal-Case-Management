@@ -4,11 +4,20 @@ import { db, schema } from '../db/index.js';
 import { isLineGroupThread } from '../channels/line.js';
 import type { IdentityHint } from '../channels/types.js';
 import { upsertAlert } from './alerts.js';
+import { findPersonByIdentity } from './clientPersons.js';
 
 export type ClientRow = typeof schema.clients.$inferSelect;
 
 export function findClientByIdentity(id: IdentityHint): ClientRow | null {
   const all = db().select().from(schema.clients).where(eq(schema.clients.archived, false)).all();
+  const direct = findClientDirect(all, id);
+  if (direct) return direct;
+  // 法人の担当者の連絡先なら、その法人
+  const person = findPersonByIdentity(id);
+  return person ? (all.find((c) => c.id === person.clientId) ?? null) : null;
+}
+
+function findClientDirect(all: ClientRow[], id: IdentityHint): ClientRow | null {
   if (id.channel === 'gmail' && id.email) {
     const e = id.email.toLowerCase();
     return all.find((c) => c.emails.map((x) => x.toLowerCase()).includes(e)) ?? null;
@@ -184,7 +193,8 @@ export function linkConversationToClient(conversationId: number, clientId: numbe
   if (!conv) throw new Error('会話が見つかりません');
   const client = db().select().from(schema.clients).where(eq(schema.clients.id, clientId)).get();
   if (!client) throw new Error('依頼者が見つかりません');
-  db().update(schema.conversations).set({ clientId }).where(eq(schema.conversations.id, conversationId)).run();
+  // 別の依頼者に付け替えたら、前の依頼者の担当者の紐付けは外す
+  db().update(schema.conversations).set({ clientId, ...(conv.clientId !== clientId ? { clientPersonId: null } : {}) }).where(eq(schema.conversations.id, conversationId)).run();
   const patch: Partial<typeof schema.clients.$inferInsert> = {};
   if (conv.channel === 'gmail' && conv.counterpartAddress && !client.emails.includes(conv.counterpartAddress)) {
     patch.emails = [...client.emails, conv.counterpartAddress];

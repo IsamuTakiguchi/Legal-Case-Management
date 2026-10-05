@@ -72,7 +72,7 @@ interface Conv {
   lineGroup?: boolean;
   /** LINE でブロック・友だち解除されていて、送っても届かない相手 */
   lineBlocked?: boolean;
-  client: { id: number; name: string; onedriveFolderPath: string | null; preferredChannel: string | null } | null;
+  client: { id: number; name: string; onedriveFolderPath: string | null; preferredChannel: string | null; entityType?: string } | null;
   contact?: { id: number; name: string; role: string; roleLabel: string; organization: string | null; caseId: number; caseTitle: string } | null;
   cases: { id: number; title: string; summary: string | null }[];
   messages: Message[];
@@ -81,6 +81,10 @@ interface Conv {
   scheduled: Scheduled[];
   /** この相手と調整中の仮押さえの数 */
   pendingHolds?: number;
+  /** 法人の担当者との会話なら、その担当者 */
+  clientPerson?: { id: number; name: string; title: string | null } | null;
+  /** 依頼者の担当者（選び直す候補） */
+  clientPersons?: { id: number; name: string; title: string | null }[];
   /** Chatwork のリアクション（ワンタップ返信）のボタン。Chatwork 以外では空 */
   reactions?: { label: string; text: string; emoji: string }[];
 }
@@ -358,6 +362,19 @@ export default function Conversation() {
             <Link to={`/clients/${c.client.id}`} className="text-sm text-blue-700 hover:underline">
               依頼者ページ
             </Link>
+          )}
+          {c.client && !c.contact && (c.client.entityType === 'corporation' || (c.clientPersons?.length ?? 0) > 0) && (
+            <ConversationPersonPicker
+              conversationId={c.id}
+              current={c.clientPerson ?? null}
+              persons={c.clientPersons ?? []}
+              defaultName={c.counterpartName ?? ''}
+              onDone={(text) => {
+                setMsg({ kind: 'ok', text });
+                invalidate();
+              }}
+              onError={(text) => setMsg({ kind: 'err', text })}
+            />
           )}
           {(c.clientId || c.contactId) && (
             <button
@@ -1848,5 +1865,76 @@ function MessageTools({ m, onChanged }: { m: Message; onChanged: () => void }) {
       )}
       {err && <div className="fade-in text-red-600">{err}</div>}
     </div>
+  );
+}
+
+/**
+ * 法人の依頼者との会話で、相手がどの担当者かを決める。
+ * 担当者にすると、このメールアドレス・LINE・ルームは担当者の連絡先として覚え、次からも自動でその担当者になる
+ */
+function ConversationPersonPicker({
+  conversationId,
+  current,
+  persons,
+  defaultName,
+  onDone,
+  onError,
+}: {
+  conversationId: number;
+  current: { id: number; name: string; title: string | null } | null;
+  persons: { id: number; name: string; title: string | null }[];
+  defaultName: string;
+  onDone: (text: string) => void;
+  onError: (text: string) => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState(defaultName);
+  const [title, setTitle] = useState('');
+  const set = useMutation({
+    mutationFn: (body: { personId?: number | null; newPerson?: { name: string; title: string | null } }) => api.post<{ person: { name: string } | null }>(`/conversations/${conversationId}/person`, body),
+    onSuccess: (r) => {
+      setAdding(false);
+      onDone(r.person ? `この会話の相手を担当者「${r.person.name}」にしました。この連絡先は担当者のものとして覚えます` : 'この会話を会社・代表とのやり取りにしました');
+    },
+    onError: (e) => onError((e as Error).message),
+  });
+  if (adding) {
+    return (
+      <span className="inline-flex flex-wrap items-center gap-1 text-sm">
+        <input className="input w-32 py-0.5 text-sm" value={name} onChange={(e) => setName(e.target.value)} placeholder="担当者の氏名" aria-label="担当者の氏名" autoFocus />
+        <input className="input w-28 py-0.5 text-sm" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="部署・役職" aria-label="部署・役職" />
+        <button className="btn btn-sm btn-primary" disabled={!name.trim() || set.isPending} onClick={() => set.mutate({ newPerson: { name: name.trim(), title: title.trim() || null } })}>
+          担当者として登録
+        </button>
+        <button className="btn btn-sm" onClick={() => setAdding(false)}>
+          やめる
+        </button>
+      </span>
+    );
+  }
+  return (
+    <label className="inline-flex items-center gap-1 text-sm text-slate-600" title="法人の依頼者の、どの担当者とのやり取りか">
+      相手:
+      <select
+        className="input w-auto py-0.5 text-sm"
+        value={current ? String(current.id) : ''}
+        disabled={set.isPending}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (v === 'new') setAdding(true);
+          else set.mutate({ personId: v ? Number(v) : null });
+        }}
+        aria-label="会話の相手（担当者）"
+      >
+        <option value="">会社・代表</option>
+        {persons.map((p) => (
+          <option key={p.id} value={p.id}>
+            担当 {p.name}
+            {p.title ? `（${p.title}）` : ''}
+          </option>
+        ))}
+        <option value="new">＋ 新しい担当者として登録…</option>
+      </select>
+    </label>
   );
 }

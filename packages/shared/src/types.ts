@@ -134,6 +134,28 @@ export const clientInputSchema = z.object({
 });
 export type ClientInput = z.infer<typeof clientInputSchema>;
 
+/** 法人の依頼者の担当者（代表者とは別の窓口）。担当者ごとに連絡先を持つ */
+export const clientPersonInputSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  kana: z.string().trim().max(100).optional().nullable(),
+  /** 部署・役職（例: 総務部 課長） */
+  title: z.string().trim().max(100).optional().nullable(),
+  emails: z.array(z.string().trim().email()).max(10).default([]),
+  phones: z.array(z.string().trim().max(60)).max(10).default([]),
+  lineUserId: z.string().trim().max(100).optional().nullable(),
+  chatworkAccountId: z.number().int().optional().nullable(),
+  chatworkRoomId: z.number().int().optional().nullable(),
+  /** 主担当（依頼者に連絡するときの既定の宛先） */
+  primary: z.boolean().optional(),
+  note: z.string().max(2000).optional().nullable(),
+});
+export type ClientPersonInput = z.infer<typeof clientPersonInputSchema>;
+
+/** 担当者の表示（「佐藤花子（総務部 課長）」） */
+export function clientPersonLabel(p: { name: string; title?: string | null }): string {
+  return p.title?.trim() ? `${p.name}（${p.title.trim()}）` : p.name;
+}
+
 export const caseInputSchema = z.object({
   clientId: z.number().int(),
   title: z.string().min(1),

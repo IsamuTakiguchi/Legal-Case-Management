@@ -21,7 +21,7 @@ interface ConfirmCtx {
   caseId: number | null;
   caseTitle: string | null;
   cases: { id: number; title: string }[];
-  channels: { channel: ConfirmChannel; label: string; to: string; conversationId: number | null; subject: string | null; lastMessageAt: string | null }[];
+  channels: { channel: ConfirmChannel; label: string; to: string; personId?: number | null; recipient?: string; conversationId: number | null; subject: string | null; lastMessageAt: string | null }[];
   defaultChannel: ConfirmChannel | null;
   defaultFollowUpAt: string;
   staffReplyText: string;
@@ -48,7 +48,9 @@ export function ClientConfirmPanel({ messageId, onClose, onSent }: { messageId: 
     placeholderData: (prev) => prev,
   });
   const d = ctx.data;
-  const [channel, setChannel] = useState<ConfirmChannel | ''>('');
+  // 宛先（チャネル＋担当者）。「gmail:12」のように持つ（担当者なしは「gmail:」）
+  const [sel, setSel] = useState('');
+  const keyOf = (c: { channel: string; personId?: number | null }) => `${c.channel}:${c.personId ?? ''}`;
   const [subject, setSubject] = useState('');
   const [text, setText] = useState('');
   const [instruction, setInstruction] = useState('');
@@ -62,11 +64,17 @@ export function ClientConfirmPanel({ messageId, onClose, onSent }: { messageId: 
 
   useEffect(() => {
     if (!d) return;
-    setChannel((prev) => (prev && d.channels.some((c) => c.channel === prev) ? prev : (d.defaultChannel ?? '')));
+    setSel((prev) => (prev && d.channels.some((c) => keyOf(c) === prev) ? prev : (() => {
+      const def = d.channels.find((c) => c.channel === d.defaultChannel);
+      return def ? keyOf(def) : '';
+    })()));
     setFollowUp((prev) => prev || d.defaultFollowUpAt.slice(0, 10));
     setStaffText(d.staffReplyText);
   }, [d]);
-  const ch = d?.channels.find((c) => c.channel === channel) ?? null;
+  const ch = d?.channels.find((c) => keyOf(c) === sel) ?? null;
+  const channel: ConfirmChannel | '' = ch?.channel ?? '';
+  // 法人の担当者がいれば、宛名も並べて出す
+  const withPersons = !!d?.channels.some((c) => c.personId);
   // 既存のスレッドに返信するときは件名を使わない。新しいメールのときだけ件名を入れる
   const newGmail = channel === 'gmail' && !ch?.subject;
 
@@ -76,6 +84,7 @@ export function ClientConfirmPanel({ messageId, onClose, onSent }: { messageId: 
         clientId: d?.clientId ?? null,
         caseId: d?.caseId ?? null,
         channel,
+        personId: ch?.personId ?? null,
         instruction: instruction || null,
       }),
     onSuccess: (r) => {
@@ -100,6 +109,7 @@ export function ClientConfirmPanel({ messageId, onClose, onSent }: { messageId: 
         clientId: d!.clientId,
         caseId: d!.caseId,
         channel,
+        personId: ch?.personId ?? null,
         text,
         subject: newGmail ? subject || null : null,
         createWaitingTask: waiting,
@@ -110,7 +120,7 @@ export function ClientConfirmPanel({ messageId, onClose, onSent }: { messageId: 
     onSuccess: (r) => {
       textDraft.clear();
       setDone(true);
-      const parts = [`${d!.clientName}さんに ${LABEL[r.channel]} で送りました`];
+      const parts = [`${ch?.personId && ch.recipient ? ch.recipient : `${d!.clientName}さん`}に ${LABEL[r.channel]} で送りました`];
       if (r.waitingTaskId) parts.push('回答待ちのタスクを作りました');
       if (r.staffNotified) parts.push('事務局に Chatwork で返事しました');
       if (r.staffError) parts.push(`事務局への返事は失敗しました（${r.staffError}）`);
@@ -198,17 +208,18 @@ export function ClientConfirmPanel({ messageId, onClose, onSent }: { messageId: 
             <>
               <div className="flex flex-wrap items-center gap-3" role="radiogroup" aria-label="送る方法">
                 {d.channels.map((c) => (
-                  <label key={c.channel} className="flex items-center gap-1">
+                  <label key={keyOf(c)} className="flex items-center gap-1">
                     <input
                       type="radio"
                       name={`confirm-ch-${messageId}`}
-                      checked={channel === c.channel}
+                      checked={sel === keyOf(c)}
                       onChange={() => {
-                        setChannel(c.channel);
+                        setSel(keyOf(c));
                         // 事務局への返事の「Gmail で／LINE で」も合わせる
                         setStaffText((t) => t.replace(/(Gmail|LINE)で確認/, `${LABEL[c.channel]}で確認`));
                       }}
                     />
+                    {withPersons && c.recipient && <span className="text-slate-700">{c.recipient}</span>}
                     <span className="font-medium">{c.label}</span>
                     <span className="text-xs text-slate-500">{c.channel === 'gmail' ? (c.subject ? `「${c.subject}」に返信` : `${c.to} に新しいメール`) : c.conversationId ? 'いつものトーク' : ''}</span>
                   </label>

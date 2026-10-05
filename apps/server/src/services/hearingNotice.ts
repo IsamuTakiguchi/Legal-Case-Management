@@ -7,17 +7,41 @@ import { listTemplates, fillTemplate } from './templates.js';
 import { adapterFor } from '../channels/registry.js';
 import { isConfigured } from '../config.js';
 import { logger } from '../logger.js';
-import { CHANNEL_LABEL, familyName, formatJaDateTime, type Channel } from '@lcm/shared';
+import { CHANNEL_LABEL, familyName, formatJaDateTime, clientPersonLabel, type Channel } from '@lcm/shared';
+import { listClientPersons, getClientPerson, type ClientPersonRow } from './clientPersons.js';
 
 type ClientRow = typeof schema.clients.$inferSelect;
 type ConversationRow = typeof schema.conversations.$inferSelect;
 
-/** 依頼者に送れるチャネルと宛先（連絡先が登録されていて、そのチャネルが設定済みのもの） */
-export function availableChannels(client: ClientRow): { channel: Channel; to: string }[] {
-  const out: { channel: Channel; to: string }[] = [];
-  if (client.emails[0]) out.push({ channel: 'gmail', to: client.emails[0] });
-  if (client.lineUserId) out.push({ channel: 'line', to: 'LINE' });
-  if (client.chatworkRoomId) out.push({ channel: 'chatwork', to: `ルーム ${client.chatworkRoomId}` });
+/** 依頼者に送る宛先 1 つ（依頼者本人、または法人の担当者のチャネル） */
+export interface ClientRecipient {
+  channel: Channel;
+  /** 宛先（メールアドレス、LINE、ルーム） */
+  to: string;
+  /** 法人の担当者宛なら、その担当者。依頼者本人（会社・代表）宛は null */
+  personId: number | null;
+  /** 宛名（依頼者名、または「佐藤花子（総務部）」） */
+  recipient: string;
+}
+
+function recipientsOf(target: { emails: string[]; lineUserId: string | null; chatworkRoomId: number | null }, personId: number | null, recipient: string): ClientRecipient[] {
+  const out: ClientRecipient[] = [];
+  if (target.emails[0]) out.push({ channel: 'gmail', to: target.emails[0], personId, recipient });
+  if (target.lineUserId) out.push({ channel: 'line', to: 'LINE', personId, recipient });
+  if (target.chatworkRoomId) out.push({ channel: 'chatwork', to: `ルーム ${target.chatworkRoomId}`, personId, recipient });
+  return out;
+}
+
+/**
+ * 依頼者に送れるチャネルと宛先（連絡先が登録されていて、そのチャネルが設定済みのもの）。
+ * 法人で担当者がいれば担当者の連絡先も並べる。主担当がいれば主担当を先頭にする（既定の宛先になる）
+ */
+export function availableChannels(client: ClientRow): ClientRecipient[] {
+  const persons = listClientPersons(client.id);
+  const primary = persons.filter((p) => p.primary);
+  const others = persons.filter((p) => !p.primary);
+  const ofPerson = (p: ClientPersonRow) => recipientsOf(p, p.id, clientPersonLabel(p));
+  const out: ClientRecipient[] = [...primary.flatMap(ofPerson), ...recipientsOf(client, null, client.name), ...others.flatMap(ofPerson)];
   return out.filter((x) => {
     try {
       return adapterFor(x.channel).isConfigured();
@@ -65,13 +89,17 @@ export function clientReachability(client: ClientRow) {
  * 依頼者本人との会話（そのチャネル）を返す。無ければ作る。
  * Gmail はスレッドがまだ無いので仮の ID（new:…）で作り、初回送信時に実際のスレッド ID に置き換わる
  */
-export function ensureClientConversation(client: ClientRow, channel: Channel): ConversationRow {
+export function ensureClientConversation(client: ClientRow, channel: Channel, personId: number | null = null): ConversationRow {
+  // 担当者宛なら担当者の連絡先、依頼者本人宛なら依頼者の連絡先で会話を探す・作る
+  const person = personId ? getClientPerson(personId) : null;
+  if (personId && (!person || person.clientId !== client.id)) throw new Error('この依頼者の担当者ではありません');
+  const target = person ?? client;
   const own = clientOwnConversations(client.id)
-    .filter((c) => c.channel === channel && !c.archived)
+    .filter((c) => c.channel === channel && !c.archived && (c.clientPersonId ?? null) === (person?.id ?? null))
     .sort((a, b) => (b.lastMessageAt ?? '').localeCompare(a.lastMessageAt ?? ''));
   if (own[0]) return own[0];
-  const externalThreadId = channel === 'gmail' ? `new:${client.id}:${Date.now()}` : channel === 'line' ? client.lineUserId! : String(client.chatworkRoomId);
-  const counterpartAddress = channel === 'gmail' ? (client.emails[0] ?? null) : channel === 'line' ? client.lineUserId : String(client.chatworkRoomId);
+  const externalThreadId = channel === 'gmail' ? `new:${client.id}:${Date.now()}` : channel === 'line' ? target.lineUserId! : String(target.chatworkRoomId);
+  const counterpartAddress = channel === 'gmail' ? (target.emails[0] ?? null) : channel === 'line' ? target.lineUserId : String(target.chatworkRoomId);
   // LINE・Chatwork は相手ごとに会話が 1 つ。アーカイブ済みや、まだ依頼者に紐付いていない会話があればそれを使う
   //（同じ相手の会話を二重に作ろうとすると、重複の制約で失敗する）
   if (channel !== 'gmail') {
@@ -81,14 +109,14 @@ export function ensureClientConversation(client: ClientRow, channel: Channel): C
       .where(and(eq(schema.conversations.channel, channel), eq(schema.conversations.externalThreadId, externalThreadId)))
       .get();
     if (existing) {
-      const patch = { archived: false, ...(existing.clientId ? {} : { clientId: client.id }) };
+      const patch = { archived: false, ...(existing.clientId ? {} : { clientId: client.id }), ...(person && !existing.clientPersonId ? { clientPersonId: person.id } : {}) };
       db().update(schema.conversations).set(patch).where(eq(schema.conversations.id, existing.id)).run();
       return { ...existing, ...patch };
     }
   }
   return db()
     .insert(schema.conversations)
-    .values({ channel, externalThreadId, clientId: client.id, counterpartName: client.name, counterpartAddress, subject: null })
+    .values({ channel, externalThreadId, clientId: client.id, clientPersonId: person?.id ?? null, counterpartName: person?.name ?? client.name, counterpartAddress, subject: null })
     .returning()
     .get();
 }
@@ -101,6 +129,10 @@ export interface HearingNotice {
   channel: Channel;
   channelLabel: string;
   to: string;
+  /** 法人の担当者宛なら、その担当者 */
+  personId: number | null;
+  /** 宛名（依頼者名、または担当者） */
+  recipient: string;
   conversationId: number;
   draftId: number | null;
   text: string;
@@ -109,14 +141,14 @@ export interface HearingNotice {
   nextHearingText: string;
   /** 添付の候補（事件フォルダの更新が新しい順）。suggested は期日の前後に更新された＝その期日で出した可能性が高いもの */
   docs: { name: string; path: string; itemId?: string; modifiedAt?: string; size?: number; suggested: boolean }[];
-  channels: { channel: Channel; to: string }[];
+  channels: ClientRecipient[];
 }
 
 /**
  * 期日の記録（案件ノート）から、依頼者への期日連絡の下書きを用意する。
  * 記録の要旨・決定事項・次のアクションと、カレンダー上の次回期日、直近の提出書面をもとに本人の文体で書く。
  */
-export async function prepareHearingNotice(noteId: number, opts: { channel?: Channel } = {}): Promise<HearingNotice> {
+export async function prepareHearingNotice(noteId: number, opts: { channel?: Channel; personId?: number | null } = {}): Promise<HearingNotice> {
   const d = db();
   const note = d.select().from(schema.caseNotes).where(eq(schema.caseNotes.id, noteId)).get();
   if (!note) throw new Error('記録が見つかりません');
@@ -127,9 +159,15 @@ export async function prepareHearingNotice(noteId: number, opts: { channel?: Cha
   const channels = availableChannels(client);
   if (channels.length === 0) throw new ClientUnreachableError(client.id, `${client.name}さんの連絡先（メールアドレス・LINE・Chatwork ルーム）が登録されていないか、そのチャネルがアプリに接続されていません`);
   const preferred = client.preferredChannel as Channel | null;
-  const channel = opts.channel && channels.some((c) => c.channel === opts.channel) ? opts.channel : (channels.find((c) => c.channel === preferred)?.channel ?? channels[0].channel);
-  const to = channels.find((c) => c.channel === channel)!.to;
-  const conv = ensureClientConversation(client, channel);
+  // 宛先: 画面で選んだもの（チャネル＋担当者） → 希望チャネル → 先頭（主担当がいれば主担当）
+  const chosen =
+    (opts.channel ? channels.find((c) => c.channel === opts.channel && (opts.personId === undefined || c.personId === (opts.personId ?? null))) : undefined) ??
+    channels.find((c) => c.channel === preferred) ??
+    channels[0]!;
+  const { channel, to } = chosen;
+  const conv = ensureClientConversation(client, channel, chosen.personId);
+  // 担当者宛なら、宛名は担当者（姓）にする
+  const addressee = chosen.personId ? (getClientPerson(chosen.personId)?.name ?? client.name) : client.name;
 
   // 次回期日: カレンダーの今後の期日 → 事件の次回期日
   const now = new Date().toISOString();
@@ -165,7 +203,7 @@ export async function prepareHearingNotice(noteId: number, opts: { channel?: Cha
   }
   const suggestedCount = docs.filter((d) => d.suggested).length;
 
-  const surname = familyName(client.name);
+  const surname = familyName(addressee);
   const template = listTemplates().find((t) => t.key === 'hearing_report');
   let text: string;
   let draftId: number | null = null;
@@ -186,7 +224,7 @@ export async function prepareHearingNotice(noteId: number, opts: { channel?: Cha
       {
         channel,
         clientName: client.name,
-        counterpartName: conv.counterpartName,
+        counterpartName: chosen.personId ? addressee : conv.counterpartName,
         thread: thread.map((m) => ({ direction: m.direction as 'in' | 'out', body: m.body, sentAt: m.sentAt, senderName: m.senderName })),
         caseSummary: kase.summary ?? null,
       },
@@ -204,6 +242,8 @@ export async function prepareHearingNotice(noteId: number, opts: { channel?: Cha
     channel,
     channelLabel: CHANNEL_LABEL[channel],
     to,
+    personId: chosen.personId,
+    recipient: chosen.recipient,
     conversationId: conv.id,
     draftId,
     text,
