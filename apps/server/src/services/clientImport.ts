@@ -1,6 +1,7 @@
 /** 依頼者の一括登録: OneDrive の依頼者フォルダ名／Chatwork ルームから候補を作る */
 import { eq } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
+import { deletePersonsOfClient } from './clientPersons.js';
 import { storage } from '../integrations/storage.js';
 import * as cw from '../channels/chatwork.js';
 import { isConfigured } from '../config.js';
@@ -240,6 +241,7 @@ export function deleteClient(id: number): boolean {
     d.delete(schema.cases).where(eq(schema.cases.clientId, id)).run();
     d.delete(schema.tasks).where(eq(schema.tasks.clientId, id)).run();
     d.delete(schema.caseNotes).where(eq(schema.caseNotes.clientId, id)).run();
+    deletePersonsOfClient(id);
     d.update(schema.conversations).set({ clientId: null }).where(eq(schema.conversations.clientId, id)).run();
     d.update(schema.attachments).set({ clientId: null }).where(eq(schema.attachments.clientId, id)).run();
     d.update(schema.calendarEvents).set({ clientId: null }).where(eq(schema.calendarEvents.clientId, id)).run();

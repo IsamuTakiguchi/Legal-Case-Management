@@ -1031,7 +1031,11 @@ interface HearingNotice {
   nextHearingAt: string | null;
   nextHearingText: string;
   docs: DriveDoc[];
-  channels: { channel: string; to: string }[];
+  channels: { channel: string; to: string; personId?: number | null; recipient?: string }[];
+  /** 法人の担当者宛なら、その担当者 */
+  personId?: number | null;
+  /** 宛名（依頼者名、または担当者） */
+  recipient?: string;
 }
 interface DriveDoc {
   name: string;
@@ -1105,15 +1109,16 @@ function FolderBrowser({ clientId, isPicked, onToggle }: { clientId: number; isP
  * 記録の要旨・決定事項・次回期日・提出書面をもとに本人の文体で下書きし、確認して送信する
  */
 function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClose: () => void; onSent: () => void }) {
-  const [channel, setChannel] = useState<string | undefined>(undefined);
+  // 宛先（チャネル＋担当者）。未選択ならサーバーの既定（主担当 → 希望チャネル）
+  const [target, setTarget] = useState<{ channel: string; personId: number | null } | undefined>(undefined);
   const [text, setText] = useState('');
   // 添付に選んだファイル（候補からでも、フォルダから探した分でも同じ入れ物に入れる）
   const [picked, setPicked] = useState<Map<string, DriveDoc>>(new Map());
   const [browse, setBrowse] = useState(false);
   const [msg, setMsg] = useState('');
   const prep = useQuery({
-    queryKey: ['hearing-notice', noteId, channel ?? ''],
-    queryFn: () => api.post<HearingNotice>(`/case-notes/${noteId}/hearing-notice`, channel ? { channel } : {}),
+    queryKey: ['hearing-notice', noteId, target?.channel ?? '', target?.personId ?? ''],
+    queryFn: () => api.post<HearingNotice>(`/case-notes/${noteId}/hearing-notice`, target ?? {}),
     staleTime: Infinity,
     retry: false,
   });
@@ -1156,16 +1161,20 @@ function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClo
         <h2 className="font-semibold">依頼者に期日連絡</h2>
         {n && (
           <>
-            <span className="text-sm text-slate-600">{n.clientName} 宛</span>
+            <span className="text-sm text-slate-600">{n.recipient ?? n.clientName} 宛</span>
             <select
-              className="input w-auto"
-              value={n.channel}
-              onChange={(e) => setChannel(e.target.value)}
+              className="input w-auto max-w-full"
+              value={`${n.channel}:${n.personId ?? ''}`}
+              onChange={(e) => {
+                const [ch, pid] = e.target.value.split(':');
+                setTarget({ channel: ch!, personId: pid ? Number(pid) : null });
+              }}
               disabled={prep.isFetching}
-              title="送るチャネル（依頼者の希望チャネルが既定）"
+              title="送る相手とチャネル（法人で主担当がいれば主担当、いなければ依頼者の希望チャネルが既定）"
             >
               {n.channels.map((c) => (
-                <option key={c.channel} value={c.channel}>
+                <option key={`${c.channel}:${c.personId ?? ''}`} value={`${c.channel}:${c.personId ?? ''}`}>
+                  {n.channels.some((x) => x.personId) && c.recipient ? `${c.recipient} ・ ` : ''}
                   {CHANNEL_JA[c.channel] ?? c.channel}
                   {c.channel === 'gmail' ? `（${c.to}）` : ''}
                 </option>

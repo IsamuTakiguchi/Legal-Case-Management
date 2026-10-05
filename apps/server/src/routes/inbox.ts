@@ -12,6 +12,7 @@ import { sendToConversation } from '../services/send.js';
 import { staffAskContext, draftStaffAsk, sendStaffAsk, type StaffAskSource } from '../services/staffAsk.js';
 import { clientConfirmContext, draftClientConfirm, sendClientConfirm, CONFIRM_CHANNELS } from '../services/clientConfirm.js';
 import { pendingHoldsFor } from '../services/court.js';
+import { setConversationPerson, listClientPersons, getClientPerson } from '../services/clientPersons.js';
 import { scheduleMessage, listScheduled, updateScheduled, cancelScheduled, dispatchScheduled } from '../services/scheduledSend.js';
 import { draftReply } from '../services/style.js';
 import { judgeWaiting } from '../services/tasks.js';
@@ -111,7 +112,10 @@ inboxRoutes.get('/conversations/:id', (c) => {
   const reactions = conv.channel === 'chatwork' ? parseChatworkReactions(getSetting('chatwork_reactions')) : [];
   // この相手と調整中の仮押さえの数（会話の画面から確定できることを知らせる）
   const pendingHolds = pendingHoldsFor({ conversationId: conv.id, clientId: conv.clientId ?? null }).length;
-  return c.json({ ...conv, drafts, suggestions, scheduled, reactions, pendingHolds });
+  // 法人の担当者（会話の相手の担当者と、選び直す候補）
+  const clientPerson = conv.clientPersonId ? getClientPerson(conv.clientPersonId) : null;
+  const clientPersons = conv.clientId ? listClientPersons(conv.clientId).map((p) => ({ id: p.id, name: p.name, title: p.title })) : [];
+  return c.json({ ...conv, drafts, suggestions, scheduled, reactions, pendingHolds, clientPerson: clientPerson ? { id: clientPerson.id, name: clientPerson.name, title: clientPerson.title } : null, clientPersons });
 });
 
 inboxRoutes.post('/conversations/:id/link', async (c) => {
@@ -120,6 +124,14 @@ inboxRoutes.post('/conversations/:id/link', async (c) => {
   linkConversationToClient(id, body.clientId);
   const moved = await assignConversationAttachments(id, body.clientId);
   return c.json({ ok: true, movedAttachments: moved });
+});
+
+/** 会話の相手を法人の担当者に決める（既存の担当者・新しい担当者・会社/代表として） */
+inboxRoutes.post('/conversations/:id/person', async (c) => {
+  const body = z
+    .object({ personId: z.number().int().nullable().optional(), newPerson: z.object({ name: z.string().trim().min(1).max(100), title: z.string().trim().max(100).nullable().optional() }).nullable().optional() })
+    .parse(await c.req.json());
+  return c.json(setConversationPerson(Number(c.req.param('id')), body));
 });
 
 /**
@@ -219,6 +231,7 @@ inboxRoutes.post('/messages/:messageId/client-confirm/draft', async (c) => {
       clientId: z.number().int().nullable().optional(),
       caseId: z.number().int().nullable().optional(),
       channel: z.enum(CONFIRM_CHANNELS),
+      personId: z.number().int().nullable().optional(),
       instruction: z.string().max(2000).nullable().optional(),
     })
     .parse(await c.req.json());
@@ -231,6 +244,7 @@ inboxRoutes.post('/messages/:messageId/client-confirm', async (c) => {
       clientId: z.number().int(),
       caseId: z.number().int().nullable().optional(),
       channel: z.enum(CONFIRM_CHANNELS),
+      personId: z.number().int().nullable().optional(),
       text: z.string().min(1),
       subject: z.string().max(200).nullable().optional(),
       createWaitingTask: z.boolean().optional(),

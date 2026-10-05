@@ -122,7 +122,7 @@ export function unlinkConversation(conversationId: number) {
   const d = db();
   const conv = d.select().from(schema.conversations).where(eq(schema.conversations.id, conversationId)).get();
   if (!conv) throw new Error('会話が見つかりません');
-  d.update(schema.conversations).set({ clientId: null, caseId: null, contactId: null }).where(eq(schema.conversations.id, conversationId)).run();
+  d.update(schema.conversations).set({ clientId: null, caseId: null, contactId: null, clientPersonId: null }).where(eq(schema.conversations.id, conversationId)).run();
   d.update(schema.messages).set({ clientId: null, caseId: null }).where(eq(schema.messages.conversationId, conversationId)).run();
   const msgIds = d.select({ id: schema.messages.id }).from(schema.messages).where(eq(schema.messages.conversationId, conversationId)).all().map((m) => m.id);
   // 保存済みの添付はフォルダに入っているので触らない。未保存のものだけ依頼者を外す

@@ -6,7 +6,8 @@ import { createTask, defaultFollowUp } from './tasks.js';
 import { staffByChatworkAccount } from './staff.js';
 import { clientOwnConversations } from './contacts.js';
 import { activeCasesForClient } from './cases.js';
-import { availableChannels, ensureClientConversation } from './hearingNotice.js';
+import { availableChannels, ensureClientConversation, type ClientRecipient } from './hearingNotice.js';
+import { getClientPerson } from './clientPersons.js';
 import { stripChatworkMarkup } from '../channels/chatwork.js';
 import { isConfigured } from '../config.js';
 import { logger } from '../logger.js';
@@ -29,6 +30,10 @@ export interface ClientConfirmChannel {
   label: string;
   /** 宛先（メールアドレス、LINE） */
   to: string;
+  /** 法人の担当者宛なら、その担当者。依頼者本人（会社・代表）宛は null */
+  personId: number | null;
+  /** 宛名（依頼者名、または担当者） */
+  recipient: string;
   /** 依頼者本人との既存の会話（無ければ送ったときに作る） */
   conversationId: number | null;
   /** Gmail の既存スレッドの件名（返信になる）。新しいスレッドなら null */
@@ -96,19 +101,22 @@ function staffReply(clientName: string | null, channel: ConfirmChannel | null): 
   return `${who}に${channel ? `${SHORT_LABEL[channel]}で` : ''}確認しました。回答が来たら共有します。`;
 }
 
-/** 依頼者本人に送れる Gmail / LINE と、それぞれの既存の会話 */
+/** 依頼者本人（法人なら担当者も）に送れる Gmail / LINE と、それぞれの既存の会話 */
 function confirmChannels(client: typeof schema.clients.$inferSelect): ClientConfirmChannel[] {
   const own = clientOwnConversations(client.id).filter((c) => !c.archived);
   return availableChannels(client)
-    .filter((x): x is { channel: ConfirmChannel; to: string } => (CONFIRM_CHANNELS as readonly string[]).includes(x.channel))
+    .filter((x): x is ClientRecipient & { channel: ConfirmChannel } => (CONFIRM_CHANNELS as readonly string[]).includes(x.channel))
     .map((x) => {
-      // ensureClientConversation と同じく、そのチャネルでいちばん新しい会話に送る
-      const conv = own.filter((c) => c.channel === x.channel).sort((a, b) => (b.lastMessageAt ?? '').localeCompare(a.lastMessageAt ?? ''))[0] ?? null;
+      // ensureClientConversation と同じく、その宛先（本人か担当者か）とチャネルでいちばん新しい会話に送る
+      const conv =
+        own.filter((c) => c.channel === x.channel && (c.clientPersonId ?? null) === x.personId).sort((a, b) => (b.lastMessageAt ?? '').localeCompare(a.lastMessageAt ?? ''))[0] ?? null;
       const isNewGmail = !conv || conv.externalThreadId.startsWith('new:');
       return {
         channel: x.channel,
         label: SHORT_LABEL[x.channel],
         to: x.to,
+        personId: x.personId,
+        recipient: x.recipient,
         conversationId: conv?.id ?? null,
         subject: x.channel === 'gmail' && !isNewGmail ? (conv?.subject ?? null) : null,
         lastMessageAt: conv?.lastMessageAt ?? null,
@@ -200,17 +208,20 @@ export function confirmInstruction(ctx: Pick<ClientConfirmContext, 'question' | 
     .join('\n');
 }
 
-function pickChannel(ctx: ClientConfirmContext, channel: ConfirmChannel) {
+function pickChannel(ctx: ClientConfirmContext, channel: ConfirmChannel, personId?: number | null) {
   if (ctx.blocked) throw new Error(ctx.blocked);
-  const ch = ctx.channels.find((c) => c.channel === channel);
+  // personId を指定しなければ、そのチャネルの先頭（主担当がいれば主担当）
+  const ch = ctx.channels.find((c) => c.channel === channel && (personId === undefined || c.personId === (personId ?? null)));
   if (!ch) throw new Error(`${CHANNEL_LABEL[channel]}では送れません（連絡先が未登録か、未設定です）`);
   return ch;
 }
 
 /** 依頼者への確認文を、本人の文体で下書きする */
-export async function draftClientConfirm(messageId: number, input: { clientId?: number | null; caseId?: number | null; channel: ConfirmChannel; instruction?: string | null }) {
+export async function draftClientConfirm(messageId: number, input: { clientId?: number | null; caseId?: number | null; channel: ConfirmChannel; personId?: number | null; instruction?: string | null }) {
   const ctx = clientConfirmContext(messageId, input);
-  const ch = pickChannel(ctx, input.channel);
+  const ch = pickChannel(ctx, input.channel, input.personId);
+  // 担当者宛なら、宛名は担当者にする
+  const addressee = ch.personId ? (getClientPerson(ch.personId)?.name ?? ctx.clientName) : ctx.clientName;
   if (!isConfigured('anthropic')) throw new Error('AI（Anthropic API キー）が未設定のため下書きを作れません。本文を直接入力してください');
   const d = db();
   const thread = ch.conversationId
@@ -227,7 +238,7 @@ export async function draftClientConfirm(messageId: number, input: { clientId?: 
   const kase = ctx.caseId ? d.select().from(schema.cases).where(eq(schema.cases.id, ctx.caseId)).get() : null;
   const text = await draftReply(
     { conversationId: ch.conversationId ?? 0, instruction: confirmInstruction(ctx, input.instruction), templateKey: null, extra: {} },
-    { channel: input.channel, clientName: ctx.clientName, counterpartName: ctx.clientName, thread, caseSummary: kase?.summary ?? null },
+    { channel: input.channel, clientName: ctx.clientName, counterpartName: addressee, thread, caseSummary: kase?.summary ?? null },
     ctx.clientId,
   );
   // 新しい Gmail スレッドになるときは件名も用意する
@@ -239,6 +250,8 @@ export interface ClientConfirmSendInput {
   clientId: number;
   caseId?: number | null;
   channel: ConfirmChannel;
+  /** 法人の担当者宛なら、その担当者 */
+  personId?: number | null;
   text: string;
   /** 新しい Gmail スレッドの件名（既存スレッドへの返信では使わない） */
   subject?: string | null;
@@ -254,11 +267,11 @@ export interface ClientConfirmSendInput {
 export async function sendClientConfirm(messageId: number, input: ClientConfirmSendInput) {
   if (!input.text.trim()) throw new Error('依頼者に送る本文を入力してください');
   const ctx = clientConfirmContext(messageId, { clientId: input.clientId, caseId: input.caseId ?? null });
-  pickChannel(ctx, input.channel);
+  const ch = pickChannel(ctx, input.channel, input.personId);
   const d = db();
   const client = d.select().from(schema.clients).where(eq(schema.clients.id, input.clientId)).get()!;
 
-  const conv = ensureClientConversation(client, input.channel);
+  const conv = ensureClientConversation(client, input.channel, ch.personId);
   // 新しい Gmail スレッドなら件名を入れておく（既存スレッドは Re: で返信）
   if (input.channel === 'gmail' && conv.externalThreadId.startsWith('new:')) {
     const subject = input.subject?.trim() || `ご確認のお願い${ctx.caseTitle ? `（${ctx.caseTitle}）` : ''}`;

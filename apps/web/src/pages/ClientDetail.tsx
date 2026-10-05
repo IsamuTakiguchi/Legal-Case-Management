@@ -10,6 +10,7 @@ import { EVENT_KIND_LABEL, TASK_STATUS_LABEL, type EventKind, type TaskStatus, C
 import { CaseStatusBadge } from './Cases';
 import { ClientPicker } from '../lib/ClientPicker';
 import { LineInvitePanel } from '../lib/LineInvite';
+import { ClientPersonsCard, type ClientPerson } from '../lib/ClientPersons';
 
 interface Detail extends ClientRow {
   folder: string;
@@ -17,6 +18,8 @@ interface Detail extends ClientRow {
   conversations: { id: number; channel: string; subject: string | null; lastMessageAt: string | null; needsReply: boolean; contact?: { name: string; roleLabel: string; caseTitle: string } | null }[];
   tasks: { id: number; title: string; status: string; followUpAt: string | null }[];
   events: { id: number; title: string; startAt: string; kind: string }[];
+  /** 法人の担当者 */
+  persons?: ClientPerson[];
 }
 
 export default function ClientDetail() {
@@ -103,6 +106,7 @@ export default function ClientDetail() {
       )}
       {c.provisional && <ProvisionalClientPanel clientId={c.id} name={c.name} />}
       <ContactCard c={c} onEdit={() => setEdit(true)} />
+      {(c.entityType === 'corporation' || (c.persons?.length ?? 0) > 0) && <ClientPersonsCard clientId={c.id} persons={c.persons ?? []} />}
       <div className="grid gap-4 md:grid-cols-2">
         <section className="card">
           <div className="mb-2 flex items-center">
