@@ -11,6 +11,7 @@ import { assignConversationAttachments } from '../services/attachments.js';
 import { sendToConversation } from '../services/send.js';
 import { staffAskContext, draftStaffAsk, sendStaffAsk, type StaffAskSource } from '../services/staffAsk.js';
 import { clientConfirmContext, draftClientConfirm, sendClientConfirm, CONFIRM_CHANNELS } from '../services/clientConfirm.js';
+import { pendingHoldsFor } from '../services/court.js';
 import { scheduleMessage, listScheduled, updateScheduled, cancelScheduled, dispatchScheduled } from '../services/scheduledSend.js';
 import { draftReply } from '../services/style.js';
 import { judgeWaiting } from '../services/tasks.js';
@@ -108,7 +109,9 @@ inboxRoutes.get('/conversations/:id', (c) => {
   const scheduled = listScheduled({ conversationId: conv.id });
   // Chatwork はリアクション（ワンタップ返信）のボタンを一緒に返す
   const reactions = conv.channel === 'chatwork' ? parseChatworkReactions(getSetting('chatwork_reactions')) : [];
-  return c.json({ ...conv, drafts, suggestions, scheduled, reactions });
+  // この相手と調整中の仮押さえの数（会話の画面から確定できることを知らせる）
+  const pendingHolds = pendingHoldsFor({ conversationId: conv.id, clientId: conv.clientId ?? null }).length;
+  return c.json({ ...conv, drafts, suggestions, scheduled, reactions, pendingHolds });
 });
 
 inboxRoutes.post('/conversations/:id/link', async (c) => {

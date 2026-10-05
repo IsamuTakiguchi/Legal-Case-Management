@@ -396,6 +396,8 @@ export interface HoldSetInput {
   exactTitle?: string | null;
   /** WEB 会議で行う。確定したときに Zoom / Google Meet を発行する */
   web?: boolean;
+  /** 受信箱の会話から始めた仮押さえなら、その会話（会話の画面から確定できるようにする） */
+  conversationId?: number | null;
 }
 
 export function holdSetTitle(input: Pick<HoldSetInput, 'exactTitle' | 'counterpartName' | 'title'>, clientName: string | null): { hold: string; confirmed: string } {
@@ -417,7 +419,7 @@ export async function createHoldSet(input: HoldSetInput) {
   for (const sl of sorted) assertRange(sl.startAt, sl.endAt);
   const session = db()
     .insert(schema.schedulingSessions)
-    .values({ clientId: client?.id ?? null, conversationId: null, kind: input.kind === 'hearing' ? '期日' : input.kind === 'consult' ? '面談' : '打合せ', state: 'proposing', candidates: [], rescheduleEventId: input.rescheduleEventId ?? null, web: input.web ?? false, location: input.location?.trim() || null, proposedAt: new Date().toISOString() })
+    .values({ clientId: client?.id ?? null, conversationId: input.conversationId ?? null, kind: input.kind === 'hearing' ? '期日' : input.kind === 'consult' ? '面談' : '打合せ', state: 'proposing', candidates: [], rescheduleEventId: input.rescheduleEventId ?? null, web: input.web ?? false, location: input.location?.trim() || null, proposedAt: new Date().toISOString() })
     .returning()
     .get();
   const candidates: { startAt: string; endAt: string; eventId?: string }[] = [];
@@ -581,6 +583,45 @@ export async function cancelHoldSet(sessionId: number) {
   db().update(schema.schedulingSessions).set({ state: 'cancelled', updatedAt: new Date().toISOString() }).where(eq(schema.schedulingSessions.id, sessionId)).run();
   holdMeta.delete(sessionId);
   resolveAlertsByKeyPrefix(`scheduling_stale:${sessionId}`);
+}
+
+export interface PendingHoldSet {
+  sessionId: number;
+  /** 候補の予定の件名（末尾の「仮」は外す） */
+  title: string;
+  /** この会話から始めた仮押さえか（false は同じ依頼者の別の経路のもの） */
+  fromThisConversation: boolean;
+  rescheduleOf: { eventId: number; title: string; startAt: string } | null;
+  candidates: { eventId: number; startAt: string; endAt: string }[];
+}
+
+/**
+ * 会話の画面から確定できる、調整中の仮押さえ。
+ * その会話から始めたもの、または同じ依頼者のもの（事件ページ・予定ページから入れたもの）を返す。
+ * カレンダーに予定が無い候補（まだ同期されていないもの）は確定できないので外す
+ */
+export function pendingHoldsFor(opts: { conversationId: number; clientId: number | null }): PendingHoldSet[] {
+  const sessions = db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.state, 'proposing')).all();
+  const out: PendingHoldSet[] = [];
+  for (const s of sessions) {
+    const rows = s.candidates
+      .map((c) => (c.eventId ? db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.googleEventId, c.eventId)).get() : undefined))
+      .filter((r): r is NonNullable<typeof r> => !!r);
+    if (!rows.length) continue;
+    const fromThisConversation = s.conversationId === opts.conversationId;
+    const sameClient = !!opts.clientId && (s.clientId === opts.clientId || rows.some((r) => r.clientId === opts.clientId));
+    if (!fromThisConversation && !sameClient) continue;
+    const original = s.rescheduleEventId ? (db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, s.rescheduleEventId)).get() ?? null) : null;
+    out.push({
+      sessionId: s.id,
+      title: rows[0]!.title.replace(/\s*仮$/, ''),
+      fromThisConversation,
+      rescheduleOf: original ? { eventId: original.id, title: original.title, startAt: original.startAt } : null,
+      candidates: rows.map((r) => ({ eventId: r.id, startAt: r.startAt, endAt: r.endAt })).sort((a, b) => a.startAt.localeCompare(b.startAt)),
+    });
+  }
+  // この会話のものを先に、あとは候補の早い順
+  return out.sort((a, b) => Number(b.fromThisConversation) - Number(a.fromThisConversation) || (a.candidates[0]?.startAt ?? '').localeCompare(b.candidates[0]?.startAt ?? ''));
 }
 
 /**
