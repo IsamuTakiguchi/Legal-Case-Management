@@ -3,7 +3,7 @@ import { eq, and, inArray, desc, ne, gte, lte } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { generateStructured } from '../integrations/anthropic.js';
 import { familyName, formatJaDateTime, toJstParts, OPEN_CASE_STATUSES, type EventKind } from '@lcm/shared';
-import { createCalendarEvent, createHoldSet, removeCalendarEvent, cancelHoldSet } from './court.js';
+import { createCalendarEvent, createHoldSet, removeCalendarEvent, cancelHoldSet, confirmHold, pendingHoldsFor, type PendingHoldSet } from './court.js';
 import { getSetting, businessHours, fmtHm } from './settings.js';
 import { issueZoomIfNeeded, webLocation, webMeetingProvider, webMeetingText } from './webMeeting.js';
 import { logger } from '../logger.js';
@@ -97,6 +97,18 @@ export async function extractScheduleFromConversation(conversationId: number, op
         })
         .join('\n')
     : '（なし）';
+  // 仮押さえ中の候補があれば、相手がどれを選んだかを当てられるように渡す
+  const holds = pendingHoldsFor({ conversationId, clientId: conv.clientId });
+  const holdsText = holds.length
+    ? holds
+        .flatMap((h) =>
+          h.candidates.map((c) => {
+            const p = toJstParts(new Date(c.startAt));
+            return `・${p.month}/${p.day}(${WD[p.weekday]}) ${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')} ${h.title}`;
+          }),
+        )
+        .join('\n')
+    : '（なし）';
   const result = await generateStructured({
     purpose: '日程の希望の読み取り',
     tier: 'light',
@@ -108,9 +120,10 @@ export async function extractScheduleFromConversation(conversationId: number, op
       '候補は本文に出てきた順に、重複せずすべて挙げてください。過去の日時や、すでに断られた候補は含めません。',
       'すでに決まっている予定の日時を変える話（「◯日の打合せを別日にしたい」「都合が悪くなった」「延期」など）なら reschedule.isReschedule=true とし、変更前の予定を「すでに入っている予定」の番号で originalIndex に入れます。slots には新しい日時（候補）だけを入れ、変更前の日時は入れません。',
       '新しく予定を決める話なら isReschedule=false です。変更前の予定が一覧に無い・どれか分からないときは originalIndex=null にします。',
+      '「仮押さえ中の候補」は、こちらが相手に出している候補です。相手がそのうちの 1 つを選んで合意した（「2 番目でお願いします」「◯日で大丈夫です」など）なら confirmed とし、その候補の日時を slots に入れます。',
       '本文にない情報は作らないでください。',
     ].join('\n'),
-    user: `相手: ${who}\n自分: ${me}\n\n--- この相手とすでに入っている予定 ---\n${existingText}\n\n--- やり取り（古い順） ---\n${transcript}`,
+    user: `相手: ${who}\n自分: ${me}\n\n--- この相手とすでに入っている予定 ---\n${existingText}\n\n--- 仮押さえ中の候補 ---\n${holdsText}\n\n--- やり取り（古い順） ---\n${transcript}`,
     schema: extractSchema,
     effort: 'medium',
     maxTokens: 2000,
@@ -134,6 +147,10 @@ export async function extractScheduleFromConversation(conversationId: number, op
     slots,
     /** 日程変更の元になりうる予定（画面で選び直せるように全部返す） */
     existingEvents: existing,
+    /** この相手について調整中の仮押さえ（会話の画面からそのまま確定できる） */
+    holds,
+    /** 読み取った日時が仮押さえの候補のどれかと同じなら、その候補 */
+    holdMatch: matchHold(holds, slots[0]?.startAt),
     /** 日程変更と読み取ったときの、変更前の予定 */
     reschedule: result.reschedule?.isReschedule ? { eventId: original?.id ?? null, quote: result.reschedule.quote } : null,
     clientId: conv.clientId,
@@ -145,6 +162,42 @@ export async function extractScheduleFromConversation(conversationId: number, op
     title: `${counterpartName} ${content}`.trim(),
     summary: slots.length ? slots.map((s) => `${formatJaDateTime(new Date(s.startAt))}〜`).join(' / ') : '',
   };
+}
+
+/** 日時（分単位）が同じ仮押さえの候補を探す */
+export function matchHold(holds: PendingHoldSet[], startAt: string | undefined): { sessionId: number; eventId: number } | null {
+  if (!startAt) return null;
+  const t = Math.floor(new Date(startAt).getTime() / 60_000);
+  for (const h of holds) {
+    const c = h.candidates.find((x) => Math.floor(new Date(x.startAt).getTime() / 60_000) === t);
+    if (c) return { sessionId: h.sessionId, eventId: c.eventId };
+  }
+  return null;
+}
+
+/** 会話の相手との仮押さえか確かめる（別の依頼者の仮押さえを、会話の画面から誤って動かさない） */
+function holdOfConversation(conversationId: number, sessionId: number): PendingHoldSet {
+  const conv = db().select().from(schema.conversations).where(eq(schema.conversations.id, conversationId)).get();
+  if (!conv) throw new Error('会話が見つかりません');
+  const hold = pendingHoldsFor({ conversationId, clientId: conv.clientId }).find((h) => h.sessionId === sessionId);
+  if (!hold) throw new Error('この会話の相手の、調整中の仮押さえではありません（すでに確定・取消済みの可能性があります）');
+  return hold;
+}
+
+/** この会話の相手と調整中の仮押さえ */
+export function conversationHolds(conversationId: number): PendingHoldSet[] {
+  const conv = db().select().from(schema.conversations).where(eq(schema.conversations.id, conversationId)).get();
+  if (!conv) throw new Error('会話が見つかりません');
+  return pendingHoldsFor({ conversationId, clientId: conv.clientId });
+}
+
+/** 会話の画面から、仮押さえの候補の 1 つで確定する（ほかの候補は消える。WEB 会議ならここで会議 URL を発行） */
+export async function confirmHoldFromConversation(conversationId: number, sessionId: number, eventId: number) {
+  const hold = holdOfConversation(conversationId, sessionId);
+  if (!hold.candidates.some((c) => c.eventId === eventId)) throw new Error('選んだ日時はこの仮押さえの候補ではありません');
+  const r = await confirmHold(sessionId, eventId);
+  logger.info({ conversationId, sessionId, eventId }, '会話から仮押さえを確定しました');
+  return { event: r, webText: r?.webText ?? '', rescheduled: hold.rescheduleOf };
 }
 
 const HM_RE = /^(\d{1,2}):(\d{2})$/;
@@ -265,6 +318,8 @@ export interface RegisterScheduleInput {
    * 確定なら新しい予定を入れたうえで元の予定を取り消す。仮押さえなら、候補のどれかを確定した時点で取り消す
    */
   replaceEventId?: number | null;
+  /** 確定として登録するとき、あわせて取り消す仮押さえ（候補に無い日時で決まったとき） */
+  cancelHoldSessionId?: number | null;
 }
 
 /** 日程変更で取り消す予定を確かめる（別の依頼者の予定や、仮押さえそのものは取り消さない） */
@@ -295,8 +350,10 @@ export async function registerScheduleFromConversation(conversationId: number, i
   if (!conv) throw new Error('会話が見つかりません');
   if (!input.slots.length) throw new Error('日時がありません');
   const client = conv.clientId ? d.select().from(schema.clients).where(eq(schema.clients.id, conv.clientId)).get() : null;
+  // 候補に無い日時で決まったときは、調整中の仮押さえを取り消す（日程変更の仮押さえなら、その元の予定も置き換える）
+  const holdToCancel = input.mode === 'confirmed' && input.cancelHoldSessionId ? holdOfConversation(conversationId, input.cancelHoldSessionId) : null;
   // 日程変更なら、登録を始める前に取り消す予定を確かめる（途中で失敗して元の予定だけ消える、を避ける）
-  const original = replaceTarget(input.replaceEventId, client?.id ?? null);
+  const original = replaceTarget(input.replaceEventId ?? holdToCancel?.rescheduleOf?.eventId ?? null, client?.id ?? null);
   const replacedInfo = original ? { id: original.id, title: original.title, startAt: original.startAt, endAt: original.endAt } : null;
   let caseId = input.caseId ?? original?.caseId ?? null;
   if (!caseId && client) {
@@ -324,13 +381,17 @@ export async function registerScheduleFromConversation(conversationId: number, i
       meet: provider === 'meet',
     });
     const web = zoom ?? (row.meetUrl ? { provider: 'meet' as const, url: row.meetUrl, password: '', id: null } : null);
-    // 新しい予定が入ってから、元の予定を取り消す（順番を逆にすると、登録に失敗したとき予定が消えたままになる）
+    // 新しい予定が入ってから、仮押さえと元の予定を取り消す（順番を逆にすると、登録に失敗したとき予定が消えたままになる）
+    if (holdToCancel) {
+      await cancelHoldSet(holdToCancel.sessionId);
+      logger.info({ conversationId, sessionId: holdToCancel.sessionId }, '候補に無い日時で確定したため、仮押さえを取り消しました');
+    }
     if (original) {
       const cancelled = await cancelRunningReschedules(original.id);
       await removeCalendarEvent(original.id);
       logger.info({ conversationId, from: original.startAt, to: row.startAt, cancelledHolds: cancelled }, '会話から日程変更しました（元の予定を取り消し）');
     }
-    return { mode: 'confirmed' as const, events: [row], web, webText: webMeetingText(web), replaced: replacedInfo };
+    return { mode: 'confirmed' as const, events: [row], web, webText: webMeetingText(web), replaced: replacedInfo, cancelledHolds: holdToCancel?.candidates.length ?? 0 };
   }
   const who = client ? familyName(client.name) : familyName(conv.counterpartName ?? '');
   const content = input.title.replace(new RegExp(`^${who.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`), '').replace(/\s*仮$/, '').trim() || input.title;
@@ -357,6 +418,7 @@ export async function registerScheduleFromConversation(conversationId: number, i
     web: input.web ?? false,
     // 候補のどれかを確定した時点で、元の予定を取り消す（それまでは元の予定も残す）
     rescheduleEventId: original?.id ?? null,
+    conversationId,
   });
   // 仮押さえの段階では会議 URL を作らない（どれか 1 つに確定したときに発行する）
   return { mode: 'holds' as const, sessionId: r.sessionId, events: r.events, web: null, webText: '', replaces: replacedInfo };

@@ -79,6 +79,8 @@ interface Conv {
   drafts: { id: number; generatedText: string; instruction: string | null; createdAt: string; status: string }[];
   suggestions: { id: number; name: string }[];
   scheduled: Scheduled[];
+  /** この相手と調整中の仮押さえの数 */
+  pendingHolds?: number;
   /** Chatwork のリアクション（ワンタップ返信）のボタン。Chatwork 以外では空 */
   reactions?: { label: string; text: string; emoji: string }[];
 }
@@ -657,8 +659,8 @@ export default function Conversation() {
             <button className="btn btn-sm" onClick={() => setShowSchedule(!showSchedule)}>
               📅 日程調整
             </button>
-            <button className="btn btn-sm" onClick={() => setShowExtract(!showExtract)} title="やり取りから日時を読み取ってカレンダーに登録します">
-              🗓 会話から予定を登録
+            <button className="btn btn-sm" onClick={() => setShowExtract(!showExtract)} title="やり取りから日時を読み取ってカレンダーに登録します。仮押さえ中の候補があれば、その候補で確定できます">
+              🗓 会話から予定を登録{(c.pendingHolds ?? 0) > 0 && <span className="badge badge-orange ml-1">仮押さえ {c.pendingHolds}</span>}
             </button>
             <button className="btn btn-sm" onClick={() => setShowStaffAsk(!showStaffAsk)} title="届いた連絡を引用して、Chatwork で担当事務局に確認します">
               💬 事務局に確認
@@ -1341,6 +1343,18 @@ interface Extracted {
   existingEvents?: { id: number; title: string; startAt: string; endAt: string; kind: string; location: string | null }[];
   /** やり取りから日程変更と読み取ったとき（eventId は変更前の予定。分からなければ null） */
   reschedule?: { eventId: number | null; quote: string } | null;
+  /** この相手について調整中の仮押さえ */
+  holds?: PendingHold[];
+  /** 読み取った日時と同じ仮押さえの候補 */
+  holdMatch?: { sessionId: number; eventId: number } | null;
+}
+
+interface PendingHold {
+  sessionId: number;
+  title: string;
+  fromThisConversation: boolean;
+  rescheduleOf: { eventId: number; title: string; startAt: string } | null;
+  candidates: { eventId: number; startAt: string; endAt: string }[];
 }
 
 interface Replaced {
@@ -1355,7 +1369,11 @@ const WEB_PROVIDER_LABEL: Record<'zoom' | 'meet' | 'none', string> = { zoom: 'Zo
 /** 会話のやり取りから日程を読み取り、確認してカレンダーに登録 */
 function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conversationId: number; cases: { id: number; title: string }[]; onText: (t: string) => void; onDone: () => void }) {
   const [res, setRes] = useState<Extracted | null>(null);
-  const [mode, setMode] = useState<'confirmed' | 'holds'>('confirmed');
+  // hold = 仮押さえの候補の 1 つで確定する
+  const [mode, setMode] = useState<'confirmed' | 'holds' | 'hold'>('confirmed');
+  const [pick, setPick] = useState<{ sessionId: number; eventId: number } | null>(null);
+  // 候補に無い日時で確定するとき、あわせて取り消す仮押さえ（'' は取り消さない）
+  const [cancelHoldId, setCancelHoldId] = useState('');
   const [title, setTitle] = useState('');
   const [kind, setKind] = useState<EventKind>('meeting');
   const [duration, setDuration] = useState(60);
@@ -1374,7 +1392,12 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
       setRes(r);
       setErr('');
       setDone('');
-      setMode(r.status === 'confirmed' || r.slots.length <= 1 ? 'confirmed' : 'holds');
+      const holds = r.holds ?? [];
+      // 読み取った日時が仮押さえの候補と同じなら、その候補で確定するのを既定にする
+      setMode(r.holdMatch ? 'hold' : r.status === 'confirmed' || r.slots.length <= 1 ? 'confirmed' : 'holds');
+      setPick(r.holdMatch ?? (holds[0]?.candidates[0] ? { sessionId: holds[0].sessionId, eventId: holds[0].candidates[0].eventId } : null));
+      // 候補に無い日時で決まったようなら、この会話の仮押さえは取り消す設定にしておく（画面で外せる）
+      setCancelHoldId(r.status === 'confirmed' && holds[0] ? String(holds[0].sessionId) : '');
       setTitle(r.title);
       setKind(r.kind);
       setDuration(r.durationMinutes);
@@ -1392,6 +1415,16 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
       if (!res) {
         setRes({ status: 'none', content: '打合せ', kind: 'meeting', web: false, durationMinutes: 60, location: null, slots: [], note: '', clientId: null, clientName: null, counterpartName: '', title: '', webProvider: 'none' });
         setSlots([{ start: todayLocalInput(10) }]);
+        // 読み取れなくても、仮押さえ中の候補からは選んで確定できるようにする
+        api
+          .get<PendingHold[]>(`/conversations/${conversationId}/schedule/holds`)
+          .then((holds) => {
+            if (!holds.length) return;
+            setRes((prev) => (prev ? { ...prev, holds } : prev));
+            setMode('hold');
+            setPick({ sessionId: holds[0]!.sessionId, eventId: holds[0]!.candidates[0]!.eventId });
+          })
+          .catch(() => undefined);
       }
     },
   });
@@ -1405,6 +1438,7 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
         location: location || null,
         web,
         replaceEventId: replaceId ? Number(replaceId) : null,
+        cancelHoldSessionId: mode === 'confirmed' && cancelHoldId ? Number(cancelHoldId) : null,
         slots: (mode === 'confirmed' ? slots.slice(0, 1) : slots)
           .filter((s) => s.start)
           .map((s) => {
@@ -1429,6 +1463,17 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
     },
     onError: (e) => setErr((e as Error).message),
   });
+  const confirmHold = useMutation({
+    mutationFn: () => api.post<{ webText: string; rescheduled: { title: string; startAt: string } | null }>(`/conversations/${conversationId}/schedule/confirm-hold`, pick),
+    onSuccess: (r) => {
+      setWebText(r.webText ?? '');
+      setDone(`仮押さえの候補で確定しました。ほかの候補の仮押さえは削除しました${r.rescheduled ? `。元の予定 ${fmtDateTime(r.rescheduled.startAt)}「${r.rescheduled.title}」は取り消しました` : ''}`);
+      setErr('');
+      onDone();
+    },
+    onError: (e) => setErr((e as Error).message),
+  });
+  const holds = res?.holds ?? [];
   useEffect(() => {
     if (!res && !extract.isPending) extract.mutate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1463,17 +1508,84 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
       {res && !done && (
         <div className="space-y-2">
           <div className="rounded bg-slate-50 p-2 text-xs text-slate-600">
-            {res.status === 'none' ? '日程に関するやり取りは見つかりませんでした。下で手入力もできます。' : res.status === 'confirmed' ? '日時は確定しているようです。' : '候補が挙がっていますが未確定のようです。仮押さえとして登録できます。'} {res.note}
+            {res.holdMatch ? '仮押さえ中の候補のうち、やり取りで決まった日時が見つかりました。そのまま確定できます。' : res.status === 'none' ? '日程に関するやり取りは見つかりませんでした。下で手入力もできます。' : res.status === 'confirmed' && holds.length > 0 ? '日時は確定しているようですが、仮押さえ中の候補とは一致しません。候補を選んで確定するか、候補に無い日時として登録してください。' : res.status === 'confirmed' ? '日時は確定しているようです。' : '候補が挙がっていますが未確定のようです。仮押さえとして登録できます。'} {res.note}
           </div>
           <div className="flex flex-wrap items-center gap-3">
+            {holds.length > 0 && (
+              <label className="flex items-center gap-1">
+                <input type="radio" checked={mode === 'hold'} onChange={() => setMode('hold')} /> 仮押さえの候補で確定
+              </label>
+            )}
             <label className="flex items-center gap-1">
-              <input type="radio" checked={mode === 'confirmed'} onChange={() => setMode('confirmed')} /> 確定として登録（1 件）
+              <input type="radio" checked={mode === 'confirmed'} onChange={() => setMode('confirmed')} /> {holds.length > 0 ? '候補に無い日時で確定（1 件）' : '確定として登録（1 件）'}
             </label>
             <label className="flex items-center gap-1">
               <input type="radio" checked={mode === 'holds'} onChange={() => setMode('holds')} /> 候補を仮押さえ（{slots.filter((s) => s.start).length} 件）
             </label>
           </div>
+          {mode === 'hold' && (
+            <div className="space-y-2">
+              {holds.map((h) => (
+                <div key={h.sessionId} className="rounded border border-slate-200 p-2">
+                  <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                    <span className="badge badge-gray">仮押さえ</span>
+                    <span className="font-medium text-slate-800">{h.title}</span>
+                    <span>候補 {h.candidates.length} 件</span>
+                    {!h.fromThisConversation && <span className="text-slate-500">（事件・予定の画面から入れたもの）</span>}
+                  </div>
+                  {h.rescheduleOf && (
+                    <div className="mb-1 text-xs text-amber-800">
+                      日程変更の調整です。確定すると、元の予定 {fmtDateTime(h.rescheduleOf.startAt)}「{h.rescheduleOf.title}」は取り消されます。
+                    </div>
+                  )}
+                  <div className="space-y-0.5">
+                    {h.candidates.map((c) => {
+                      const matched = res.holdMatch?.eventId === c.eventId;
+                      return (
+                        <label key={c.eventId} className="flex flex-wrap items-center gap-2">
+                          <input type="radio" name="hold-pick" checked={pick?.eventId === c.eventId} onChange={() => setPick({ sessionId: h.sessionId, eventId: c.eventId })} />
+                          <span>{fmtDateTime(c.startAt)}〜{fmtDateTime(c.endAt).split(' ').pop()}</span>
+                          {matched && <span className="badge badge-blue">やり取りで決まった日時</span>}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  className="btn btn-primary shrink-0 whitespace-nowrap"
+                  disabled={!pick || confirmHold.isPending}
+                  onClick={() => {
+                    const h = holds.find((x) => x.sessionId === pick?.sessionId);
+                    const c = h?.candidates.find((x) => x.eventId === pick?.eventId);
+                    if (!h || !c) return;
+                    if (window.confirm(`${fmtDateTime(c.startAt)} で確定しますか？\nほかの候補（${h.candidates.length - 1} 件）の仮押さえは削除されます。`)) confirmHold.mutate();
+                  }}
+                >
+                  {confirmHold.isPending ? '確定中…' : 'この候補で確定'}
+                </button>
+                <span className="text-xs text-slate-500">「仮」が外れて確定の予定になります。WEB 会議の仮押さえなら、ここで会議 URL を発行します。</span>
+              </div>
+            </div>
+          )}
+          {mode !== 'hold' && (
+          <>
           <div className="grid gap-2 md:grid-cols-2">
+            {mode === 'confirmed' && holds.length > 0 && (
+              <div className={`md:col-span-2 rounded border p-2 ${cancelHoldId ? 'border-amber-300 bg-amber-50' : 'border-slate-200'}`}>
+                <label className="label">あわせて取り消す仮押さえ</label>
+                <select className="input w-auto max-w-full" value={cancelHoldId} onChange={(e) => setCancelHoldId(e.target.value)} aria-label="あわせて取り消す仮押さえ">
+                  <option value="">取り消さない</option>
+                  {holds.map((h) => (
+                    <option key={h.sessionId} value={h.sessionId}>
+                      {h.title}（候補 {h.candidates.length} 件: {h.candidates.map((c) => fmtDateTime(c.startAt)).join('、')}）
+                    </option>
+                  ))}
+                </select>
+                {cancelHoldId && <div className="mt-1 text-xs text-slate-600">下の日時で登録したあと、この仮押さえの候補をすべて取り消します。</div>}
+              </div>
+            )}
             <div className="md:col-span-2">
               <label className="label">件名{mode === 'holds' && '（末尾に「仮」が付きます）'}</label>
               <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
@@ -1589,6 +1701,8 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
             </button>
             <span className="text-xs text-slate-500">内容を確認してから押してください。Google 接続時は Google カレンダーにも登録されます。</span>
           </div>
+          </>
+          )}
         </div>
       )}
     </div>

@@ -589,6 +589,58 @@ describe('会話からの予定登録', () => {
   });
 });
 
+describe('会話から仮押さえを確定', () => {
+  it('会話から入れた仮押さえ・同じ依頼者の仮押さえを会話の画面で確定でき、候補に無い日時なら仮押さえを取り消して登録する', async () => {
+    const { registerScheduleFromConversation, confirmHoldFromConversation, matchHold } = await import('../services/scheduleExtract.js');
+    const { createHoldSet, pendingHoldsFor } = await import('../services/court.js');
+    const client = db().insert(schema.clients).values({ name: '確定 一郎', kana: 'かくてい いちろう' }).returning().get();
+    const other = db().insert(schema.clients).values({ name: '別人 次郎', kana: 'べつじん じろう' }).returning().get();
+    const now = new Date().toISOString();
+    const conv = db().insert(schema.conversations).values({ channel: 'gmail', externalThreadId: 'hold-confirm-1', clientId: client.id, counterpartName: '確定 一郎', lastMessageAt: now, lastInboundAt: now }).returning().get();
+    const base = Math.floor(Date.now() / 60_000) * 60_000;
+    const slot = (d: number, h: number) => ({ startAt: new Date(base + d * 86400_000 + h * 3600_000).toISOString(), endAt: new Date(base + d * 86400_000 + (h + 1) * 3600_000).toISOString() });
+
+    const r = await registerScheduleFromConversation(conv.id, { mode: 'holds', title: '確定 打合せ', kind: 'meeting', slots: [slot(2, 1), slot(3, 1)] });
+    if (r.mode !== 'holds') throw new Error('仮押さえになっていない');
+    expect(db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, r.sessionId)).get()!.conversationId).toBe(conv.id);
+    // 事件ページなど別の経路から入れた同じ依頼者の仮押さえも出る。別の依頼者のものは出ない
+    const viaCase = await createHoldSet({ title: '面談', kind: 'consult', clientId: client.id, slots: [slot(5, 1)] });
+    const foreign = await createHoldSet({ title: '面談', kind: 'consult', clientId: other.id, slots: [slot(6, 1)] });
+    const holds = pendingHoldsFor({ conversationId: conv.id, clientId: client.id });
+    expect(holds.map((h) => h.sessionId)).toEqual([r.sessionId, viaCase.sessionId]);
+    expect(holds[0].fromThisConversation).toBe(true);
+    expect(holds[0].title).toBe('確定 打合せ');
+
+    // 読み取った日時が候補と同じなら、その候補を当てる
+    expect(matchHold(holds, slot(3, 1).startAt)).toEqual({ sessionId: r.sessionId, eventId: r.events[1].id });
+    expect(matchHold(holds, slot(4, 1).startAt)).toBeNull();
+
+    // 別の依頼者の仮押さえは、この会話から確定できない
+    await expect(confirmHoldFromConversation(conv.id, foreign.sessionId, foreign.events[0].id)).rejects.toThrow('調整中の仮押さえではありません');
+    await expect(confirmHoldFromConversation(conv.id, r.sessionId, viaCase.events[0].id)).rejects.toThrow('候補ではありません');
+
+    const c = await confirmHoldFromConversation(conv.id, r.sessionId, r.events[1].id);
+    expect(c.event!.title).toBe('確定 打合せ');
+    expect(c.event!.status).toBe('confirmed');
+    expect(db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, r.events[0].id)).get()).toBeUndefined();
+    expect(pendingHoldsFor({ conversationId: conv.id, clientId: client.id }).map((h) => h.sessionId)).toEqual([viaCase.sessionId]);
+
+    // 候補に無い日時で決まった: 新しく登録し、仮押さえは取り消す
+    const r3 = await registerScheduleFromConversation(conv.id, { mode: 'confirmed', title: '確定 面談', kind: 'consult', slots: [slot(7, 2)], cancelHoldSessionId: viaCase.sessionId });
+    if (r3.mode !== 'confirmed') throw new Error('確定になっていない');
+    expect(r3.cancelledHolds).toBe(1);
+    expect(db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, viaCase.sessionId)).get()!.state).toBe('cancelled');
+    expect(db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, viaCase.events[0].id)).get()).toBeUndefined();
+    // 別の依頼者の仮押さえは取り消させない
+    await expect(registerScheduleFromConversation(conv.id, { mode: 'confirmed', title: '確定 面談', kind: 'consult', slots: [slot(8, 2)], cancelHoldSessionId: foreign.sessionId })).rejects.toThrow('調整中の仮押さえではありません');
+
+    db().delete(schema.calendarEvents).where(inArray(schema.calendarEvents.id, [r.events[1].id, r3.events[0].id, foreign.events[0].id])).run();
+    db().delete(schema.schedulingSessions).where(inArray(schema.schedulingSessions.id, [r.sessionId, viaCase.sessionId, foreign.sessionId])).run();
+    db().delete(schema.conversations).where(eq(schema.conversations.id, conv.id)).run();
+    db().delete(schema.clients).where(inArray(schema.clients.id, [client.id, other.id])).run();
+  });
+});
+
 describe('電話記録', () => {
   it('電話番号と相手・こちらの発言を保存できる', async () => {
     const { addCaseNote } = await import('../services/cases.js');

@@ -4,7 +4,7 @@ import { proposeSlotsSchema, confirmSlotSchema, nextHearingInputSchema, EVENT_KI
 import { proposeSlots, confirmSlot, cancelSession, listSessions, findFreeSlots, extractChosenSlot } from '../services/scheduling.js';
 import { syncCalendar, checkPostEvents, resolveNextHearing, listCourtDocs, listClientFolder, upcomingEvents, relinkEvent, listCalendarEvents, createCalendarEvent, editCalendarEvent, removeCalendarEvent, createHoldSet, confirmHold, cancelHoldSet, cancelHoldCandidate, addHoldCandidates, startReschedule, setHoldSetLocation } from '../services/court.js';
 import { createZoomMeeting } from '../integrations/zoom.js';
-import { extractScheduleFromConversation, registerScheduleFromConversation, extractSchedulePreferences } from '../services/scheduleExtract.js';
+import { extractScheduleFromConversation, registerScheduleFromConversation, extractSchedulePreferences, confirmHoldFromConversation, conversationHolds } from '../services/scheduleExtract.js';
 import { holdProposalContext, draftHoldProposal, sendHoldProposal } from '../services/holdProposal.js';
 import { db, schema } from '../db/index.js';
 import { eq } from 'drizzle-orm';
@@ -63,6 +63,15 @@ schedulingRoutes.get('/scheduling', (c) => {
 /** 会話のやり取りから日程を読み取る（AI） */
 schedulingRoutes.post('/conversations/:id/schedule/extract', async (c) => c.json(await extractScheduleFromConversation(Number(c.req.param('id')))));
 
+/** この会話の相手と調整中の仮押さえ（AI の読み取りが使えないときも確定できるように単独で返す） */
+schedulingRoutes.get('/conversations/:id/schedule/holds', (c) => c.json(conversationHolds(Number(c.req.param('id')))));
+
+/** 会話の画面から、仮押さえの候補の 1 つで確定する */
+schedulingRoutes.post('/conversations/:id/schedule/confirm-hold', async (c) => {
+  const body = z.object({ sessionId: z.number().int(), eventId: z.number().int() }).parse(await c.req.json());
+  return c.json(await confirmHoldFromConversation(Number(c.req.param('id')), body.sessionId, body.eventId));
+});
+
 /** 読み取った（修正済みの）日程をカレンダーに登録 */
 schedulingRoutes.post('/conversations/:id/schedule/register', async (c) => {
   const body = z
@@ -77,6 +86,8 @@ schedulingRoutes.post('/conversations/:id/schedule/register', async (c) => {
       web: z.boolean().optional(),
       // 日程変更のとき、取り消す元の予定
       replaceEventId: z.number().int().nullable().optional(),
+      // 候補に無い日時で決まったとき、あわせて取り消す仮押さえ
+      cancelHoldSessionId: z.number().int().nullable().optional(),
     })
     .parse(await c.req.json());
   return c.json(await registerScheduleFromConversation(Number(c.req.param('id')), body));
