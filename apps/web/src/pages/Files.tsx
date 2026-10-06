@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import { ClientPicker, sortClients } from '../lib/ClientPicker';
 import { channelBadge, channelLabel, fmtDateTime, fmtBytes } from '../lib/format';
 import { messageLink } from '@lcm/shared';
+import { mergedLabel, isMergeableImage, type MergeRef } from '../lib/mergedAttachment';
 
 interface Att {
   id: number;
@@ -12,6 +13,8 @@ interface Att {
   size: number | null;
   status: string;
   storedPath: string | null;
+  mime?: string | null;
+  channelRef?: MergeRef;
   error: string | null;
   clientId: number | null;
   createdAt: string;
@@ -66,6 +69,18 @@ export default function Files() {
     },
     onError: (e) => setMsg((e as Error).message),
   });
+  // 選んだものがすべて画像（JPEG・PNG）なら、1 つの PDF にまとめて保存できる
+  const selectedAtts = [...selected].map((id) => list.data?.find((a) => a.id === id)).filter((a): a is Att => !!a);
+  const canMerge = selectedAtts.length >= 2 && selectedAtts.every((a) => isMergeableImage(a) && a.status !== 'unassigned');
+  const merge = useMutation({
+    mutationFn: (name: string) => api.post<{ filename: string; pages: number; path: string }>('/attachments/merge', { ids: [...selected], name: name || null, clientId: bulkClient ? Number(bulkClient) : null }),
+    onSuccess: (r) => {
+      setSelected(new Set());
+      setMsg(`画像 ${r.pages} 枚を 1 つの PDF（${r.filename}）にまとめて保存しました`);
+      refresh();
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
   const selectedHeldWithClient = [...selected].filter((id) => list.data?.find((a) => a.id === id)?.clientId).length;
   return (
     <div className="space-y-4">
@@ -108,6 +123,19 @@ export default function Files() {
               {selectedHeldWithClient > 0 && (
                 <button className="btn btn-sm btn-primary" disabled={bulk.isPending} onClick={() => bulk.mutate({ action: 'save' })} title="会話の依頼者が分かっているものを、その依頼者の受領資料フォルダへ保存">
                   それぞれの依頼者のフォルダに保存{selectedHeldWithClient < selected.size ? `（${selectedHeldWithClient} 件）` : ''}
+                </button>
+              )}
+              {canMerge && (
+                <button
+                  className="btn btn-sm"
+                  disabled={merge.isPending}
+                  title="選んだ画像を届いた順に 1 つの PDF にして、依頼者のフォルダ（右で依頼者を選べばその依頼者）に保存します"
+                  onClick={() => {
+                    const name = window.prompt(`画像 ${selectedAtts.length} 枚を 1 つの PDF にまとめて保存します。\nファイル名（例: 預金通帳、LINEトーク履歴）を入れてください。空欄なら中身から自動で付けます。`, '');
+                    if (name !== null) merge.mutate(name.trim());
+                  }}
+                >
+                  {merge.isPending ? 'まとめています…' : '1 つの PDF にまとめて保存'}
                 </button>
               )}
               <span className="flex items-center gap-1">
@@ -164,7 +192,10 @@ export default function Files() {
                   </Link>
                 </td>
                 <td className="px-3 py-2">
-                  <span className={`badge ${STATUS_BADGE[a.status] ?? 'badge-gray'}`}>{STATUS_LABEL[a.status] ?? a.status}</span>
+                  <span className={`badge ${STATUS_BADGE[a.status] ?? 'badge-gray'}`} title={a.channelRef?.mergeWait ? '続けて届いた画像をまとめて PDF にするか、届き終わってから確認しています（1〜2 分）' : undefined}>
+                    {a.status === 'pending' && a.channelRef?.mergeWait ? 'まとめ確認中' : (STATUS_LABEL[a.status] ?? a.status)}
+                  </span>
+                  {mergedLabel(a.channelRef) && <div className="text-xs text-slate-500">{mergedLabel(a.channelRef)}</div>}
                   {a.clientId && a.status !== 'stored' && <div className="text-xs text-slate-500">依頼者: {clientName(a.clientId) ?? a.clientId}</div>}
                   {a.error && <div className="line-clamp-2 text-xs text-red-600">{a.error}</div>}
                 </td>

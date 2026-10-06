@@ -62,7 +62,7 @@ function stagedFileOf(att: { id: number; channelRef: Record<string, unknown> }):
   return fs.existsSync(p) ? p : null;
 }
 
-function removeStaged(att: { id: number; channelRef: Record<string, unknown> }) {
+export function removeStaged(att: { id: number; channelRef: Record<string, unknown> }) {
   const p = stagedFileOf(att);
   if (!p) return;
   try {
@@ -76,7 +76,7 @@ function removeStaged(att: { id: number; channelRef: Record<string, unknown> }) 
 }
 
 /** チャネルから取得して DATA_DIR/attachments に控えを置く。既にあればそのまま */
-async function stageAttachment(att: { id: number; channelRef: Record<string, unknown>; filename: string }, channel: Channel): Promise<void> {
+export async function stageAttachment(att: { id: number; channelRef: Record<string, unknown>; filename: string }, channel: Channel): Promise<void> {
   if (stagedFileOf(att)) return;
   const data = await adapterFor(channel).fetchAttachment({ ref: att.channelRef });
   fs.mkdirSync(stageDir(), { recursive: true });
@@ -90,7 +90,7 @@ async function stageAttachment(att: { id: number; channelRef: Record<string, unk
 }
 
 /** 添付の中身を取得（控えがあれば控えから、なければチャネルから） */
-async function attachmentBytes(att: { id: number; channelRef: Record<string, unknown> }, channel: Channel): Promise<Buffer> {
+export async function attachmentBytes(att: { id: number; channelRef: Record<string, unknown> }, channel: Channel): Promise<Buffer> {
   const staged = stagedFileOf(att);
   if (staged) return fs.readFileSync(staged);
   return adapterFor(channel).fetchAttachment({ ref: att.channelRef });
@@ -223,11 +223,17 @@ export async function requeueStuckAttachments(olderThanMinutes = 10): Promise<nu
       ),
     )
     .all();
-  for (const r of rows) {
+  // PDF にまとめるために待たせている画像は、まとめる処理に任せる（30 分たっても残っていれば個別に保存する）
+  const mergeStale = new Date(Date.now() - 30 * 60_000).toISOString();
+  const targets = rows.filter((r) => {
+    const a = db().select().from(schema.attachments).where(eq(schema.attachments.id, r.id)).get();
+    return !(a && (a.channelRef as { mergeWait?: boolean }).mergeWait && a.createdAt > mergeStale);
+  });
+  for (const r of targets) {
     await processAttachment(r.id).catch((err) => logger.warn({ err, attachmentId: r.id }, '取得中の添付の再処理に失敗'));
   }
-  if (rows.length) logger.info({ count: rows.length }, '取得中のまま止まっていた添付を処理し直しました');
-  return rows.length;
+  if (targets.length) logger.info({ count: targets.length }, '取得中のまま止まっていた添付を処理し直しました');
+  return targets.length;
 }
 
 /** 受信ファイルの件数（状態別・チャネル別）。一覧の絞り込みに件数を出して、どこに入ったか分かるようにする */
@@ -259,10 +265,19 @@ export async function assignAttachment(attachmentId: number, clientId: number): 
   const target = joinPath(clientFolder(client), getSetting('attachment_subfolder'));
   if (att.status === 'unassigned' && att.storedPath) {
     const moved = await storage().move({ itemId: att.driveItemId, path: att.storedPath }, target);
+    // PDF にまとめた画像は 1 つのファイルを共有しているので、同じ PDF の画像をまとめて付け替える
+    const merged = !!(att.channelRef as { mergedInto?: unknown }).mergedInto;
+    const siblings = merged
+      ? d.select({ id: schema.attachments.id }).from(schema.attachments).where(and(eq(schema.attachments.status, 'unassigned'), eq(schema.attachments.storedPath, att.storedPath))).all().map((r) => r.id)
+      : [attachmentId];
     d.update(schema.attachments)
       .set({ status: 'stored', storedPath: moved.path, driveItemId: moved.itemId ?? att.driveItemId, clientId })
-      .where(eq(schema.attachments.id, attachmentId))
+      .where(inArray(schema.attachments.id, siblings.length ? siblings : [attachmentId]))
       .run();
+    for (const id of siblings) resolveAlertsByKeyPrefix(`unassigned_file:${id}`);
+  } else if (att.status === 'pending' && (att.channelRef as { mergeWait?: boolean }).mergeWait) {
+    // PDF にまとめるか確認待ちの画像は、依頼者だけ付けて、まとめる処理に任せる
+    d.update(schema.attachments).set({ clientId }).where(eq(schema.attachments.id, attachmentId)).run();
   } else if (att.status === 'failed' || att.status === 'pending' || att.status === 'held') {
     d.update(schema.attachments).set({ clientId }).where(eq(schema.attachments.id, attachmentId)).run();
     await processAttachment(attachmentId, { force: true });
@@ -290,7 +305,16 @@ export async function ignoreAttachment(attachmentId: number): Promise<void> {
   const d = db();
   const att = d.select().from(schema.attachments).where(eq(schema.attachments.id, attachmentId)).get();
   if (!att) throw new Error('添付が見つかりません');
-  if (att.status === 'unassigned' && att.storedPath) {
+  // PDF にまとめた画像は、ほかの画像がまだ同じ PDF を使っていればファイルは消さない
+  const shared =
+    !!att.storedPath &&
+    d
+      .select({ id: schema.attachments.id })
+      .from(schema.attachments)
+      .where(and(eq(schema.attachments.storedPath, att.storedPath), inArray(schema.attachments.status, ['stored', 'unassigned'])))
+      .all()
+      .some((r) => r.id !== attachmentId);
+  if (att.status === 'unassigned' && att.storedPath && !shared) {
     await storage()
       .remove({ itemId: att.driveItemId, path: att.storedPath })
       .catch((err) => logger.warn({ err, id: attachmentId }, '未振分ファイルの削除に失敗'));
@@ -306,8 +330,20 @@ export async function fetchAttachmentData(attachmentId: number): Promise<{ data:
   const d = db();
   const att = d.select().from(schema.attachments).where(eq(schema.attachments.id, attachmentId)).get();
   if (!att) throw new Error('添付が見つかりません');
-  if (att.storedPath) return { data: await storage().get({ itemId: att.driveItemId, path: att.storedPath }), filename: att.filename, mime: att.mime };
   const msg = d.select().from(schema.messages).where(eq(schema.messages.id, att.messageId)).get();
+  // PDF にまとめて保存した画像は、保存先が PDF なので元の画像をチャネルから取り直す。取れなければ PDF を返す
+  const merged = (att.channelRef as { mergedInto?: { name: string } }).mergedInto;
+  if (merged && att.storedPath) {
+    if (msg) {
+      try {
+        return { data: await attachmentBytes(att, msg.channel as Channel), filename: att.filename, mime: att.mime };
+      } catch (err) {
+        logger.debug({ err, attachmentId: att.id }, '元の画像が取れないため、まとめた PDF を返します');
+      }
+    }
+    return { data: await storage().get({ itemId: att.driveItemId, path: att.storedPath }), filename: merged.name, mime: 'application/pdf' };
+  }
+  if (att.storedPath) return { data: await storage().get({ itemId: att.driveItemId, path: att.storedPath }), filename: att.filename, mime: att.mime };
   if (!msg) throw new Error('メッセージが見つかりません');
   const data = await attachmentBytes(att, msg.channel as Channel);
   return { data, filename: att.filename, mime: att.mime };

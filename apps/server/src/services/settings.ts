@@ -28,6 +28,8 @@ http://www.noboriohji.com/access/`,
   /** 受信ファイルの扱い: auto | client_only | manual（services/attachments.ts 参照） */
   attachment_policy: 'client_only',
   attachment_smart_names: '1',
+  /** 続けて届いた画像（通帳の各ページ・トーク履歴のスクリーンショットなど）が 1 つの資料なら PDF にまとめて保存する */
+  attachment_merge: '1',
   court_docs_subfolder: '提出書面',
   draft_subfolder: '下書き',
   unassigned_folder: '_未振分',
