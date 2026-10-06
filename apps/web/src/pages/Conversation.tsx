@@ -12,8 +12,8 @@ import { channelBadge, channelLabel, fmtDateTime, fmtBytes, fromLocalInput, toLo
 import { Icon } from '../lib/icons';
 import { useSpotlight } from '../lib/spotlight';
 import { quickSendTimes } from '../lib/sendTimes';
-import { DeadlineEditor, TaskDeadlineSelect, WaitDeadlineSelect } from '../lib/Deadline';
-import { SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply, messageLink, type EventKind } from '@lcm/shared';
+import { TaskDeadlines, NewTaskDeadlines, WaitDeadlineSelect } from '../lib/Deadline';
+import { dateOnlyDeadline, SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply, messageLink, type EventKind } from '@lcm/shared';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 import { AttachmentImage, canPreviewImage } from '../lib/AttachmentImage';
 
@@ -1239,19 +1239,21 @@ function TaskMini({ conversationId, clientId }: { conversationId: number; client
   // 中身（タスク名・メモ）を直しているタスク
   const [editingId, setEditingId] = useState<number | null>(null);
   const [status, setStatus] = useState('waiting_client');
-  const [newDeadline, setNewDeadline] = useState<string | null>(null);
+  // 返信期限（返信待ちのとき。null は設定の営業日数）と締切（null はなし）
+  const [newFollowUp, setNewFollowUp] = useState<string | null>(null);
+  const [newDue, setNewDue] = useState<string | null>(null);
   const waiting = status !== 'open';
   const add = useMutation({
-    mutationFn: () => api.post('/tasks', { title, status, conversationId, clientId, followUpAt: waiting ? newDeadline : null, dueAt: waiting ? null : newDeadline }),
+    mutationFn: () => api.post('/tasks', { title, status, conversationId, clientId, followUpAt: waiting ? newFollowUp : null, dueAt: newDue }),
     onSuccess: () => {
       setTitle('');
-      setNewDeadline(null);
+      setNewFollowUp(null);
+      setNewDue(null);
       qc.invalidateQueries({ queryKey: ['tasks'] });
     },
   });
   const done = useMutation({ mutationFn: (id: number) => api.put(`/tasks/${id}`, { status: 'done' }), onSuccess: () => qc.invalidateQueries({ queryKey: ['tasks'] }) });
-  const setDeadline = useMutation({ mutationFn: (v: { id: number; followUpAt: string }) => api.put(`/tasks/${v.id}`, { followUpAt: v.followUpAt }), onSuccess: () => qc.invalidateQueries({ queryKey: ['tasks'] }) });
-  const setDue = useMutation({ mutationFn: (v: { id: number; dueAt: string }) => api.put(`/tasks/${v.id}`, { dueAt: v.dueAt }), onSuccess: () => qc.invalidateQueries({ queryKey: ['tasks'] }) });
+  const setDeadlines = useMutation({ mutationFn: (v: { id: number; patch: { dueAt?: string | null; followUpAt?: string | null } }) => api.put(`/tasks/${v.id}`, v.patch), onSuccess: () => qc.invalidateQueries({ queryKey: ['tasks'] }) });
   return (
     <div className="card">
       <h3 className="mb-2 text-sm font-semibold">この会話のタスク</h3>
@@ -1283,14 +1285,7 @@ function TaskMini({ conversationId, clientId }: { conversationId: number; client
               <span className="badge badge-gray">{SHORT_TASK_STATUS[t.status] ?? t.status}</span>
             </div>
             <div className="pl-5">
-              {t.status === 'open' ? (
-                <DeadlineEditor compact label="期日:" value={t.dueAt} onChange={(iso) => setDue.mutate({ id: t.id, dueAt: iso })} />
-              ) : (
-                <>
-                  <DeadlineEditor compact label="いつまで待つ:" value={t.followUpAt} onChange={(iso) => setDeadline.mutate({ id: t.id, followUpAt: iso })} />
-                  {t.dueAt && <DeadlineEditor compact label="期日:" value={t.dueAt} onChange={(iso) => setDue.mutate({ id: t.id, dueAt: iso })} />}
-                </>
-              )}
+              <TaskDeadlines task={t} onChange={(patch) => setDeadlines.mutate({ id: t.id, patch })} />
             </div>
           </li>
           ),
@@ -1305,7 +1300,7 @@ function TaskMini({ conversationId, clientId }: { conversationId: number; client
           <option value="waiting_other">相手方待ち</option>
           <option value="waiting_staff">事務局待ち</option>
         </select>
-        <TaskDeadlineSelect value={newDeadline} onChange={setNewDeadline} label={waiting ? '期限' : '期日'} defaultLabel={waiting ? '既定' : 'なし'} />
+        <NewTaskDeadlines waiting={waiting} followUp={newFollowUp} onFollowUp={setNewFollowUp} due={newDue} onDue={setNewDue} />
         <button className="btn btn-sm" onClick={() => add.mutate()} disabled={!title}>
           追加
         </button>
@@ -1787,7 +1782,7 @@ function MessageTools({ m, onChanged }: { m: Message; onChanged: () => void }) {
     onError: (e) => setErr((e as Error).message),
   });
   const task = useMutation({
-    mutationFn: () => api.post<{ id: number }>(`/messages/${m.id}/task`, { title, followUpAt: due ? fromLocalInput(`${due}T09:00`) : null, syncToChatwork: sync }),
+    mutationFn: () => api.post<{ id: number }>(`/messages/${m.id}/task`, { title, followUpAt: due ? dateOnlyDeadline(due) : null, syncToChatwork: sync }),
     onSuccess: () => {
       setMode(null);
       setErr('');
@@ -1853,7 +1848,7 @@ function MessageTools({ m, onChanged }: { m: Message; onChanged: () => void }) {
           <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="タスク名" />
           <div className="flex flex-wrap items-center gap-2">
             <label className="flex items-center gap-1">
-              期限 <input type="date" className="input w-auto py-0.5" value={due} onChange={(e) => setDue(e.target.value)} />
+              締切 <input type="date" className="input w-auto py-0.5" title="このタスクの締切（日付だけ）" value={due} onChange={(e) => setDue(e.target.value)} />
             </label>
             <label className="flex items-center gap-1">
               <input type="checkbox" checked={sync} onChange={(e) => setSync(e.target.checked)} /> 担当事務局の Chatwork タスクにも登録

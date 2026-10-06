@@ -1,6 +1,6 @@
 import { and, eq, desc, inArray, lt, isNotNull } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { addBusinessDays, formatJaDateTime, TASK_STATUS_LABEL, isWaitingStatus, WAITING_TASK_STATUSES, ACTIVE_TASK_STATUSES, type TaskInput, type TaskStatus } from '@lcm/shared';
+import { addBusinessDays, dateOnlyDeadline, jstYmd, formatJaDateTime, TASK_STATUS_LABEL, isWaitingStatus, WAITING_TASK_STATUSES, ACTIVE_TASK_STATUSES, type TaskInput, type TaskStatus } from '@lcm/shared';
 import { getSettingInt, holidaySet, getSyncState } from './settings.js';
 import { upsertAlert, resolveAlertsByKeyPrefix } from './alerts.js';
 import { isConfigured } from '../config.js';
@@ -11,8 +11,10 @@ import { z } from 'zod';
 
 export type TaskRow = typeof schema.tasks.$inferSelect;
 
+/** 返信期限の既定（設定の営業日数後）。時刻は決めず、その日の終わりまでとする */
 export function defaultFollowUp(from = new Date()): Date {
-  return addBusinessDays(from, getSettingInt('waiting_followup_business_days', 3), holidaySet());
+  const d = addBusinessDays(from, getSettingInt('waiting_followup_business_days', 3), holidaySet());
+  return new Date(dateOnlyDeadline(jstYmd(d)));
 }
 
 export async function createTask(input: TaskInput): Promise<TaskRow> {

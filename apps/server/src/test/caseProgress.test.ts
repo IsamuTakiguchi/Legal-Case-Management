@@ -47,7 +47,7 @@ describe('タイムラインに進捗を登録する', () => {
     expect(task?.status).toBe('waiting_client');
     expect(task?.caseId).toBe(kase.id);
     expect(task?.clientId).toBe(client.id);
-    expect(task?.followUpAt).toBe(new Date('2027-10-05T09:00:00+09:00').toISOString());
+    expect(task?.followUpAt).toBe(new Date('2027-10-05T23:59:59.999+09:00').toISOString());
   });
 
   it('相手方・裁判所・事務局の待ちは「相手方・裁判所待ち」のタスクになる', async () => {

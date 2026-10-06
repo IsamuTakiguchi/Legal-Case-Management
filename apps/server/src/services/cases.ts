@@ -2,7 +2,7 @@ import { and, eq, desc, gt, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/index.js';
 import { generateStructured, generateText } from '../integrations/anthropic.js';
-import { formatJaDateTime, WAITING_FOR, CASE_NOTE_KIND_LABEL, OPEN_CASE_STATUSES, CASE_CONTACT_ROLE_LABEL, taskStatusForWaiting, ACTIVE_TASK_STATUSES, parseJaDate, formatWareki, CASE_STATUSES, type CaseStatus, type CaseInput, type CaseNoteInput, type CaseNoteKind, type CaseContactRole, type TaskStatus } from '@lcm/shared';
+import { formatJaDateTime, formatJaDate, fixDueYear, dateOnlyDeadline, WAITING_FOR, CASE_NOTE_KIND_LABEL, OPEN_CASE_STATUSES, CASE_CONTACT_ROLE_LABEL, taskStatusForWaiting, ACTIVE_TASK_STATUSES, parseJaDate, formatWareki, CASE_STATUSES, type CaseStatus, type CaseInput, type CaseNoteInput, type CaseNoteKind, type CaseContactRole, type TaskStatus } from '@lcm/shared';
 import { createTask, chatworkReplyable } from './tasks.js';
 import { syncClientFolderWithStatus } from './clientFolders.js';
 import { logger } from '../logger.js';
@@ -251,11 +251,13 @@ const phoneMemoSchema = z.object({
 
 /** 走り書きのメモを要旨・決定事項・次のアクションに整理 */
 export async function structureNote(rawText: string, ctx: { caseTitle?: string; clientName?: string; kind: string; counterpart?: string | null; phone?: string | null }) {
-  const today = formatJaDateTime(new Date()).replace(/\d+時.*$/, '');
-  return generateStructured({
+  // 年まで渡す（「11/10」を去年と読まないように）
+  const today = formatJaDate(new Date());
+  const r = await generateStructured({
     purpose: '記録の整理（電話メモなど）',
     system: [
       '法律事務所の事務補助者として、弁護士の走り書きメモを整理します。事実の創作はせず、メモにある内容だけを使います。日付は今日を基準に解釈します。',
+      '年の書かれていない日付（「11/10」「11月10日」など）は、今日以降で最も近いその日付にします（今日より前の月日なら来年）。ただし、すでに過ぎた出来事の日付として書かれているものは今年のままにします。',
       '「相手が言ったこと」と「こちら（弁護士）が言ったこと」は必ず分けてください。「〜とのこと」「〜と言われた」「先方は〜」は相手の発言、「〜と伝えた」「〜と回答」「こちらからは〜」は自分の発言です。どちらか判然としない場合は文脈で判断し、決定事項と重複しても構いません。',
       '次のアクションは、弁護士がタスクとして追いかける単位で挙げます。細かく分けず、ひとまとまりの仕事は 1 件にします（例: 「依頼者に和解案を説明して意向を確認し、来週金曜までに相手方へ回答する」は 1 件）。多くても 3 件。決定事項の言い換えや、すでに終わったこと、「メモを残す」のような当然の作業は含めません。何も無ければ空にします。',
     ].join('\n'),
@@ -264,6 +266,8 @@ export async function structureNote(rawText: string, ctx: { caseTitle?: string; 
     effort: 'low',
     maxTokens: 2000,
   });
+  // それでも去年などになっていたら直す
+  return { ...r, nextActions: r.nextActions.map((a) => ({ ...a, due: fixDueYear(a.due) })) };
 }
 
 export interface AddNoteOptions {
@@ -321,7 +325,8 @@ export async function addCaseNote(input: CaseNoteInput, opts: AddNoteOptions = {
   const chosen = nextActions.map((a, i) => ({ a, i })).filter(({ i }) => !opts.taskIndexes || opts.taskIndexes.includes(i));
   if (opts.createTasks && chosen.length) {
     const status = taskStatusForWaiting(waitingFor);
-    const dueIso = (due?: string | null) => (due ? new Date(`${due}T09:00:00+09:00`).toISOString() : null);
+    // 記録の期限は日付だけ（時刻は決めない）
+    const dueIso = (due?: string | null) => (due ? dateOnlyDeadline(due) : null);
     const updated: typeof nextActions = nextActions.map((a) => ({ ...a }));
     if (opts.createTasks === 'single') {
       // 1 つのタスクにまとめる: 題名は先頭のアクション（複数なら「ほか n 件」）、メモに全アクションと要旨、期限は最も早いもの
@@ -378,7 +383,7 @@ export async function suggestNoteTasks(noteId: number): Promise<NoteTaskSuggesti
     .where(and(eq(schema.tasks.caseId, kase.id), inArray(schema.tasks.status, [...ACTIVE_TASK_STATUSES])))
     .all();
   const lines = [
-    `今日: ${formatJaDateTime(new Date()).replace(/\d+時.*$/, '')}`,
+    `今日: ${formatJaDate(new Date())}`,
     `事件: ${kase.title}（${kase.caseType}）`,
     `依頼者: ${client?.name ?? '不明'}`,
     `記録の種別: ${CASE_NOTE_KIND_LABEL[row.kind as CaseNoteKind] ?? row.kind}`,
@@ -400,13 +405,14 @@ export async function suggestNoteTasks(noteId: number): Promise<NoteTaskSuggesti
       'タスクは「弁護士や事務局が実際に手を動かす単位」で挙げます。細かい手順に分けず、ひとまとまりの仕事は 1 件にします。多くても 4 件。',
       'すでに終わったこと、決定事項の言い換え、「記録を残す」のような当然の作業、事件の未了タスクと同じ内容は挙げません。挙げるものが無ければ tasks は空にします。',
       '期限は記録から読み取れるときだけ入れます（「来週金曜まで」なども今日を基準に日付にします）。読み取れなければ null にします。',
+      '年の書かれていない期限（「11/10」など）は、今日以降で最も近いその日付にします（今日より前の月日なら来年）。',
       'タスク化済みと書かれている次のアクションは、もう一度挙げません。',
     ].join('\n'),
     user: lines.join('\n\n'),
     schema: noteTaskSuggestionSchema,
     effort: 'low',
     maxTokens: 2000,
-  });
+  }).then((r) => ({ ...r, tasks: r.tasks.map((t) => ({ ...t, due: fixDueYear(t.due) })) }));
 }
 
 /** 保存済みの記録からタスクを作るときの指定 */
@@ -435,9 +441,10 @@ function noteHeadline(row: typeof schema.caseNotes.$inferSelect): string {
 
 /** 期限は「2026-09-20」の形で持つが、古い記録には ISO が入っていることがある */
 const dueDate = (due?: string | null) => (due ? due.slice(0, 10) : null);
+/** 記録の期限は日付だけ（時刻は決めない）。その日の終わりまでを期限とする */
 const dueToIso = (due?: string | null) => {
   const d = dueDate(due);
-  return d ? new Date(`${d}T09:00:00+09:00`).toISOString() : null;
+  return d ? dateOnlyDeadline(d) : null;
 };
 
 /**

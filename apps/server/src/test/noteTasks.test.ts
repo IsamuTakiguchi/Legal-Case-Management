@@ -48,7 +48,7 @@ describe('記録をタスクにする', () => {
     // 記録の待ち（依頼者待ち）を引き継ぎ、期限はアクションの期限
     expect(tasks[0]!.status).toBe('waiting_client');
     expect(tasks[0]!.clientId).toBe(client.id);
-    expect(tasks.find((t) => t.title === '依頼者に和解案を伝える')!.followUpAt).toBe(new Date('2027-08-05T09:00:00+09:00').toISOString());
+    expect(tasks.find((t) => t.title === '依頼者に和解案を伝える')!.followUpAt).toBe(new Date('2027-08-05T23:59:59.999+09:00').toISOString());
     expect(r.note.nextActions.every((a) => a.taskId)).toBe(true);
 
     // 同じ記録をもう一度タスク化しても、二重に作らない
@@ -63,7 +63,7 @@ describe('記録をタスクにする', () => {
     expect(t.title).toBe('依頼者に和解案を伝える ほか 1 件');
     expect(t.status).toBe('open');
     // 対応中のタスクの期限は期日（dueAt）に入る（連絡待ちの期限とは別の欄）
-    expect(t.dueAt).toBe(new Date('2027-09-01T09:00:00+09:00').toISOString());
+    expect(t.dueAt).toBe(new Date('2027-09-01T23:59:59.999+09:00').toISOString());
     expect(t.followUpAt).toBeNull();
     // まとめたときは、どちらのアクションも同じタスクに紐付く
     expect(new Set(r.note.nextActions.map((a) => a.taskId))).toEqual(new Set([r.tasks[0]!.id]));
@@ -82,11 +82,11 @@ describe('記録をタスクにする', () => {
     expect(r.note.nextActions).toEqual([{ title: '打合せの結果を書面にまとめる', due: '2027-08-20', taskId: t.id }]);
   });
 
-  it('古い記録の ISO 形式の期限でも、その日の朝を期限にする', async () => {
+  it('古い記録の ISO 形式の期限でも、その日（日付だけ）を期限にする', async () => {
     const { note } = seedNote({ nextActions: [{ title: '査定書の受領確認', due: '2027-08-05T01:00:00.000Z', taskId: null }] });
     const r = await createTasksFromNote(note.id, { mode: 'each' });
     const t = db().select().from(schema.tasks).where(eq(schema.tasks.id, r.tasks[0]!.id)).get()!;
-    expect(t.followUpAt).toBe(new Date('2027-08-05T09:00:00+09:00').toISOString());
+    expect(t.followUpAt).toBe(new Date('2027-08-05T23:59:59.999+09:00').toISOString());
   });
 
   it('題名を省いたときは記録の要旨の 1 行目を使う', async () => {
