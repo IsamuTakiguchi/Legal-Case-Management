@@ -7,7 +7,7 @@ import { useDraftRecord, useDraftGroup, useDraft, DraftHint } from '../lib/draft
 import { RoomPicker } from '../lib/RoomPicker';
 import { HoldForm, HoldLocationEditor, HoldAddCandidates, fmtEventRange, type RescheduleTarget } from '../lib/HoldForm';
 import { LongText } from '../lib/LongText';
-import { TaskDeadlineSelect } from '../lib/Deadline';
+import { TaskDeadlines, NewTaskDeadlines, TaskDeadlineSelect, FOLLOW_LABEL } from '../lib/Deadline';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { fmtDateTime, fmtDate, fmtYen, fmtBytes, toLocalInput, fromLocalInput, channelLabel } from '../lib/format';
 import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, messageLink, ACTIVE_TASK_STATUSES, taskStatusForWaiting, formatWareki, parseJaDate, addYearsIso, taskDeadline, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
@@ -251,8 +251,6 @@ export default function CaseDetail() {
                 {c.tasks
                   .filter((t) => t.status !== 'done')
                   .map((t) => {
-                    const limit = taskDeadline(t);
-                    const over = limit ? new Date(limit).getTime() < Date.now() : false;
                     if (editingTask === t.id)
                       return (
                         <li key={t.id}>
@@ -275,12 +273,18 @@ export default function CaseDetail() {
                         </span>
                         <TaskEditButton onClick={() => setEditingTask(t.id)} />
                         <span className="badge badge-gray">{TASK_STATUS_LABEL[t.status as TaskStatus]}</span>
-                        {limit && (
-                          <span className={`whitespace-nowrap text-xs ${over ? 'font-semibold text-orange-600' : 'text-slate-500'}`}>
-                            {t.status === 'open' ? '期日' : '期限'} {fmtDate(limit)}
-                          </span>
-                        )}
-                        {t.status !== 'open' && t.dueAt && t.dueAt !== limit && <span className="whitespace-nowrap text-xs text-slate-500">期日 {fmtDate(t.dueAt)}</span>}
+                        {/* 締切（タスクそのもの）と、返信待ちなら返信期限。押すと変えられる */}
+                        <span className="flex flex-wrap items-center">
+                          <TaskDeadlines
+                            task={t}
+                            onChange={(patch) =>
+                              api.put(`/tasks/${t.id}`, patch).then(() => {
+                                qc.invalidateQueries({ queryKey: ['case', id] });
+                                qc.invalidateQueries({ queryKey: ['tasks'] });
+                              })
+                            }
+                          />
+                        </span>
                         <ChatworkTaskReply
                           task={t}
                           onDone={() => {
@@ -793,7 +797,9 @@ function AccidentDateField({ value, onChange }: { value: string; onChange: (v: s
 function CaseTaskForm({ caseId, hasStaff, onDone }: { caseId: number; hasStaff: boolean; onDone: () => void }) {
   const [title, setTitle] = useState('');
   const [status, setStatus] = useState<TaskStatus>('open');
-  const [deadline, setDeadline] = useState<string | null>(null);
+  // 返信期限（返信待ちのとき。null は設定の営業日数）と締切（null はなし）
+  const [followUp, setFollowUp] = useState<string | null>(null);
+  const [due, setDue] = useState<string | null>(null);
   const [sync, setSync] = useState(false);
   const [msg, setMsg] = useState('');
   // 書きかけのタスク名は、この事件ごとに自動保存する
@@ -810,14 +816,15 @@ function CaseTaskForm({ caseId, hasStaff, onDone }: { caseId: number; hasStaff: 
         note: note || null,
         status,
         caseId,
-        followUpAt: waiting ? deadline : null,
-        dueAt: waiting ? null : deadline,
+        followUpAt: waiting ? followUp : null,
+        dueAt: due,
         syncToChatwork: sync,
       });
     },
     onSuccess: () => {
       setTitle('');
-      setDeadline(null);
+      setFollowUp(null);
+      setDue(null);
       draft.clear();
       setMsg('タスクを追加しました');
       onDone();
@@ -859,7 +866,7 @@ function CaseTaskForm({ caseId, hasStaff, onDone }: { caseId: number; hasStaff: 
             </option>
           ))}
         </select>
-        <TaskDeadlineSelect value={deadline} onChange={setDeadline} label={waiting ? '期限' : '期日'} defaultLabel={waiting ? '既定（設定の営業日数）' : 'なし'} />
+        <NewTaskDeadlines waiting={waiting} followUp={followUp} onFollowUp={setFollowUp} due={due} onDue={setDue} />
         <label className="flex items-center gap-1 text-xs" title={hasStaff ? 'この事件の担当事務局に振ります' : '担当事務局が未設定のときは、自分のマイチャットに作ります'}>
           <input type="checkbox" checked={sync} onChange={(e) => setSync(e.target.checked)} /> Chatwork にも作成
         </label>
@@ -2326,8 +2333,8 @@ function ProgressForm({ caseId, onDone }: { caseId: number; onDone: () => void }
         </label>
         {waiting && (
           <>
-            <TaskDeadlineSelect value={deadline} onChange={setDeadline} label="期限" defaultLabel="既定（設定の営業日数）" />
-            <label className="flex items-center gap-1 text-xs" title="この事件の「回答待ち」タスクを作ります。期限を過ぎると催促の対象になります">
+            <TaskDeadlineSelect value={deadline} onChange={setDeadline} label={FOLLOW_LABEL} defaultLabel="既定（設定の営業日数）" />
+            <label className="flex items-center gap-1 text-xs" title="この事件の「回答待ち」タスクを作ります。返信期限を過ぎると催促の対象になります">
               <input type="checkbox" checked={makeTask} onChange={(e) => setMakeTask(e.target.checked)} /> 回答待ちのタスクも作る
             </label>
           </>

@@ -62,3 +62,44 @@ export function startOfJstDay(d: Date): Date {
   const p = toJstParts(d);
   return jstDate(p.year, p.month, p.day, 0, 0);
 }
+
+// ---- タスクの締切・返信期限（時刻を決めない「日付だけ」の期限） ----
+
+/**
+ * 日付だけの期限は、その日の終わり（JST 23:59:59.999）として持つ。
+ * 画面からは秒・ミリ秒まで入らないので、この時刻なら「時刻を決めていない」とみなす
+ */
+export function dateOnlyDeadline(ymd: string): string {
+  const [y, m, d] = ymd.slice(0, 10).split('-').map(Number) as [number, number, number];
+  return new Date(Date.UTC(y, m - 1, d, 23, 59, 59, 999) - JST_OFFSET_MINUTES * 60_000).toISOString();
+}
+
+/** 日付だけの期限か（時刻を決めていない） */
+export function isDateOnlyDeadline(iso: string | null | undefined): boolean {
+  if (!iso) return false;
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return false;
+  const j = new Date(t.getTime() + JST_OFFSET_MINUTES * 60_000);
+  return j.getUTCHours() === 23 && j.getUTCMinutes() === 59 && j.getUTCSeconds() === 59 && j.getUTCMilliseconds() === 999;
+}
+
+/** JST の YYYY-MM-DD */
+export function jstYmd(d: Date): string {
+  const p = toJstParts(d);
+  return `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
+}
+
+/**
+ * AI が読み取った期限（YYYY-MM-DD）の年を直す。
+ * 「11/10」のように年の無い日付を去年と読んでしまうことがあるので、
+ * 今日より 90 日以上前になっていれば、90 日以内に入るまで 1 年ずつ進める（直近の過去の期限はそのまま）
+ */
+export function fixDueYear(ymd: string | null | undefined, now = new Date()): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(ymd ?? '');
+  if (!m) return null;
+  let y = Number(m[1]);
+  const limit = jstYmd(new Date(now.getTime() - 90 * 86400_000));
+  const at = (yy: number) => `${yy}-${m[2]}-${m[3]}`;
+  while (at(y) < limit) y++;
+  return at(y);
+}

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from './api';
 import { toLocalInput, fromLocalInput, fmtDateTime } from './format';
+import { DeadlineInput, DUE_LABEL, FOLLOW_LABEL } from './Deadline';
 import { useDraft, DraftHint } from './draft';
 import { Icon } from './icons';
 import { useClients } from './ClientPicker';
@@ -396,18 +397,13 @@ function ActionCard({
                 </option>
               ))}
             </select>
-            <label className="text-xs text-slate-600">
-              {a.status === 'open' ? '期限' : '催促する日'}
-              <input
-                type="datetime-local"
-                className="input ml-1 w-auto"
-                value={toLocalInput(a.status === 'open' ? (a.dueAt ?? null) : (a.followUpAt ?? null))}
-                onChange={(e) => {
-                  const v = e.target.value ? fromLocalInput(e.target.value) : null;
-                  onChange((a.status === 'open' ? { dueAt: v } : { followUpAt: v }) as Partial<Action>);
-                }}
+            <span className="inline-flex flex-wrap items-center gap-1 text-xs text-slate-600">
+              {a.status === 'open' ? DUE_LABEL : FOLLOW_LABEL}
+              <DeadlineInput
+                value={a.status === 'open' ? (a.dueAt ?? null) : (a.followUpAt ?? null)}
+                onChange={(v) => onChange((a.status === 'open' ? { dueAt: v } : { followUpAt: v }) as Partial<Action>)}
               />
-            </label>
+            </span>
           </div>
           <LinkRow a={a} onChange={onChange} clients={clients} cases={cases} />
         </div>

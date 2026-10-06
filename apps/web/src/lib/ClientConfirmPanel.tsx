@@ -5,7 +5,7 @@ import { api } from './api';
 import { useDraft, DraftHint } from './draft';
 import { ClientPicker } from './ClientPicker';
 import { fmtDateTime } from './format';
-import { messageLink } from '@lcm/shared';
+import { messageLink, dateOnlyDeadline } from '@lcm/shared';
 import { ClientContactSetup } from './ClientContactSetup';
 
 type ConfirmChannel = 'gmail' | 'line';
@@ -113,7 +113,7 @@ export function ClientConfirmPanel({ messageId, onClose, onSent }: { messageId: 
         text,
         subject: newGmail ? subject || null : null,
         createWaitingTask: waiting,
-        followUpAt: waiting && followUp ? new Date(`${followUp}T18:00:00+09:00`).toISOString() : null,
+        followUpAt: waiting && followUp ? dateOnlyDeadline(followUp) : null,
         notifyStaff,
         staffReplyText: notifyStaff ? staffText : null,
       }),
@@ -246,7 +246,7 @@ export function ClientConfirmPanel({ messageId, onClose, onSent }: { messageId: 
                   <input type="checkbox" checked={waiting} onChange={(e) => setWaiting(e.target.checked)} disabled={done} /> 回答待ちのタスクを作る
                   {waiting && (
                     <>
-                      <span className="ml-2 text-slate-500">期限</span>
+                      <span className="ml-2 text-slate-500" title="依頼者の返事を待つ期限（日付だけ）。過ぎたらお知らせします">返信期限</span>
                       <input type="date" className="input w-auto py-0.5" value={followUp} onChange={(e) => setFollowUp(e.target.value)} disabled={done} />
                     </>
                   )}

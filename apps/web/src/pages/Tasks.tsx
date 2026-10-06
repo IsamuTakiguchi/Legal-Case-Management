@@ -6,7 +6,7 @@ import { LongText } from '../lib/LongText';
 import { useDraft, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
 import { fmtDate, fmtRelative } from '../lib/format';
-import { DeadlineEditor, TaskDeadlineSelect } from '../lib/Deadline';
+import { TaskDeadlines, NewTaskDeadlines } from '../lib/Deadline';
 import { TASK_STATUSES, TASK_STATUS_LABEL, taskDeadline, isWaitingStatus, type TaskStatus } from '@lcm/shared';
 import { useSort, readingKey, type SortOption } from '../lib/sort';
 import { Icon } from '../lib/icons';
@@ -33,7 +33,7 @@ interface Task {
   updatedAt: string;
 }
 
-/** 並べ替え。既定は「期限が早い順」（返信待ちはフォロー期限、対応中は期日。未設定は末尾） */
+/** 並べ替え。既定は「期限が早い順」（返信待ちは返信期限と締切の早いほう、対応中は締切。未設定は末尾） */
 const deadlineOf = (t: Task) => taskDeadline(t);
 const TASK_SORTS: SortOption<Task>[] = [
   { key: 'deadline', label: '期限が早い順', value: deadlineOf },
@@ -68,8 +68,9 @@ export default function Tasks() {
   const [status, setStatus] = useState<string>(() => new URLSearchParams(location.search).get('status') ?? 'active');
   const [title, setTitle] = useState('');
   const [newStatus, setNewStatus] = useState<TaskStatus>('open');
-  // 追加するときの期限。null は「対応中＝期日なし」「返信待ち＝設定の営業日数」
-  const [newDeadline, setNewDeadline] = useState<string | null>(null);
+  // 追加するときの期限。返信期限は null なら設定の営業日数、締切は null ならなし
+  const [newFollowUp, setNewFollowUp] = useState<string | null>(null);
+  const [newDue, setNewDue] = useState<string | null>(null);
   const [sync, setSync] = useState(false);
   const list = useQuery({ queryKey: ['tasks', status], queryFn: () => api.get<Task[]>(`/tasks?status=${status}`), refetchInterval: 60_000 });
   const sort = useSort('tasks', TASK_SORTS, 'deadline');
@@ -106,7 +107,7 @@ export default function Tasks() {
     el.style.height = 'auto';
     el.style.height = `${Math.max(72, Math.min(el.scrollHeight, 260))}px`;
   }, [title]);
-  // 返信待ちのタスクは「いつまで待つか」、対応中のタスクは「期日」として入れる
+  // 返信待ちのタスクは「返信期限」（いつまで待つか）と「締切」、対応中のタスクは「締切」
   const newWaiting = isWaitingStatus(newStatus);
   const create = useMutation({
     mutationFn: () => {
@@ -117,14 +118,15 @@ export default function Tasks() {
         status: newStatus,
         clientId: clientId ? Number(clientId) : null,
         caseId: caseId ? Number(caseId) : null,
-        followUpAt: newWaiting ? newDeadline : null,
-        dueAt: newWaiting ? null : newDeadline,
+        followUpAt: newWaiting ? newFollowUp : null,
+        dueAt: newDue,
         syncToChatwork: sync,
       });
     },
     onSuccess: () => {
       setTitle('');
-      setNewDeadline(null);
+      setNewFollowUp(null);
+      setNewDue(null);
       titleDraft.clear();
       refresh();
     },
@@ -209,12 +211,7 @@ export default function Tasks() {
             </option>
           ))}
         </select>
-        <TaskDeadlineSelect
-          value={newDeadline}
-          onChange={setNewDeadline}
-          label={newWaiting ? '期限' : '期日'}
-          defaultLabel={newWaiting ? '既定（設定の営業日数）' : 'なし'}
-        />
+        <NewTaskDeadlines waiting={newWaiting} followUp={newFollowUp} onFollowUp={setNewFollowUp} due={newDue} onDue={setNewDue} />
         <label className="flex items-center gap-1 text-sm">
           <input type="checkbox" checked={sync} onChange={(e) => setSync(e.target.checked)} /> Chatwork にも作成
         </label>
@@ -268,7 +265,7 @@ export default function Tasks() {
               <th className="px-3 py-2">状態</th>
               <th className="px-3 py-2">タスク</th>
               <th className="px-3 py-2">依頼者 / 事件</th>
-              <th className="px-3 py-2">待ち開始 / フォロー期限</th>
+              <th className="px-3 py-2" title="締切: タスクそのものの締切（例: 答弁書の提出期限） ／ 返信期限: 返事を待つ期限（例: 依頼者の返事）">締切・返信期限</th>
               <th className="px-3 py-2"></th>
             </tr>
           </thead>
@@ -321,10 +318,8 @@ export default function Tasks() {
                   </td>
                   <td className="w-px whitespace-nowrap px-3 py-2 text-xs text-slate-600">
                     {t.waitingSince && <div>{fmtRelative(t.waitingSince)}から待ち</div>}
-                    {isWaitingStatus(t.status) && <DeadlineEditor compact value={t.followUpAt} onChange={(iso) => update.mutate({ id: t.id, patch: { followUpAt: iso } })} />}
-                    {/* 期日は対応中でも連絡待ちでも同じ欄（連絡待ちにしても消えない） */}
-                    {t.status !== 'done' && (t.status === 'open' || t.dueAt) && <DeadlineEditor compact label="期日" value={t.dueAt} onChange={(iso) => update.mutate({ id: t.id, patch: { dueAt: iso } })} />}
-                    {t.status === 'done' && t.dueAt && <div>期日 {fmtDate(t.dueAt)}</div>}
+                    {/* 締切は対応中でも返信待ちでも同じ欄（返信待ちにしても消えない）。返信待ちは返信期限も */}
+                    <TaskDeadlines task={t} onChange={(patch) => update.mutate({ id: t.id, patch })} />
                   </td>
                   <td className="w-px whitespace-nowrap px-3 py-2 text-right">
                     <div className="flex justify-end gap-1">
