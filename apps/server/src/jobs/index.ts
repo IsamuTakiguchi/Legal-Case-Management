@@ -15,6 +15,7 @@ import { getSyncState, setSyncState } from '../services/settings.js';
 import { indexForms } from '../services/forms.js';
 import { casesNeedingSummary, generateCaseSummary } from '../services/cases.js';
 import { retryFailedAttachments, requeueStuckAttachments } from '../services/attachments.js';
+import { processMergeQueue } from '../services/attachmentMerge.js';
 import { isGoogleConnected } from '../integrations/google.js';
 import { getSettingInt } from '../services/settings.js';
 import { refreshLineTokenIfNeeded } from '../services/lineSetup.js';
@@ -108,6 +109,7 @@ export const JOBS: JobDef[] = [
     enabled: () => true,
     quiet: true,
   },
+  { name: 'attachmentMerge', label: '続けて届いた画像のまとめ（PDF・毎分）', cron: '* * * * *', run: () => processMergeQueue(), enabled: () => true, quiet: true },
   { name: 'retryAttachments', label: '添付の再取得（失敗・取得中のまま止まったもの）', cron: '40 * * * *', run: async () => ({ requeued: await requeueStuckAttachments(), retried: await retryFailedAttachments() }), enabled: () => true },
 ];
 

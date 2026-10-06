@@ -5,6 +5,7 @@ import { findClientByIdentity, raiseUnlinkedContact, cleanDisplayName } from './
 import { findPersonByIdentity } from './clientPersons.js';
 import { isLineGroupThread } from '../channels/line.js';
 import { processAttachment } from './attachments.js';
+import { shouldWaitForMerge, holdForMerge } from './attachmentMerge.js';
 import { logger } from '../logger.js';
 import { onInboundForTasks } from './tasks.js';
 import { staffByChatworkAccount, caseForChatworkRoom, guessClientFromText } from './staff.js';
@@ -211,7 +212,9 @@ export async function ingestMessage(
       .returning()
       .get();
     if (opts.processAttachments !== false) {
-      processAttachment(row.id).catch((err) => logger.error({ err, attachmentId: row.id }, '添付の保存に失敗'));
+      // 画像は続けて届くことが多いので、届き終わってから「1 つの資料か」を見て PDF にまとめる（毎分のジョブ）
+      if (shouldWaitForMerge(row, m.direction)) holdForMerge(row, m.channel).catch((err) => logger.error({ err, attachmentId: row.id }, '受信画像の待機に失敗'));
+      else processAttachment(row.id).catch((err) => logger.error({ err, attachmentId: row.id }, '添付の保存に失敗'));
     }
   }
 

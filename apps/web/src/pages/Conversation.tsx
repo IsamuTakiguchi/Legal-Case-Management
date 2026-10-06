@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
+import { mergedLabel, type MergeRef } from '../lib/mergedAttachment';
 import { api } from '../lib/api';
 import { useDraft, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
@@ -34,6 +35,7 @@ interface Attachment {
   size: number | null;
   status: string;
   storedPath: string | null;
+  channelRef?: MergeRef;
 }
 interface Message {
   id: number;
@@ -561,7 +563,7 @@ export default function Conversation() {
                           <span className="line-through">{a.filename}</span>
                         )}{' '}
                         <span className={m.direction === 'out' ? 'text-blue-100' : 'text-slate-500'}>
-                          {fmtBytes(a.size)} {a.status === 'unassigned' ? '（未振分）' : a.status === 'failed' ? '（取得失敗）' : a.status === 'pending' ? '（保存中）' : a.status === 'held' ? '（未保存）' : a.status === 'ignored' ? '（不要）' : '（保存済）'}
+                          {fmtBytes(a.size)} {mergedLabel(a.channelRef) ? `（${mergedLabel(a.channelRef)}として保存${a.status === 'unassigned' ? '・未振分' : ''}）` : a.status === 'unassigned' ? '（未振分）' : a.status === 'failed' ? '（取得失敗）' : a.status === 'pending' ? (a.channelRef?.mergeWait ? '（PDF にまとめるか確認中）' : '（保存中）') : a.status === 'held' ? '（未保存）' : a.status === 'ignored' ? '（不要）' : '（保存済）'}
                         </span>
                         {(a.status === 'held' || a.status === 'failed') && m.direction === 'in' && (
                           <span className="ml-1 inline-flex gap-1">

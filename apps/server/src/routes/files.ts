@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { streamSSE } from 'hono/streaming';
+import { mergeSelectedAttachments } from '../services/attachmentMerge.js';
 import { listAttachments, assignAttachment, processAttachment, retryFailedAttachments, saveAttachment, ignoreAttachment, fetchAttachmentData, bulkAttachments, attachmentSummary, requeueStuckAttachments } from '../services/attachments.js';
 import { indexForms, searchForms, updateForm, formStats, draftFromForms } from '../services/forms.js';
 import { formDraftRequestSchema } from '@lcm/shared';
@@ -33,6 +34,12 @@ fileRoutes.post('/attachments/:id/retry', async (c) => {
   db().update(schema.attachments).set({ status: 'pending' }).where(eq(schema.attachments.id, id)).run();
   await processAttachment(id);
   return c.json(db().select().from(schema.attachments).where(eq(schema.attachments.id, id)).get());
+});
+
+/** 選んだ画像を、この順番で 1 つの PDF にまとめて保存する（name 省略時は AI が中身から名前を付ける） */
+fileRoutes.post('/attachments/merge', async (c) => {
+  const body = z.object({ ids: z.array(z.number().int()).min(2).max(60), name: z.string().trim().max(60).nullable().optional(), clientId: z.number().int().nullable().optional() }).parse(await c.req.json());
+  return c.json(await mergeSelectedAttachments(body.ids, { name: body.name ?? null, clientId: body.clientId ?? null }));
 });
 
 /** 一括操作: ignore（不要）/ save（保存。clientId 省略時は会話の依頼者）/ retry（再取得） */

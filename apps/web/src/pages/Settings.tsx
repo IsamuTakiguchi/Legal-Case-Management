@@ -118,6 +118,15 @@ const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean; 
     ],
   },
   {
+    key: 'attachment_merge',
+    label: '続けて届いた画像のまとめ',
+    hint: 'LINE などで画像が続けて届いたとき、届き終わって 1〜2 分してから AI が中身を見て、通帳の各ページやトーク履歴のスクリーンショットのような「ひと続きの資料」だけを、読む順に並べた 1 つの PDF にして保存します。別々の写真や書類はまとめず 1 枚ずつ保存します（AI 設定が必要。JPEG・PNG が対象）。受信ファイル画面で選んだ画像を手でまとめることもできます',
+    options: [
+      { value: '1', label: 'ひと続きの資料は 1 つの PDF にまとめて保存' },
+      { value: '0', label: 'まとめずに 1 枚ずつ保存' },
+    ],
+  },
+  {
     key: 'attachment_policy',
     label: '受信ファイルの扱い',
     hint: '「未保存」のファイルは受信ファイル画面と会話画面から保存または不要にできます',
