@@ -1423,6 +1423,14 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
   const [phone, setPhone] = useState(n.phone ?? '');
   const [gist, setGist] = useState(n.gist ?? '');
   const [rawText, setRawText] = useState(n.rawText ?? '');
+  // 元メモは長くなりがちなので、中身に合わせて背を伸ばす（画面の高さの 7 割まで。それ以上は欄の中でスクロール）
+  const rawRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const el = rawRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.max(200, Math.min(el.scrollHeight + 2, Math.round(window.innerHeight * 0.7)))}px`;
+  }, [rawText]);
   const [theirSaid, setTheirSaid] = useState(joinLines(n.theirSaid));
   const [ourSaid, setOurSaid] = useState(joinLines(n.ourSaid));
   const [decisions, setDecisions] = useState(joinLines(n.decisions));
@@ -1556,7 +1564,7 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
       </div>
       <div>
         <label className="label">元メモ</label>
-        <textarea className="input min-h-16 text-sm" value={rawText} onChange={(e) => setRawText(e.target.value)} />
+        <textarea ref={rawRef} className="input min-h-48 resize-y text-sm leading-relaxed" value={rawText} onChange={(e) => setRawText(e.target.value)} aria-label="元メモ" />
         <div className="mt-1 flex flex-wrap items-center gap-2">
           <button
             type="button"
@@ -1576,11 +1584,11 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
         </div>
       </div>
       {err && <div className="fade-in text-xs text-red-600">{err}</div>}
-      <div className="flex gap-2">
-        <button className="btn btn-primary btn-sm" onClick={() => save.mutate()} disabled={save.isPending}>
+      <div className="flex items-center gap-2">
+        <button className="btn btn-primary btn-sm shrink-0 whitespace-nowrap" onClick={() => save.mutate()} disabled={save.isPending}>
           保存
         </button>
-        <button className="btn btn-sm" onClick={onCancel}>
+        <button className="btn btn-sm shrink-0 whitespace-nowrap" onClick={onCancel}>
           取消
         </button>
         <span className="text-xs text-slate-400">タスク化済みの次のアクションは、内容を変えなければタスクとの結び付きを保ちます</span>
