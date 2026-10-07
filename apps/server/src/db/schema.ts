@@ -150,7 +150,7 @@ export const caseNotes = sqliteTable(
     /** こちらが言ったこと */
     ourSaid: text('our_said', { mode: 'json' }).$type<string[]>().notNull().default([]),
     decisions: text('decisions', { mode: 'json' }).$type<string[]>().notNull().default([]),
-    nextActions: text('next_actions', { mode: 'json' }).$type<{ title: string; due?: string | null; taskId?: number | null }[]>().notNull().default([]),
+    nextActions: text('next_actions', { mode: 'json' }).$type<{ title: string; due?: string | null; replyBy?: string | null; taskId?: number | null }[]>().notNull().default([]),
     waitingFor: text('waiting_for'),
     attachments: text('attachments', { mode: 'json' }).$type<{ name: string; url?: string; driveItemId?: string }[]>().notNull().default([]),
     createdBy: text('created_by').notNull().default('user'), // user | ai | system

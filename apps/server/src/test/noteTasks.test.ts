@@ -67,7 +67,7 @@ describe('記録をタスクにする', () => {
     expect(t.followUpAt).toBeNull();
     // まとめたときは、どちらのアクションも同じタスクに紐付く
     expect(new Set(r.note.nextActions.map((a) => a.taskId))).toEqual(new Set([r.tasks[0]!.id]));
-    expect(t.note).toContain('依頼者に和解案を伝える（期限 2027-08-05）');
+    expect(t.note).toContain('依頼者に和解案を伝える（締切 2027/8/5(木)）');
   });
 
   it('次のアクションが無い記録でも、題名を書いてタスクにできる', async () => {
@@ -79,7 +79,7 @@ describe('記録をタスクにする', () => {
     expect(t.status).toBe('open');
     expect(t.note).toBe('事務所で打合せ。方針を確認');
     // 記録にも控えるので、画面で「タスク化済」と分かる
-    expect(r.note.nextActions).toEqual([{ title: '打合せの結果を書面にまとめる', due: '2027-08-20', taskId: t.id }]);
+    expect(r.note.nextActions).toEqual([{ title: '打合せの結果を書面にまとめる', due: '2027-08-20', replyBy: null, taskId: t.id }]);
   });
 
   it('古い記録の ISO 形式の期限でも、その日（日付だけ）を期限にする', async () => {
@@ -104,18 +104,25 @@ describe('AI の案を直して登録する', () => {
       tasks: [
         { title: '依頼者に和解案を説明して意向を確認', due: '2027-08-06', status: 'open', note: '相手方は 300 万円を提示' },
         { title: '相手方代理人へ回答', due: '2027-08-09', status: 'waiting_other', note: null },
+        // 締切（答弁書の提出期限）と返信期限（依頼者の返事）を両方持つ返信待ち
+        { title: '答弁書案について依頼者の返事待ち', due: '2027-08-15', replyBy: '2027-08-10', status: 'waiting_client', note: null },
       ],
     });
-    expect(r.tasks).toHaveLength(2);
+    expect(r.tasks).toHaveLength(3);
     const tasks = db().select().from(schema.tasks).where(eq(schema.tasks.caseId, kase.id)).all();
-    expect(tasks.map((t) => [t.title, t.status, ((t.status === 'open' ? t.dueAt : t.followUpAt) ?? '').slice(0, 10)])).toEqual([
-      ['依頼者に和解案を説明して意向を確認', 'open', new Date('2027-08-06T09:00:00+09:00').toISOString().slice(0, 10)],
-      ['相手方代理人へ回答', 'waiting_other', new Date('2027-08-09T09:00:00+09:00').toISOString().slice(0, 10)],
+    const ymd = (iso: string | null) => (iso ? new Date(new Date(iso).getTime() + 9 * 3600_000).toISOString().slice(0, 10) : null);
+    // 締切は dueAt（締切）、返信期限は followUpAt（返信期限）に入る
+    expect(tasks.map((t) => [t.title, t.status, ymd(t.dueAt)])).toEqual([
+      ['依頼者に和解案を説明して意向を確認', 'open', '2027-08-06'],
+      ['相手方代理人へ回答', 'waiting_other', '2027-08-09'],
+      ['答弁書案について依頼者の返事待ち', 'waiting_client', '2027-08-15'],
     ]);
+    expect(ymd(tasks[2]!.followUpAt)).toBe('2027-08-10');
+    expect(r.note.nextActions[2]).toMatchObject({ due: '2027-08-15', replyBy: '2027-08-10' });
     // メモを空にした案は記録の要旨を使う
     expect(tasks[1]!.note).toBe('相手方代理人と電話。和解案の提示あり');
     // 記録にはタスク化済みとして残る
-    expect(r.note.nextActions.map((a) => a.title)).toEqual(['依頼者に和解案を説明して意向を確認', '相手方代理人へ回答']);
+    expect(r.note.nextActions.map((a) => a.title)).toEqual(['依頼者に和解案を説明して意向を確認', '相手方代理人へ回答', '答弁書案について依頼者の返事待ち']);
     expect(r.note.nextActions.every((a) => a.taskId)).toBe(true);
   });
 

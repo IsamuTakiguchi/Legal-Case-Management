@@ -44,6 +44,7 @@ const noteScheduleSchema = z.object({
         content: z.string().describe('その予定の内容を短く（例: 第3回弁論準備、打合せ、和解期日）'),
         kind: z.enum(['meeting', 'consult', 'hearing', 'other']).describe('meeting=打合せ / consult=相談 / hearing=裁判所の期日 / other=その他'),
         durationMinutes: z.number().int().nullable().describe('所要時間（分）。書かれていなければ null'),
+        location: z.string().nullable().describe('場所が書かれていればそのまま（例: 奈良地裁 第3民事部、事務所、Zoom）。無ければ null'),
         quote: z.string().describe('根拠となった記録の一節（短く）'),
       }),
     )
@@ -57,6 +58,8 @@ export interface FixedEvent {
   timeKnown: boolean;
   content: string;
   kind: EventKind;
+  /** 記録に書かれていた場所（無ければ null） */
+  location: string | null;
   quote: string;
 }
 
@@ -197,6 +200,7 @@ export async function proposeScheduleFromNote(
         timeKnown: f.timeKnown,
         content: f.content.trim() || (f.kind === 'hearing' ? '期日' : '打合せ'),
         kind: (f.kind === 'other' ? 'meeting' : f.kind) as EventKind,
+        location: f.location?.trim() || null,
         quote: f.quote,
       };
     })

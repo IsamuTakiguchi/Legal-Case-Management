@@ -121,7 +121,7 @@ describe('記録から日程調整', () => {
       content: '',
       quote: '',
       note: '日時は確定済み',
-      fixed: [{ startAt: '2099-10-11T13:30:00+09:00', timeKnown: true, content: '第3回弁論準備', kind: 'hearing', durationMinutes: 30, quote: '次回期日は 10 月 11 日 13 時 30 分' }],
+      fixed: [{ startAt: '2099-10-11T13:30:00+09:00', timeKnown: true, content: '第3回弁論準備', kind: 'hearing', durationMinutes: 30, location: ' 奈良地裁 第3民事部 ', quote: '次回期日は 10 月 11 日 13 時 30 分' }],
     });
     const r = await proposeScheduleFromNote(note.id);
     expect(r.found).toBe(false);
@@ -137,6 +137,8 @@ describe('記録から日程調整', () => {
         timeKnown: true,
         content: '第3回弁論準備',
         kind: 'hearing',
+        // 記録に書かれていた場所も返す（画面の「場所」に入る）
+        location: '奈良地裁 第3民事部',
         quote: '次回期日は 10 月 11 日 13 時 30 分',
       },
     ]);
@@ -156,7 +158,7 @@ describe('記録から日程調整', () => {
     const r = await proposeScheduleFromNote(note.id);
     expect(r.fixed.map((f) => f.quote)).toEqual(['10/5', '12/1 15 時']);
     // 種別 other は打合せに寄せ、内容が空なら既定を入れる
-    expect(r.fixed[0]).toMatchObject({ kind: 'meeting', content: '打合せ', timeKnown: false });
+    expect(r.fixed[0]).toMatchObject({ kind: 'meeting', content: '打合せ', timeKnown: false, location: null });
     // 所要の言及が無いので既定の 60 分
     expect(new Date(r.fixed[0]!.endAt).getTime() - new Date(r.fixed[0]!.startAt).getTime()).toBe(60 * 60_000);
   });
@@ -216,12 +218,13 @@ describe('記録から予定を登録', () => {
       mode: 'confirmed',
       title: '山田 第3回弁論準備',
       kind: 'hearing',
+      location: '奈良地裁 第3民事部',
       slots: [{ startAt, endAt }],
     });
     expect(r.mode).toBe('confirmed');
     expect(r.events).toHaveLength(1);
     const ev = r.events[0]!;
-    expect(ev).toMatchObject({ title: '山田 第3回弁論準備', kind: 'hearing', clientId: client.id, caseId: kase.id, status: 'confirmed' });
+    expect(ev).toMatchObject({ title: '山田 第3回弁論準備', kind: 'hearing', clientId: client.id, caseId: kase.id, status: 'confirmed', location: '奈良地裁 第3民事部' });
     expect(ev.startAt).toBe(new Date(startAt).toISOString());
     expect(ev.endAt).toBe(new Date(endAt).toISOString());
     // どの記録から作ったかが説明に残る

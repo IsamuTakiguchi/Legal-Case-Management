@@ -398,7 +398,8 @@ export const caseNoteInputSchema = z.object({
   /** こちらが言ったこと */
   ourSaid: z.array(z.string()).default([]),
   decisions: z.array(z.string()).default([]),
-  nextActions: z.array(z.object({ title: z.string(), due: z.string().optional().nullable(), taskId: z.number().int().optional().nullable() })).default([]),
+  /** due は締切（そのことをいつまでにするか）、replyBy は返信期限（依頼者・相手方などの返事をいつまで待つか） */
+  nextActions: z.array(z.object({ title: z.string(), due: z.string().optional().nullable(), replyBy: z.string().optional().nullable(), taskId: z.number().int().optional().nullable() })).default([]),
   waitingFor: z.enum(WAITING_FOR).optional().nullable(),
   attachments: z.array(z.object({ name: z.string(), url: z.string().optional(), driveItemId: z.string().optional() })).default([]),
 });

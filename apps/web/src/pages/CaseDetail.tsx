@@ -10,7 +10,7 @@ import { LongText } from '../lib/LongText';
 import { TaskDeadlines, NewTaskDeadlines, TaskDeadlineSelect, FOLLOW_LABEL } from '../lib/Deadline';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { fmtDateTime, fmtDate, fmtYen, fmtBytes, toLocalInput, fromLocalInput, channelLabel } from '../lib/format';
-import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, messageLink, ACTIVE_TASK_STATUSES, taskStatusForWaiting, formatWareki, parseJaDate, addYearsIso, taskDeadline, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
+import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, messageLink, ACTIVE_TASK_STATUSES, taskStatusForWaiting, formatWareki, parseJaDate, addYearsIso, taskDeadline, jstYmd, actionDeadlinesLabel, isWaitingStatus, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 import { ChatworkTaskReply } from '../lib/ChatworkTaskReply';
@@ -28,7 +28,8 @@ interface Note {
   theirSaid: string[];
   ourSaid: string[];
   decisions: string[];
-  nextActions: { title: string; due?: string | null; taskId?: number | null }[];
+  /** due は締切、replyBy は返信期限（返事をいつまで待つか） */
+  nextActions: { title: string; due?: string | null; replyBy?: string | null; taskId?: number | null }[];
   waitingFor: string | null;
   createdBy: string;
 }
@@ -55,11 +56,16 @@ interface CaseData {
   tasks: { id: number; title: string; note: string | null; status: string; dueAt: string | null; followUpAt: string | null; chatworkTaskId: number | null; chatworkReplyable?: boolean; chatworkAssignedByName?: string | null; chatworkRepliedAt?: string | null }[];
   events: { id: number; title: string; startAt: string; endAt: string; kind: string; location: string | null; status: string | null }[];
 }
-/** 次のアクションの期限。YYYY-MM-DD でも ISO でも「9/20(日)」の形にする */
-function fmtDue(due?: string | null): string {
-  if (!due) return '';
-  const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(due) ? `${due}T00:00:00+09:00` : due);
-  return Number.isNaN(d.getTime()) ? due : fmtDate(d.toISOString());
+/** 次のアクションの期限を YYYY-MM-DD に（古い記録の ISO もその日本時間の日付に） */
+function dueYmd(due?: string | null): string | null {
+  if (!due) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(due)) return due;
+  const d = new Date(due);
+  return Number.isNaN(d.getTime()) ? null : jstYmd(d);
+}
+/** 次のアクション・タスク案の期限の表示（「締切 11/10(火)・返信期限 11/5(木)」） */
+function actionDue(a: { due?: string | null; replyBy?: string | null }): string {
+  return actionDeadlinesLabel({ due: dueYmd(a.due), replyBy: dueYmd(a.replyBy) });
 }
 
 interface TimelineItem {
@@ -1275,7 +1281,7 @@ function NoteComposer({ caseId, onSaved }: { caseId: number; onSaved: (note?: { 
   const [raw, setRaw] = useState('');
   const [theirSaid, setTheirSaid] = useState('');
   const [ourSaid, setOurSaid] = useState('');
-  const [preview, setPreview] = useState<{ gist: string; theirSaid: string[]; ourSaid: string[]; phone: string | null; decisions: string[]; nextActions: { title: string; due: string | null }[]; waitingFor: WaitingFor; counterpart: string | null } | null>(null);
+  const [preview, setPreview] = useState<{ gist: string; theirSaid: string[]; ourSaid: string[]; phone: string | null; decisions: string[]; nextActions: { title: string; due: string | null; replyBy?: string | null }[]; waitingFor: WaitingFor; counterpart: string | null } | null>(null);
   const lines = (t: string) => t.split(/\n/).map((x) => x.replace(/^[・\-\s]+/, '').trim()).filter(Boolean);
   // タスク化の方法: アクションごと／1 つにまとめる／作らない。タスク化するアクションはチェックで選ぶ
   const [taskMode, setTaskMode] = useState<'each' | 'single' | 'none'>('single');
@@ -1404,7 +1410,7 @@ function NoteComposer({ caseId, onSaved }: { caseId: number; onSaved: (note?: { 
                     />
                     <span>
                       {a.title}
-                      {a.due ? <span className="text-slate-500">（期限 {a.due}）</span> : ''}
+                      {actionDue(a) ? <span className="ml-1 whitespace-nowrap text-xs text-slate-500">（{actionDue(a)}）</span> : ''}
                     </span>
                   </li>
                 ))}
@@ -1441,9 +1447,11 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
   const [theirSaid, setTheirSaid] = useState(joinLines(n.theirSaid));
   const [ourSaid, setOurSaid] = useState(joinLines(n.ourSaid));
   const [decisions, setDecisions] = useState(joinLines(n.decisions));
-  // 次のアクションは「内容 | 期限(YYYY-MM-DD)」で 1 行 1 件
-  const dateOf = (v: string | null | undefined) => (v && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null);
-  const [nextActions, setNextActions] = useState(n.nextActions.map((a) => `・${a.title}${dateOf(a.due) ? ` | ${dateOf(a.due)}` : ''}`).join('\n'));
+  // 次のアクションは「内容 | 締切 YYYY-MM-DD | 返信 YYYY-MM-DD」で 1 行 1 件（締切・返信はどちらも省ける）
+  const dateOf = (v: string | null | undefined) => (v && /\d{4}-\d{2}-\d{2}/.test(v) ? /\d{4}-\d{2}-\d{2}/.exec(v)![0] : null);
+  const actionLine = (a: { title: string; due?: string | null; replyBy?: string | null }) =>
+    `・${a.title}${dueYmd(a.due) ? ` | 締切 ${dueYmd(a.due)}` : ''}${dueYmd(a.replyBy) ? ` | 返信 ${dueYmd(a.replyBy)}` : ''}`;
+  const [nextActions, setNextActions] = useState(n.nextActions.map(actionLine).join('\n'));
   const WAITING = ['none', 'client', 'counterpart', 'court', 'creditor', 'other'] as const;
   // 古い記録に想定外の値が入っていても保存できるよう、選べる値に丸める
   const [waitingFor, setWaitingFor] = useState<string>(n.waitingFor && (WAITING as readonly string[]).includes(n.waitingFor) ? n.waitingFor : 'none');
@@ -1464,7 +1472,7 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
   /** いま画面に入っているメモを AI に渡して、要旨・発言・決定事項・次のアクションに整理し直す（保存はしない） */
   const organize = useMutation({
     mutationFn: () =>
-      api.post<{ gist: string; theirSaid: string[]; ourSaid: string[]; decisions: string[]; nextActions: { title: string; due: string | null }[]; waitingFor: string; counterpart: string | null; phone: string | null }>(
+      api.post<{ gist: string; theirSaid: string[]; ourSaid: string[]; decisions: string[]; nextActions: { title: string; due: string | null; replyBy?: string | null }[]; waitingFor: string; counterpart: string | null; phone: string | null }>(
         `/case-notes/${n.id}/structure`,
         { rawText, kind, counterpart: counterpart || null, phone: phone || null },
       ),
@@ -1474,7 +1482,7 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
       setTheirSaid(joinLines(r.theirSaid));
       setOurSaid(joinLines(r.ourSaid));
       setDecisions(joinLines(r.decisions));
-      setNextActions(r.nextActions.map((a) => `・${a.title}${dateOf(a.due) ? ` | ${dateOf(a.due)}` : ''}`).join('\n'));
+      setNextActions(r.nextActions.map(actionLine).join('\n'));
       if ((WAITING as readonly string[]).includes(r.waitingFor)) setWaitingFor(r.waitingFor);
       // 相手・電話番号は、こちらで入れていなければ AI の読み取りで埋める
       if (!counterpart.trim() && r.counterpart) setCounterpart(r.counterpart);
@@ -1513,9 +1521,12 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
         ourSaid: lines(ourSaid),
         decisions: lines(decisions),
         nextActions: lines(nextActions).map((l) => {
-          const [title, due] = l.split('|').map((x) => x.trim());
+          const [title, ...rest] = l.split('|').map((x) => x.trim());
+          // 「返信」で始まるものは返信期限、それ以外（「締切」や日付だけ）は締切
+          const reply = rest.find((x) => /^返信/.test(x));
+          const due = rest.find((x) => !/^返信/.test(x));
           const prev = n.nextActions.find((a) => a.title === title);
-          return { title, due: dateOf(due), taskId: prev?.taskId ?? null };
+          return { title: title!, due: dateOf(due), replyBy: dateOf(reply), taskId: prev?.taskId ?? null };
         }),
         waitingFor: waitingFor === 'none' ? null : waitingFor,
       }),
@@ -1565,7 +1576,7 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
           <textarea className="input min-h-14 text-sm" value={decisions} onChange={(e) => setDecisions(e.target.value)} />
         </div>
         <div>
-          <label className="label">次のアクション（1 行 1 件。期限は「| 2027-01-20」のように末尾に）</label>
+          <label className="label" title="締切: そのことをいつまでに済ませるか ／ 返信: 依頼者・相手方などの返事をいつまで待つか">次のアクション（1 行 1 件。期限は「| 締切 2027-01-20 | 返信 2027-01-15」のように末尾に）</label>
           <textarea className="input min-h-14 text-sm" value={nextActions} onChange={(e) => setNextActions(e.target.value)} />
         </div>
       </div>
@@ -1607,7 +1618,10 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
 /** AI が出したタスクの案（画面で直してから登録する） */
 interface DraftTask {
   title: string;
+  /** 締切（YYYY-MM-DD。空ならなし） */
   due: string;
+  /** 返信期限（返信待ちのとき。空なら既定の日数後） */
+  replyBy: string;
   status: string;
   note: string;
   use: boolean;
@@ -1642,6 +1656,8 @@ interface FixedEvent {
   timeKnown: boolean;
   content: string;
   kind: EventKind;
+  /** 記録に書かれていた場所（無ければ null） */
+  location?: string | null;
   quote: string;
 }
 
@@ -1657,6 +1673,8 @@ function FixedEventRow({ noteId, f, clientName, onDone }: { noteId: number; f: F
   const [kind, setKind] = useState<EventKind>(f.kind);
   const [duration, setDuration] = useState(String(Math.max(15, Math.round((new Date(f.endAt).getTime() - new Date(f.startAt).getTime()) / 60_000))));
   const [web, setWeb] = useState(false);
+  // 場所（記録に書かれていればそれを入れておく）
+  const [location, setLocation] = useState(f.location ?? '');
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [done, setDone] = useState(false);
   const mins = () => Math.max(15, Number(duration) || 60);
@@ -1669,6 +1687,7 @@ function FixedEventRow({ noteId, f, clientName, onDone }: { noteId: number; f: F
         title: title.trim() || f.content,
         kind,
         web,
+        location: location.trim() || null,
         slots: [{ startAt: startAt.toISOString(), endAt: new Date(startAt.getTime() + mins() * 60_000).toISOString() }],
       });
     },
@@ -1704,6 +1723,10 @@ function FixedEventRow({ noteId, f, clientName, onDone }: { noteId: number; f: F
         <label>
           <span className="label">所要（分）</span>
           <input className="input w-16 py-0.5" type="number" min={15} step={15} value={duration} onChange={(e) => setDuration(e.target.value)} disabled={done} />
+        </label>
+        <label className="min-w-0 flex-1">
+          <span className="label">場所</span>
+          <input className="input min-w-32 py-0.5" value={location} onChange={(e) => setLocation(e.target.value)} placeholder={web ? '空欄なら会議 URL だけ' : '例: 奈良地裁 / 事務所'} maxLength={200} disabled={done} aria-label="場所" />
         </label>
         <label className="flex items-center gap-1 whitespace-nowrap pb-1 text-xs text-slate-600">
           <input type="checkbox" checked={web} onChange={(e) => setWeb(e.target.checked)} disabled={done} />
@@ -1895,7 +1918,9 @@ function NoteTaskPanel({ n, onDone, onClose }: { n: Note; onDone: () => void; on
   const [pick, setPick] = useState<Set<number>>(new Set(pending.map((a) => a.i)));
   const [mode, setMode] = useState<'each' | 'single'>('single');
   const [title, setTitle] = useState(pending.length ? '' : headline.slice(0, 80));
-  const [due, setDue] = useState(pending.find((a) => a.due)?.due?.slice(0, 10) ?? '');
+  // 下の「次のアクション・題名から作る」ときの締切と返信期限（空ならアクションの期限）
+  const [due, setDue] = useState('');
+  const [replyBy, setReplyBy] = useState('');
   const [status, setStatus] = useState<string>(taskStatusForWaiting(n.waitingFor));
   const [sync, setSync] = useState(false);
   const [msg, setMsg] = useState('');
@@ -1903,9 +1928,9 @@ function NoteTaskPanel({ n, onDone, onClose }: { n: Note; onDone: () => void; on
   const [drafts, setDrafts] = useState<DraftTask[] | null>(null);
   const [comment, setComment] = useState('');
   const suggest = useMutation({
-    mutationFn: () => api.post<{ tasks: { title: string; due: string | null; status: string; note: string }[]; comment: string }>(`/case-notes/${n.id}/task-suggestions`),
+    mutationFn: () => api.post<{ tasks: { title: string; due: string | null; replyBy?: string | null; status: string; note: string }[]; comment: string }>(`/case-notes/${n.id}/task-suggestions`),
     onSuccess: (r) => {
-      setDrafts(r.tasks.map((t) => ({ title: t.title, due: t.due ?? '', status: t.status, note: t.note ?? '', use: true })));
+      setDrafts(r.tasks.map((t) => ({ title: t.title, due: t.due ?? '', replyBy: t.replyBy ?? '', status: t.status, note: t.note ?? '', use: true })));
       setComment(r.comment ?? '');
       setMsg(r.tasks.length ? '' : 'タスクにするものは見当たりませんでした。必要なら題名を書いて作れます');
     },
@@ -1918,7 +1943,7 @@ function NoteTaskPanel({ n, onDone, onClose }: { n: Note; onDone: () => void; on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const create = useMutation({
-    mutationFn: (body: Record<string, unknown>) => api.post<{ tasks: { id: number; title: string }[] }>(`/case-notes/${n.id}/tasks`, { due: due || null, status, syncToChatwork: sync, ...body }),
+    mutationFn: (body: Record<string, unknown>) => api.post<{ tasks: { id: number; title: string }[] }>(`/case-notes/${n.id}/tasks`, { due: due || null, replyBy: isWaitingStatus(status) ? replyBy || null : null, status, syncToChatwork: sync, ...body }),
     onSuccess: (r) => {
       setMsg(`${r.tasks.map((t) => t.title).join('、')} をタスクにしました`);
       setTitle('');
@@ -1955,9 +1980,6 @@ function NoteTaskPanel({ n, onDone, onClose }: { n: Note; onDone: () => void; on
                   <input className="input min-w-0 flex-1" value={dft.title} onChange={(e) => setDraft(i, { title: e.target.value })} placeholder="タスク名" />
                 </div>
                 <div className="flex flex-wrap items-center gap-2 text-xs">
-                  <label className="flex items-center gap-1">
-                    期限 <input type="date" className="input w-auto py-0.5" value={dft.due} onChange={(e) => setDraft(i, { due: e.target.value })} />
-                  </label>
                   <select className="input w-auto py-0.5" value={dft.status} onChange={(e) => setDraft(i, { status: e.target.value })} aria-label="状態">
                     {ACTIVE_TASK_STATUSES.map((st) => (
                       <option key={st} value={st}>
@@ -1965,6 +1987,14 @@ function NoteTaskPanel({ n, onDone, onClose }: { n: Note; onDone: () => void; on
                       </option>
                     ))}
                   </select>
+                  {isWaitingStatus(dft.status) && (
+                    <label className="flex items-center gap-1" title="依頼者・相手方などの返事をいつまで待つか。空なら設定の営業日数後">
+                      返信期限 <input type="date" className="input w-auto py-0.5" value={dft.replyBy} onChange={(e) => setDraft(i, { replyBy: e.target.value })} aria-label="返信期限" />
+                    </label>
+                  )}
+                  <label className="flex items-center gap-1" title="そのタスク自体の締切（例: 答弁書の提出期限）。空ならなし">
+                    締切 <input type="date" className="input w-auto py-0.5" value={dft.due} onChange={(e) => setDraft(i, { due: e.target.value })} aria-label="締切" />
+                  </label>
                   <button className="text-slate-400 hover:text-red-600" onClick={() => setDrafts((prev) => (prev ?? []).filter((_, j) => j !== i))}>
                     この案を消す
                   </button>
@@ -1979,7 +2009,9 @@ function NoteTaskPanel({ n, onDone, onClose }: { n: Note; onDone: () => void; on
               onClick={() =>
                 create.mutate({
                   mode: 'list',
-                  tasks: drafts.filter((dft) => dft.use && dft.title.trim()).map((dft) => ({ title: dft.title, due: dft.due || null, status: dft.status, note: dft.note || null })),
+                  tasks: drafts
+                    .filter((dft) => dft.use && dft.title.trim())
+                    .map((dft) => ({ title: dft.title, due: dft.due || null, replyBy: isWaitingStatus(dft.status) ? dft.replyBy || null : null, status: dft.status, note: dft.note || null })),
                 })
               }
             >
@@ -2010,7 +2042,7 @@ function NoteTaskPanel({ n, onDone, onClose }: { n: Note; onDone: () => void; on
                 />
                 <span>
                   {a.title}
-                  {a.due ? <span className="text-slate-500">（期限 {fmtDue(a.due)}）</span> : ''}
+                  {actionDue(a) ? <span className="ml-1 whitespace-nowrap text-xs text-slate-500">（{actionDue(a)}）</span> : ''}
                 </span>
               </li>
             ))}
@@ -2036,8 +2068,13 @@ function NoteTaskPanel({ n, onDone, onClose }: { n: Note; onDone: () => void; on
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-3 text-xs">
-        <label className="flex items-center gap-1">
-          期限 <input type="date" className="input w-auto py-0.5" value={due} onChange={(e) => setDue(e.target.value)} />
+        {isWaitingStatus(status) && (
+          <label className="flex items-center gap-1" title="返事をいつまで待つか。空ならアクションの返信期限、それも無ければ設定の営業日数後">
+            返信期限 <input type="date" className="input w-auto py-0.5" value={replyBy} onChange={(e) => setReplyBy(e.target.value)} />
+          </label>
+        )}
+        <label className="flex items-center gap-1" title="タスク自体の締切。空ならアクションの締切">
+          締切 <input type="date" className="input w-auto py-0.5" value={due} onChange={(e) => setDue(e.target.value)} />
         </label>
         <label className="flex items-center gap-1">
           状態
@@ -2158,7 +2195,7 @@ function NoteView({ n, onDeleted, onNotice }: { n: Note; onDeleted: () => void; 
           {n.nextActions.map((a, i) => (
             <li key={i}>
               {a.title}
-              {a.due ? `（${fmtDue(a.due)}）` : ''}
+              {actionDue(a) ? <span className="ml-1 whitespace-nowrap text-xs text-slate-500">（{actionDue(a)}）</span> : ''}
               {a.taskId ? <span className="badge badge-blue ml-1">タスク化済</span> : null}
             </li>
           ))}
@@ -2254,7 +2291,8 @@ function ProgressForm({ caseId, onDone }: { caseId: number; onDone: () => void }
         occurredAt: occurredAt ? fromLocalInput(occurredAt) : undefined,
       };
       if (waiting && makeTask) {
-        body.nextActions = [{ title: `${who ?? '回答'}の回答待ち: ${head}`.slice(0, 120), due: deadline ? jstDate(deadline) : null }];
+        // 回答待ちの期限は返信期限（締切ではない）
+        body.nextActions = [{ title: `${who ?? '回答'}の回答待ち: ${head}`.slice(0, 120), due: null, replyBy: deadline ? jstDate(deadline) : null }];
         body.createTasks = 'single';
       }
       await api.post(`/cases/${caseId}/notes`, body);
