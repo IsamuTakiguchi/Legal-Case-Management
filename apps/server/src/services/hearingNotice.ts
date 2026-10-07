@@ -7,7 +7,7 @@ import { listTemplates, fillTemplate } from './templates.js';
 import { adapterFor } from '../channels/registry.js';
 import { isConfigured } from '../config.js';
 import { logger } from '../logger.js';
-import { CHANNEL_LABEL, familyName, formatJaDateTime, clientPersonLabel, type Channel } from '@lcm/shared';
+import { CHANNEL_LABEL, familyName, formatJaDateTime, clientPersonLabel, looksLikeCorporation, representativeLabel, type Channel } from '@lcm/shared';
 import { listClientPersons, getClientPerson, type ClientPersonRow } from './clientPersons.js';
 
 type ClientRow = typeof schema.clients.$inferSelect;
@@ -203,7 +203,11 @@ export async function prepareHearingNotice(noteId: number, opts: { channel?: Cha
   }
   const suggestedCount = docs.filter((d) => d.suggested).length;
 
-  const surname = familyName(addressee);
+  // 「様」の前に置く宛名。会社なら「CTF株式会社\n名児耶和峰　」（→「CTF株式会社\n名児耶和峰　様」）のように会社名と氏名にする（「CTF様」にしない）
+  const corporate = client.entityType === 'corporation' || looksLikeCorporation(client.name);
+  const who = chosen.personId ? addressee : representativeLabel(client);
+  // LINE・Chatwork は短く姓だけ
+  const surname = corporate && channel === 'gmail' ? `${client.name}\n${who ? `${who}　` : 'ご担当者'}` : familyName(chosen.personId ? addressee : (client.representativeName ?? addressee));
   const template = listTemplates().find((t) => t.key === 'hearing_report');
   let text: string;
   let draftId: number | null = null;
@@ -225,6 +229,7 @@ export async function prepareHearingNotice(noteId: number, opts: { channel?: Cha
         channel,
         clientName: client.name,
         counterpartName: chosen.personId ? addressee : conv.counterpartName,
+        personName: chosen.personId ? addressee : null,
         thread: thread.map((m) => ({ direction: m.direction as 'in' | 'out', body: m.body, sentAt: m.sentAt, senderName: m.senderName })),
         caseSummary: kase.summary ?? null,
       },

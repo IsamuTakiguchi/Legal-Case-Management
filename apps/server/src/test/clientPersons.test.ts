@@ -107,10 +107,11 @@ describe('法人の依頼者の担当者', () => {
     const first = await prepareHearingNotice(note.id);
     expect(first.recipient).toBe('鈴木 一郎（経理部）');
     expect(first.to).toBe('suzuki@test.co.jp');
-    expect(first.text).toContain('鈴木様');
+    // メールの宛名は「会社名」の次の行に「氏名　様」（「テスト様」「鈴木様」にしない）
+    expect(first.text).toContain('株式会社テスト\n鈴木 一郎　様');
     const toSato = await prepareHearingNotice(note.id, { channel: 'gmail', personId: sato.id });
     expect(toSato.personId).toBe(sato.id);
-    expect(toSato.text).toContain('佐藤様');
+    expect(toSato.text).toContain('株式会社テスト\n佐藤 花子　様');
     expect(db().select().from(schema.conversations).where(eq(schema.conversations.id, toSato.conversationId)).get()!.counterpartAddress?.toLowerCase()).toBe('sato@test.co.jp');
     const toCompany = await prepareHearingNotice(note.id, { channel: 'gmail', personId: null });
     expect(toCompany.to).toBe('info@test.co.jp');

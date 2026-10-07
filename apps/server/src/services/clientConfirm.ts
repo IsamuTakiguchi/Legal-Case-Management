@@ -238,7 +238,7 @@ export async function draftClientConfirm(messageId: number, input: { clientId?: 
   const kase = ctx.caseId ? d.select().from(schema.cases).where(eq(schema.cases.id, ctx.caseId)).get() : null;
   const text = await draftReply(
     { conversationId: ch.conversationId ?? 0, instruction: confirmInstruction(ctx, input.instruction), templateKey: null, extra: {} },
-    { channel: input.channel, clientName: ctx.clientName, counterpartName: addressee, thread, caseSummary: kase?.summary ?? null },
+    { channel: input.channel, clientName: ctx.clientName, counterpartName: addressee, personName: ch.personId ? addressee : null, thread, caseSummary: kase?.summary ?? null },
     ctx.clientId,
   );
   // 新しい Gmail スレッドになるときは件名も用意する

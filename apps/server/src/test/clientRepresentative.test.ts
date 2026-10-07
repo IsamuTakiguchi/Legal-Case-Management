@@ -26,7 +26,7 @@ const { findClients } = await import('../services/secretary.js');
 const { searchAll } = await import('../services/search.js');
 const { mergeClients } = await import('../services/clientMerge.js');
 const { draftReply } = await import('../services/style.js');
-const { looksLikeCorporation, representativeLabel } = await import('@lcm/shared');
+const { looksLikeCorporation, representativeLabel, companyName } = await import('@lcm/shared');
 const { eq } = await import('drizzle-orm');
 
 beforeAll(() => openTestDatabase());
@@ -114,5 +114,34 @@ describe('法人の依頼者と代表者', () => {
     await draftReply({ conversationId: 0, instruction: 'お礼', templateKey: null, extra: {} }, { channel: 'line', clientName: p.name, thread: [] }, p.id);
     expect(prompts[1]).toContain('宛名は「佐藤様」');
     expect(prompts[1]).not.toContain('代表者');
+  });
+
+  it('会社の方への下書きでは、会社名を姓のように「CTF様」とせず、会社名の次の行に氏名と「　様」を書くよう伝える', async () => {
+    const req = { conversationId: 0, instruction: 'お礼', templateKey: null, extra: {} };
+    // 依頼者に紐付いていない相手（差出人名に会社名と氏名が入っている）
+    await draftReply(req, { channel: 'gmail', counterpartName: 'CTF株式会社 Connect the Torch for Future 名児耶和峰 Kazumine Nagoya', thread: [] }, null);
+    expect(prompts[0]).toContain('会社・団体の方');
+    expect(prompts[0]).toContain('「CTF様」など）にしない');
+    expect(prompts[0]).toContain('署名・差出人名から読み取る');
+    expect(prompts[0]).not.toContain('宛名は「CTF');
+    // 会社名は法人格を含む部分だけ（英語のキャッチコピーや氏名は入れない）
+    expect(prompts[0]).toContain('「CTF株式会社\n（担当者の氏名）　様」');
+    expect(companyName('CTF株式会社 Connect the Torch for Future 名児耶和峰 Kazumine Nagoya')).toBe('CTF株式会社');
+    expect(companyName('株式会社のぼり　山田太郎')).toBe('株式会社のぼり');
+    expect(companyName('株式会社 のぼり 山田太郎')).toBe('株式会社 のぼり');
+    expect(companyName('のぼり 株式会社')).toBe('のぼり 株式会社');
+    expect(companyName('山田太郎')).toBe('山田太郎');
+    // 代表者が未登録の法人の依頼者
+    const c = db().insert(schema.clients).values({ name: 'CTF株式会社', entityType: 'corporation' }).returning().get();
+    await draftReply(req, { channel: 'gmail', clientName: c.name, thread: [] }, c.id);
+    expect(prompts[1]).toContain('「CTF株式会社\n（担当者の氏名）　様」');
+    expect(prompts[1]).not.toContain('宛名は「CTF様」');
+    // 担当者とのやり取り
+    await draftReply(req, { channel: 'gmail', clientName: c.name, personName: '名児耶和峰', personTitle: '営業部長', thread: [] }, c.id);
+    expect(prompts[2]).toContain('CTF株式会社 の担当者 営業部長 名児耶和峰');
+    expect(prompts[2]).toContain('「CTF株式会社\n名児耶和峰　様」');
+    // LINE なら姓だけでもよい
+    await draftReply(req, { channel: 'line', clientName: c.name, personName: '名児耶和峰', thread: [] }, c.id);
+    expect(prompts[3]).toContain('「（名児耶和峰 の姓）様」と姓だけでもよい');
   });
 });

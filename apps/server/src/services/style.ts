@@ -6,7 +6,7 @@ import { normalizeGmailMessage } from '../channels/gmail.js';
 import * as cw from '../channels/chatwork.js';
 import { getSetting } from './settings.js';
 import { listTemplates, fillTemplate, accessNote } from './templates.js';
-import { CHANNEL_LABEL, familyName, representativeLabel, type Channel, type DraftRequest } from '@lcm/shared';
+import { CHANNEL_LABEL, companyName, familyName, looksLikeCorporation, representativeLabel, type Channel, type DraftRequest } from '@lcm/shared';
 import { logger } from '../logger.js';
 import { ftsQuery } from './inbox.js';
 
@@ -168,7 +168,7 @@ ${corpus}`,
 }
 
 const CHANNEL_RULES: Record<Channel, string> = {
-  gmail: 'メールとして書く。件名は不要。冒頭に宛名（○○様）、必要に応じて結びと署名（署名は下記の署名設定があれば末尾に付ける）。',
+  gmail: 'メールとして書く。件名は不要。冒頭に宛名（○○様。会社の方なら「会社名」の次の行に「氏名　様」）、必要に応じて結びと署名（署名は下記の署名設定があれば末尾に付ける）。',
   chatwork: 'Chatwork のチャットとして書く。宛名は「○○様」程度で簡潔に、署名は付けない。長すぎない。',
   line: 'LINE のメッセージとして書く。簡潔で読みやすく、1通 500 字以内を目安。署名は付けない。改行で読みやすく。',
 };
@@ -181,8 +181,24 @@ export interface DraftContext {
   contactName?: string | null;
   contactRole?: string | null;
   contactCaseTitle?: string | null;
+  /** 法人の依頼者の担当者（会話の相手が担当者と分かっているとき） */
+  personName?: string | null;
+  personTitle?: string | null;
   thread: { direction: 'in' | 'out'; body: string; sentAt: string; senderName?: string | null }[];
   caseSummary?: string | null;
+}
+
+/**
+ * 会社・団体の方への宛名の書き方。「CTF株式会社」から「CTF様」のように会社名を姓のように扱わず、
+ * メールなら「会社名」の次の行に「氏名　様」と書く
+ */
+function orgAddressRule(channel: Channel, company: string, person: string | null): string {
+  const sample = `${company}\n${person ?? '（担当者の氏名）'}　様`;
+  const who = person
+    ? `担当者は ${person}`
+    : '担当者の氏名は、直近の相手のメッセージの署名・差出人名から読み取る（ローマ字表記や英語のキャッチコピー・肩書きは宛名に入れない）。氏名が分からなければ「ご担当者様」';
+  const brief = channel === 'gmail' ? '' : `。${CHANNEL_LABEL[channel]} では「（${person ? `${person} の` : '担当者の'}姓）様」と姓だけでもよい`;
+  return `宛名は会社名だけ・会社名の略称（「${familyName(company) || company}様」など）にしない。メールなら会社名（法人格を含む正式名称）の次の行に氏名（フルネーム）を書き、「${sample}」の形にする。${who}${brief}`;
 }
 
 /** 本人らしい返信文の下書きを生成 */
@@ -190,14 +206,24 @@ export async function draftReply(req: DraftRequest, ctx: DraftContext, clientId?
   const templates = listTemplates();
   const lastInbound = [...ctx.thread].reverse().find((m) => m.direction === 'in');
   // 関係者との会話なら宛名は関係者（依頼者名にしない）
-  const surname = familyName(ctx.contactName ?? ctx.clientName ?? ctx.counterpartName ?? '');
+  const addressee = ctx.contactName ?? ctx.clientName ?? ctx.counterpartName ?? '';
+  // 会社・団体の名前は姓ではない（「CTF株式会社」→「CTF様」にしない）。担当者が分かっていればその人の姓
+  // 依頼者が法人なら、会社名と代表者・担当者で宛名を書けるように伝える
+  const client = !ctx.contactName && clientId ? (db().select().from(schema.clients).where(eq(schema.clients.id, clientId)).get() ?? null) : null;
+  const rep = client ? representativeLabel(client) : null;
+  const orgName = client?.entityType === 'corporation' ? client.name : looksLikeCorporation(addressee) ? companyName(addressee) : null;
+  // テンプレートの「{{姓}}様」に入れる宛名。会社の方へのメールで担当者が分かっていれば「会社名\n氏名　」、
+  // 会社で担当者が分からなければ空（AI が「相手」の宛名の書き方に沿って書く）
+  const person = ctx.contactName ? null : ctx.personName;
+  const surname = person ? (orgName && ctx.channel === 'gmail' ? `${orgName}\n${person}　` : familyName(person)) : orgName ? '' : familyName(addressee);
 
   let templateNote = '';
   if (req.templateKey) {
     const t = templates.find((x) => x.key === req.templateKey);
     if (t) {
-      const filled = fillTemplate(t.body, { 姓: surname, アクセス案内: accessNote(), ...req.extra });
-      templateNote = `\n\n【使用するテンプレート（この文面を骨子として、必要な情報を埋め、自然に整えてください。〔〕で残っている箇所は指示や文脈から補い、分からなければ〔〕のまま残す）】\n${filled}`;
+      const filled = fillTemplate(t.body, { 姓: surname || undefined, アクセス案内: accessNote(), ...req.extra });
+      const nameNote = surname ? '' : '。〔姓〕様 の宛名行は、上の「相手」に書いた宛名の書き方に置き換える';
+      templateNote = `\n\n【使用するテンプレート（この文面を骨子として、必要な情報を埋め、自然に整えてください。〔〕で残っている箇所は指示や文脈から補い、分からなければ〔〕のまま残す${nameNote}）】\n${filled}`;
     }
   }
 
@@ -215,6 +241,7 @@ export async function draftReply(req: DraftRequest, ctx: DraftContext, clientId?
 本人の文体プロファイルと過去の実際の返信例を忠実に再現してください。過剰に丁寧すぎたり、逆に馴れ馴れしくならないよう、プロファイルと実例に合わせます。
 法的な断定や新しい事実の創作はせず、指示にない約束（日時・金額・見通し）を勝手に書かないでください。不明な点は〔要確認〕と明記します。
 出力は返信本文のみ。前置きや説明、引用符は不要です。
+宛名: 相手のメッセージの署名に会社名と氏名があれば、会社の方として扱います。メールなら「会社名（法人格を含む正式名称）」の次の行に「氏名（フルネーム）　様」と書き、会社名を略して姓のように「○○様」としないでください。
 
 【チャネルの制約】
 ${CHANNEL_RULES[ctx.channel]}
@@ -231,14 +258,15 @@ ${samples.map((s, i) => `--- 例${i + 1} ---\n${s.text.slice(0, 900)}`).join('\n
     .map((m) => `[${m.direction === 'in' ? (m.senderName ?? '相手') : '自分'} ${m.sentAt.slice(0, 16).replace('T', ' ')}]\n${m.body.slice(0, 1500)}`)
     .join('\n\n');
 
-  // 依頼者が法人なら、会社名と代表者で宛名を書けるように伝える
-  const client = !ctx.contactName && clientId ? (db().select().from(schema.clients).where(eq(schema.clients.id, clientId)).get() ?? null) : null;
-  const rep = client ? representativeLabel(client) : null;
   const counterpartLine = ctx.contactName
-    ? `相手: ${ctx.contactName}（${ctx.contactRole ?? '関係者'}。依頼者 ${ctx.clientName ?? '不明'}${ctx.contactCaseTitle ? ` の「${ctx.contactCaseTitle}」` : ''} に関する対外的なやり取り。依頼者向けの砕けた説明や励ましは入れず、簡潔で丁寧な対外文書として書く）${surname ? `（宛名は「${surname}様」${ctx.contactRole === '相手方代理人' ? 'または「先生」' : ''}）` : ''}`
-    : rep
-      ? `相手: ${ctx.clientName ?? client!.name}（法人の依頼者。代表者は${rep}。宛名は会社名と代表者名で、例えばメールなら「${client!.name}\n${rep} 様」、LINE なら「${familyName(client!.representativeName ?? '')}様」。やり取りの相手が代表者以外の担当者と分かれば、その人に宛てる）`
-      : `相手: ${ctx.clientName ?? ctx.counterpartName ?? '不明'}${surname ? `（宛名は「${surname}様」）` : ''}`;
+    ? `相手: ${ctx.contactName}（${ctx.contactRole ?? '関係者'}。依頼者 ${ctx.clientName ?? '不明'}${ctx.contactCaseTitle ? ` の「${ctx.contactCaseTitle}」` : ''} に関する対外的なやり取り。依頼者向けの砕けた説明や励ましは入れず、簡潔で丁寧な対外文書として書く）${orgName ? `（${orgAddressRule(ctx.channel, orgName, null)}）` : surname ? `（宛名は「${surname}様」${ctx.contactRole === '相手方代理人' ? 'または「先生」' : ''}）` : ''}`
+    : person && orgName
+      ? `相手: ${orgName} の担当者 ${ctx.personTitle ? `${ctx.personTitle} ` : ''}${person}（法人の依頼者。${orgAddressRule(ctx.channel, orgName, person)}）`
+      : rep
+        ? `相手: ${ctx.clientName ?? client!.name}（法人の依頼者。代表者は${rep}。宛名は会社名と代表者名で、例えばメールなら「${client!.name}\n${rep}　様」、LINE なら「${familyName(client!.representativeName ?? '')}様」。やり取りの相手が代表者以外の担当者と分かれば（署名など）、会社名の次の行にその人の氏名（フルネーム）を書いて「　様」を付ける）`
+        : orgName
+          ? `相手: ${addressee}（会社・団体の方。${orgAddressRule(ctx.channel, orgName, null)}）`
+          : `相手: ${addressee || '不明'}${surname ? `（宛名は「${surname}様」）` : ''}`;
   const user = `${counterpartLine}
 ${ctx.caseSummary ? `\n事件の現状メモ:\n${ctx.caseSummary}\n` : ''}
 【これまでのやり取り（新しいものが下）】

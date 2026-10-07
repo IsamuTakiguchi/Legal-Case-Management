@@ -63,6 +63,22 @@ const LONG_SURNAMES = [
 ];
 
 /**
+ * 差出人名や署名から、会社名（法人格を含む部分）だけを取り出す。
+ * 「CTF株式会社 Connect the Torch for Future 名児耶和峰」→「CTF株式会社」、「株式会社 のぼり 山田太郎」→「株式会社 のぼり」。
+ * 法人格が見当たらなければ、そのまま返す
+ */
+export function companyName(name: string): string {
+  const tokens = name.trim().split(/[\s　]+/).filter(Boolean);
+  const i = tokens.findIndex((t) => LEGAL_FORMS.some((lf) => t.includes(lf)));
+  if (i < 0) return name.trim();
+  const t = tokens[i]!;
+  if (!LEGAL_FORMS.includes(t)) return t;
+  // 法人格だけが離れている（「株式会社 のぼり」「のぼり 株式会社」）
+  if (i === 0 && tokens[1]) return `${t} ${tokens[1]}`;
+  return i > 0 ? `${tokens[i - 1]} ${t}` : t;
+}
+
+/**
  * 予定の件名やメールの宛名に使う「姓」。
  * 「山田 太郎」→ 山田、「瀧口勇」→ 瀧口、「佐々木健」→ 佐々木。
  * 会社・団体（「リスタートコンサルティング」「株式会社◯◯」）は姓ではないので、法人格だけ外して名前は切らない。
