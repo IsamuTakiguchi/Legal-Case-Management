@@ -8,7 +8,7 @@ import { fmtDateTime } from './format';
 import { messageLink, dateOnlyDeadline } from '@lcm/shared';
 import { ClientContactSetup } from './ClientContactSetup';
 
-type ConfirmChannel = 'gmail' | 'line';
+type ConfirmChannel = 'gmail' | 'line' | 'chatwork';
 
 interface ConfirmCtx {
   messageId: number;
@@ -30,13 +30,24 @@ interface ConfirmCtx {
   needsContact?: boolean;
 }
 
-const LABEL: Record<ConfirmChannel, string> = { gmail: 'Gmail', line: 'LINE' };
+const LABEL: Record<ConfirmChannel, string> = { gmail: 'Gmail', line: 'LINE', chatwork: 'Chatwork' };
 
 /**
  * 事務局から Chatwork で来た質問を、弁護士本人が依頼者に確認する文に書き直して、Gmail か LINE で送る。
  * 送ったあと、元の質問に Chatwork で「確認しました」と返せる。
  */
-export function ClientConfirmPanel({ messageId, onClose, onSent }: { messageId: number; onClose: () => void; onSent: () => void }) {
+export function ClientConfirmPanel({
+  messageId,
+  onClose,
+  onSent,
+  waitingTaskDefault = true,
+}: {
+  messageId: number;
+  onClose: () => void;
+  onSent: () => void;
+  /** 回答待ちのタスクを作るかの既定（タスク一覧から開いたときは、そのタスクを返信待ちにするので作らない） */
+  waitingTaskDefault?: boolean;
+}) {
   // 依頼者・事件を画面で選び直したら、送り先（メール・LINE）を引き直す
   const [pick, setPick] = useState<{ clientId: string; caseId: string }>({ clientId: '', caseId: '' });
   const qs = new URLSearchParams();
@@ -54,7 +65,7 @@ export function ClientConfirmPanel({ messageId, onClose, onSent }: { messageId: 
   const [subject, setSubject] = useState('');
   const [text, setText] = useState('');
   const [instruction, setInstruction] = useState('');
-  const [waiting, setWaiting] = useState(true);
+  const [waiting, setWaiting] = useState(waitingTaskDefault);
   const [followUp, setFollowUp] = useState('');
   const [notifyStaff, setNotifyStaff] = useState(true);
   const [staffText, setStaffText] = useState('');
@@ -135,7 +146,7 @@ export function ClientConfirmPanel({ messageId, onClose, onSent }: { messageId: 
   return (
     <section className="fade-in card space-y-2 border-blue-200 text-sm">
       <div className="flex flex-wrap items-center gap-2">
-        <h3 className="font-semibold">依頼者に確認（Gmail・LINE）</h3>
+        <h3 className="font-semibold">依頼者に確認（Gmail・LINE・Chatwork）</h3>
         {d?.fromStaff && <span className="badge badge-gray">事務局{d.staffName ? `・${d.staffName}` : ''}からの質問</span>}
         <button className="btn btn-sm ml-auto" onClick={onClose}>
           閉じる
@@ -216,12 +227,12 @@ export function ClientConfirmPanel({ messageId, onClose, onSent }: { messageId: 
                       onChange={() => {
                         setSel(keyOf(c));
                         // 事務局への返事の「Gmail で／LINE で」も合わせる
-                        setStaffText((t) => t.replace(/(Gmail|LINE)で確認/, `${LABEL[c.channel]}で確認`));
+                        setStaffText((t) => t.replace(/(Gmail|LINE|Chatwork)で確認/, `${LABEL[c.channel]}で確認`));
                       }}
                     />
                     {withPersons && c.recipient && <span className="text-slate-700">{c.recipient}</span>}
                     <span className="font-medium">{c.label}</span>
-                    <span className="text-xs text-slate-500">{c.channel === 'gmail' ? (c.subject ? `「${c.subject}」に返信` : `${c.to} に新しいメール`) : c.conversationId ? 'いつものトーク' : ''}</span>
+                    <span className="text-xs text-slate-500">{c.channel === 'gmail' ? (c.subject ? `「${c.subject}」に返信` : `${c.to} に新しいメール`) : c.conversationId ? (c.channel === 'chatwork' ? 'いつものルーム' : 'いつものトーク') : c.channel === 'chatwork' ? c.to : ''}</span>
                   </label>
                 ))}
               </div>

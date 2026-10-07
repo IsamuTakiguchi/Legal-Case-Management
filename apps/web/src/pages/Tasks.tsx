@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
@@ -12,6 +12,7 @@ import { useSort, readingKey, type SortOption } from '../lib/sort';
 import { Icon } from '../lib/icons';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 import { ChatworkTaskReply } from '../lib/ChatworkTaskReply';
+import { ClientConfirmPanel } from '../lib/ClientConfirmPanel';
 
 interface Task {
   id: number;
@@ -28,6 +29,8 @@ interface Task {
   dueAt: string | null;
   chatworkTaskId: number | null;
   chatworkReplyable?: boolean;
+  /** Chatwork で振られたタスクの元のメッセージ（取り込み済みなら）。ここから依頼者に確認できる */
+  confirmMessageId?: number | null;
   chatworkAssignedByName?: string | null;
   chatworkRepliedAt?: string | null;
   updatedAt: string;
@@ -134,6 +137,8 @@ export default function Tasks() {
   const update = useMutation({ mutationFn: (v: { id: number; patch: Record<string, unknown> }) => api.put(`/tasks/${v.id}`, v.patch), onSuccess: refresh });
   // 中身（タスク名・メモ）を直しているタスク
   const [editingId, setEditingId] = useState<number | null>(null);
+  // 事務局から振られた確認事項を、依頼者に確認するパネルを開いているタスク
+  const [confirmingId, setConfirmingId] = useState<number | null>(null);
   const nudge = useMutation({ mutationFn: (id: number) => api.post(`/tasks/${id}/nudge`), onSuccess: refresh });
   const importCw = useMutation({ mutationFn: () => api.post<{ imported: number; completed: number }>('/tasks/import-chatwork'), onSuccess: refresh });
   const now = Date.now();
@@ -273,7 +278,8 @@ export default function Tasks() {
             {rows.map((t) => {
               const over = t.followUpAt && new Date(t.followUpAt).getTime() < now && t.status !== 'done' && t.status !== 'open';
               return (
-                <tr key={t.id} className={`border-t border-slate-100 ${selected.has(t.id) ? 'bg-blue-50' : over ? 'bg-orange-50' : ''}`}>
+                <Fragment key={t.id}>
+                <tr className={`border-t border-slate-100 ${selected.has(t.id) ? 'bg-blue-50' : over ? 'bg-orange-50' : ''}`}>
                   <td className="w-px px-3 py-2">
                     <input type="checkbox" checked={selected.has(t.id)} onChange={(e) => toggle(t.id, e.target.checked)} aria-label="選択" />
                   </td>
@@ -328,6 +334,15 @@ export default function Tasks() {
                           {isWaitingStatus(t.status) ? '催促文を作成' : '会話を開く'}
                         </Link>
                       )}
+                      {t.confirmMessageId && t.status !== 'done' && (
+                        <button
+                          className="btn btn-sm"
+                          onClick={() => setConfirmingId(confirmingId === t.id ? null : t.id)}
+                          title="事務局から振られた確認事項を、自分から依頼者に確認する文に書き直して、Gmail・LINE・Chatwork で依頼者に送ります。送ると、このタスクを「依頼者の返信待ち」にします"
+                        >
+                          📨 依頼者に確認
+                        </button>
+                      )}
                       {isWaitingStatus(t.status) && (
                         <button className="btn btn-sm" onClick={() => nudge.mutate(t.id)}>
                           催促した
@@ -336,6 +351,23 @@ export default function Tasks() {
                     </div>
                   </td>
                 </tr>
+                {confirmingId === t.id && t.confirmMessageId && (
+                  <tr>
+                    <td colSpan={6} className="px-3 pb-3">
+                      <ClientConfirmPanel
+                        messageId={t.confirmMessageId}
+                        waitingTaskDefault={false}
+                        onClose={() => setConfirmingId(null)}
+                        onSent={() => {
+                          // 依頼者に確認したので、このタスクを依頼者の返信待ちにする（返信期限は設定の営業日数後）
+                          if (t.status !== 'waiting_client') update.mutate({ id: t.id, patch: { status: 'waiting_client' } });
+                          else refresh();
+                        }}
+                      />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               );
             })}
             {list.data?.length === 0 && (
