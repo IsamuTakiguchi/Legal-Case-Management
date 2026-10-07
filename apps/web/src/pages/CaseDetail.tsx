@@ -7,7 +7,7 @@ import { useDraftRecord, useDraftGroup, useDraft, DraftHint } from '../lib/draft
 import { RoomPicker } from '../lib/RoomPicker';
 import { HoldForm, HoldLocationEditor, HoldAddCandidates, fmtEventRange, type RescheduleTarget } from '../lib/HoldForm';
 import { LongText } from '../lib/LongText';
-import { TaskDeadlines, NewTaskDeadlines, TaskDeadlineSelect, FOLLOW_LABEL } from '../lib/Deadline';
+import { TaskDeadlines, NewTaskDeadlines, TaskDeadlineSelect, FOLLOW_LABEL, DUE_HINT, FOLLOW_HINT } from '../lib/Deadline';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { fmtDateTime, fmtDate, fmtYen, fmtBytes, toLocalInput, fromLocalInput, channelLabel } from '../lib/format';
 import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, messageLink, ACTIVE_TASK_STATUSES, taskStatusForWaiting, formatWareki, parseJaDate, addYearsIso, taskDeadline, jstYmd, actionDeadlinesLabel, isWaitingStatus, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
@@ -66,6 +66,60 @@ function dueYmd(due?: string | null): string | null {
 /** 次のアクション・タスク案の期限の表示（「締切 11/10(火)・返信期限 11/5(木)」） */
 function actionDue(a: { due?: string | null; replyBy?: string | null }): string {
   return actionDeadlinesLabel({ due: dueYmd(a.due), replyBy: dueYmd(a.replyBy) });
+}
+
+/** 次のアクション 1 件の締切・返信期限の入力（AI が読み取った日付が最初から入る。空ならなし） */
+function ActionDeadlineInputs({ due, replyBy, onChange }: { due: string; replyBy: string; onChange: (patch: { due?: string; replyBy?: string }) => void }) {
+  return (
+    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600">
+      <label className="flex items-center gap-1" title={DUE_HINT}>
+        締切
+        <input type="date" className="input w-auto py-0.5 text-xs" value={due} onChange={(e) => onChange({ due: e.target.value })} aria-label="締切" />
+      </label>
+      <label className="flex items-center gap-1" title={FOLLOW_HINT}>
+        返信期限
+        <input type="date" className="input w-auto py-0.5 text-xs" value={replyBy} onChange={(e) => onChange({ replyBy: e.target.value })} aria-label="返信期限" />
+      </label>
+    </span>
+  );
+}
+
+/** 編集中の次のアクション（日付は YYYY-MM-DD、空ならなし） */
+interface ActionRow {
+  title: string;
+  due: string;
+  replyBy: string;
+  taskId: number | null;
+}
+const toActionRow = (a: { title: string; due?: string | null; replyBy?: string | null; taskId?: number | null }): ActionRow => ({
+  title: a.title,
+  due: dueYmd(a.due) ?? '',
+  replyBy: dueYmd(a.replyBy) ?? '',
+  taskId: a.taskId ?? null,
+});
+
+/** 次のアクションを 1 件ずつ、内容・締切・返信期限で直す */
+function NextActionsEditor({ rows, onChange }: { rows: ActionRow[]; onChange: (rows: ActionRow[]) => void }) {
+  const set = (i: number, patch: Partial<ActionRow>) => onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  return (
+    <div className="space-y-1.5">
+      {rows.map((r, i) => (
+        <div key={i} className="space-y-1 rounded border border-slate-200 bg-white p-1.5">
+          <div className="flex items-center gap-1.5">
+            <input className="input min-w-0 flex-1 py-0.5 text-sm" value={r.title} onChange={(e) => set(i, { title: e.target.value })} placeholder="次のアクションの内容" aria-label="次のアクションの内容" />
+            {r.taskId && <span className="badge badge-blue whitespace-nowrap">タスク化済</span>}
+            <button type="button" className="text-slate-400 hover:text-red-600" onClick={() => onChange(rows.filter((_, j) => j !== i))} aria-label="この行を消す">
+              ✕
+            </button>
+          </div>
+          <ActionDeadlineInputs due={r.due} replyBy={r.replyBy} onChange={(p) => set(i, p)} />
+        </div>
+      ))}
+      <button type="button" className="btn btn-sm" onClick={() => onChange([...rows, { title: '', due: '', replyBy: '', taskId: null }])}>
+        ＋ 次のアクションを追加
+      </button>
+    </div>
+  );
 }
 
 interface TimelineItem {
@@ -1390,7 +1444,7 @@ function NoteComposer({ caseId, onSaved }: { caseId: number; onSaved: (note?: { 
             <div>
               <b>次のアクション:</b>
               {taskMode !== 'none' && <span className="ml-2 text-xs text-slate-500">チェックしたものを{taskMode === 'single' ? '1 つのタスクにまとめます' : 'それぞれタスクにします'}</span>}
-              <ul className="ml-1 mt-1 space-y-0.5">
+              <ul className="ml-1 mt-1 space-y-1.5">
                 {preview.nextActions.map((a, i) => (
                   <li key={i} className="flex items-start gap-1.5">
                     <input
@@ -1408,9 +1462,25 @@ function NoteComposer({ caseId, onSaved }: { caseId: number; onSaved: (note?: { 
                       }
                       aria-label="タスク化する"
                     />
-                    <span>
-                      {a.title}
-                      {actionDue(a) ? <span className="ml-1 whitespace-nowrap text-xs text-slate-500">（{actionDue(a)}）</span> : ''}
+                    <span className="min-w-0 flex-1 space-y-0.5">
+                      <span className="block">{a.title}</span>
+                      {/* 期限は AI が読み取った日付が入る。直してから保存できる */}
+                      <ActionDeadlineInputs
+                        due={dueYmd(a.due) ?? ''}
+                        replyBy={dueYmd(a.replyBy) ?? ''}
+                        onChange={(p) =>
+                          setPreview((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  nextActions: prev.nextActions.map((x, j) =>
+                                    j === i ? { ...x, ...(p.due !== undefined ? { due: p.due || null } : {}), ...(p.replyBy !== undefined ? { replyBy: p.replyBy || null } : {}) } : x,
+                                  ),
+                                }
+                              : prev,
+                          )
+                        }
+                      />
                     </span>
                   </li>
                 ))}
@@ -1447,18 +1517,15 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
   const [theirSaid, setTheirSaid] = useState(joinLines(n.theirSaid));
   const [ourSaid, setOurSaid] = useState(joinLines(n.ourSaid));
   const [decisions, setDecisions] = useState(joinLines(n.decisions));
-  // 次のアクションは「内容 | 締切 YYYY-MM-DD | 返信 YYYY-MM-DD」で 1 行 1 件（締切・返信はどちらも省ける）
-  const dateOf = (v: string | null | undefined) => (v && /\d{4}-\d{2}-\d{2}/.test(v) ? /\d{4}-\d{2}-\d{2}/.exec(v)![0] : null);
-  const actionLine = (a: { title: string; due?: string | null; replyBy?: string | null }) =>
-    `・${a.title}${dueYmd(a.due) ? ` | 締切 ${dueYmd(a.due)}` : ''}${dueYmd(a.replyBy) ? ` | 返信 ${dueYmd(a.replyBy)}` : ''}`;
-  const [nextActions, setNextActions] = useState(n.nextActions.map(actionLine).join('\n'));
+  // 次のアクションは 1 件ずつ、内容・締切・返信期限を持つ
+  const [nextActions, setNextActions] = useState<ActionRow[]>(n.nextActions.map(toActionRow));
   const WAITING = ['none', 'client', 'counterpart', 'court', 'creditor', 'other'] as const;
   // 古い記録に想定外の値が入っていても保存できるよう、選べる値に丸める
   const [waitingFor, setWaitingFor] = useState<string>(n.waitingFor && (WAITING as readonly string[]).includes(n.waitingFor) ? n.waitingFor : 'none');
   const [err, setErr] = useState('');
   const [aiMsg, setAiMsg] = useState('');
   // AI で整理する前の内容。押し間違えても戻せるようにしておく
-  const [beforeAi, setBeforeAi] = useState<{ gist: string; theirSaid: string; ourSaid: string; decisions: string; nextActions: string; waitingFor: string; counterpart: string; phone: string } | null>(null);
+  const [beforeAi, setBeforeAi] = useState<{ gist: string; theirSaid: string; ourSaid: string; decisions: string; nextActions: ActionRow[]; waitingFor: string; counterpart: string; phone: string } | null>(null);
   // 編集途中の内容を自動保存する。元の記録が変わっていたら戻さない
   const editDraft = useDraftGroup(`note:${n.id}:edit`, {
     counterpart: { value: counterpart, set: setCounterpart, base: n.counterpart ?? '' },
@@ -1482,7 +1549,8 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
       setTheirSaid(joinLines(r.theirSaid));
       setOurSaid(joinLines(r.ourSaid));
       setDecisions(joinLines(r.decisions));
-      setNextActions(r.nextActions.map(actionLine).join('\n'));
+      // タスク化済みのアクションと同じ内容なら、その結び付きを引き継ぐ
+      setNextActions(r.nextActions.map((a) => toActionRow({ ...a, taskId: n.nextActions.find((x) => x.title === a.title)?.taskId ?? null })));
       if ((WAITING as readonly string[]).includes(r.waitingFor)) setWaitingFor(r.waitingFor);
       // 相手・電話番号は、こちらで入れていなければ AI の読み取りで埋める
       if (!counterpart.trim() && r.counterpart) setCounterpart(r.counterpart);
@@ -1520,14 +1588,9 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
         theirSaid: lines(theirSaid),
         ourSaid: lines(ourSaid),
         decisions: lines(decisions),
-        nextActions: lines(nextActions).map((l) => {
-          const [title, ...rest] = l.split('|').map((x) => x.trim());
-          // 「返信」で始まるものは返信期限、それ以外（「締切」や日付だけ）は締切
-          const reply = rest.find((x) => /^返信/.test(x));
-          const due = rest.find((x) => !/^返信/.test(x));
-          const prev = n.nextActions.find((a) => a.title === title);
-          return { title: title!, due: dateOf(due), replyBy: dateOf(reply), taskId: prev?.taskId ?? null };
-        }),
+        nextActions: nextActions
+          .filter((a) => a.title.trim())
+          .map((a) => ({ title: a.title.trim(), due: a.due || null, replyBy: a.replyBy || null, taskId: a.taskId ?? n.nextActions.find((x) => x.title === a.title.trim())?.taskId ?? null })),
         waitingFor: waitingFor === 'none' ? null : waitingFor,
       }),
     onSuccess: () => {
@@ -1575,9 +1638,9 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
           <label className="label">決定事項（1 行 1 項目）</label>
           <textarea className="input min-h-14 text-sm" value={decisions} onChange={(e) => setDecisions(e.target.value)} />
         </div>
-        <div>
-          <label className="label" title="締切: そのことをいつまでに済ませるか ／ 返信: 依頼者・相手方などの返事をいつまで待つか">次のアクション（1 行 1 件。期限は「| 締切 2027-01-20 | 返信 2027-01-15」のように末尾に）</label>
-          <textarea className="input min-h-14 text-sm" value={nextActions} onChange={(e) => setNextActions(e.target.value)} />
+        <div className="md:col-span-2">
+          <label className="label" title="締切: そのことをいつまでに済ませるか ／ 返信期限: 依頼者・相手方などの返事をいつまで待つか">次のアクション（締切・返信期限は日付で。無ければ空のまま）</label>
+          <NextActionsEditor rows={nextActions} onChange={setNextActions} />
         </div>
       </div>
       <div>
