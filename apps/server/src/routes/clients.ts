@@ -467,11 +467,12 @@ clientRoutes.post('/case-notes/:id/tasks', async (c) => {
     .object({
       mode: z.enum(['each', 'single', 'custom', 'list']).default('custom'),
       tasks: z
-        .array(z.object({ title: z.string(), due: z.string().nullable().optional(), status: z.enum(TASK_STATUSES).optional(), note: z.string().nullable().optional() }))
+        .array(z.object({ title: z.string(), due: z.string().nullable().optional(), replyBy: z.string().nullable().optional(), status: z.enum(TASK_STATUSES).optional(), note: z.string().nullable().optional() }))
         .optional(),
       indexes: z.array(z.number().int().nonnegative()).optional(),
       title: z.string().nullable().optional(),
       due: z.string().nullable().optional(),
+      replyBy: z.string().nullable().optional(),
       status: z.enum(TASK_STATUSES).optional(),
       note: z.string().nullable().optional(),
       syncToChatwork: z.boolean().optional(),

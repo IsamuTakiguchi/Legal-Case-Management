@@ -1019,7 +1019,7 @@ describe('記録の編集', () => {
     expect(r.gist).toBe('新しい要旨');
     expect(r.theirSaid).toEqual(['相手方は和解案を提示']);
     expect(r.decisions).toEqual(['次回までに回答']);
-    expect(r.nextActions).toEqual([{ title: '書面作成', due: '2026-09-12', taskId: 42 }, { title: '依頼者に連絡', due: null, taskId: null }]);
+    expect(r.nextActions).toEqual([{ title: '書面作成', due: '2026-09-12', replyBy: null, taskId: 42 }, { title: '依頼者に連絡', due: null, replyBy: null, taskId: null }]);
     expect(r.waitingFor).toBe('client');
     expect(updateCaseNote(note.id, { waitingFor: null, counterpart: '  ' }).waitingFor).toBeNull();
     expect(() => updateCaseNote(999999, { gist: 'x' })).toThrow('記録');
@@ -1539,7 +1539,7 @@ describe('タスクの一括処理と、記録からのタスク化の単位', (
     expect(ids[2]).toBeNull();
     const task = db().select().from(schema.tasks).where(eq(schema.tasks.id, ids[0]!)).get()!;
     expect(task.title).toBe('依頼者に和解案を説明する ほか 1 件');
-    expect(task.note).toContain('・相手方へ回答する（期限 2026-09-18）');
+    expect(task.note).toContain('・相手方へ回答する（締切 2026/9/18(金)）');
     expect(task.note).toContain('和解案 300 万円の提示あり');
     expect(task.dueAt).toBe(new Date('2026-09-12T23:59:59.999+09:00').toISOString());
     // 1 件だけ選ぶと「ほか」は付かない

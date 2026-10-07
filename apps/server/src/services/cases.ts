@@ -2,7 +2,7 @@ import { and, eq, desc, gt, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/index.js';
 import { generateStructured, generateText } from '../integrations/anthropic.js';
-import { formatJaDateTime, formatJaDate, fixDueYear, dateOnlyDeadline, WAITING_FOR, CASE_NOTE_KIND_LABEL, OPEN_CASE_STATUSES, CASE_CONTACT_ROLE_LABEL, taskStatusForWaiting, ACTIVE_TASK_STATUSES, parseJaDate, formatWareki, CASE_STATUSES, type CaseStatus, type CaseInput, type CaseNoteInput, type CaseNoteKind, type CaseContactRole, type TaskStatus } from '@lcm/shared';
+import { formatJaDateTime, formatJaDate, fixDueYear, dateOnlyDeadline, actionDeadlinesLabel, isWaitingStatus, WAITING_FOR, CASE_NOTE_KIND_LABEL, OPEN_CASE_STATUSES, CASE_CONTACT_ROLE_LABEL, taskStatusForWaiting, ACTIVE_TASK_STATUSES, parseJaDate, formatWareki, CASE_STATUSES, type CaseStatus, type CaseInput, type CaseNoteInput, type CaseNoteKind, type CaseContactRole, type TaskStatus } from '@lcm/shared';
 import { createTask, chatworkReplyable } from './tasks.js';
 import { syncClientFolderWithStatus } from './clientFolders.js';
 import { logger } from '../logger.js';
@@ -243,7 +243,14 @@ const phoneMemoSchema = z.object({
   phone: z.string().nullable().describe('メモに電話番号があればそのまま（ハイフン付き）。無ければ null'),
   decisions: z.array(z.string()).describe('決定事項・合意事項'),
   nextActions: z
-    .array(z.object({ title: z.string(), due: z.string().nullable().describe('期限 YYYY-MM-DD。不明なら null'), owner: z.enum(['self', 'client', 'counterpart', 'court', 'other']) }))
+    .array(
+      z.object({
+        title: z.string(),
+        due: z.string().nullable().describe('締切 YYYY-MM-DD: そのこと自体をいつまでに済ませるか（例: 答弁書の提出期限、回答期限）。不明なら null'),
+        replyBy: z.string().nullable().describe('返信期限 YYYY-MM-DD: 依頼者・相手方・裁判所などの返事や資料をいつまで待つか（例: 答弁書案への依頼者の返事は 10/10 まで）。待つものでなければ null'),
+        owner: z.enum(['self', 'client', 'counterpart', 'court', 'other']),
+      }),
+    )
     .describe('タスクとして追いかける価値のある「次のアクション」だけを、多くても 3 件。細かい手順は 1 件にまとめる'),
   waitingFor: z.enum(WAITING_FOR).describe('この後、誰の対応待ちになるか（staff は事務所の職員＝事務局）'),
   counterpart: z.string().nullable().describe('通話相手（メモから分かれば）'),
@@ -259,6 +266,7 @@ export async function structureNote(rawText: string, ctx: { caseTitle?: string; 
       '法律事務所の事務補助者として、弁護士の走り書きメモを整理します。事実の創作はせず、メモにある内容だけを使います。日付は今日を基準に解釈します。',
       '年の書かれていない日付（「11/10」「11月10日」など）は、今日以降で最も近いその日付にします（今日より前の月日なら来年）。ただし、すでに過ぎた出来事の日付として書かれているものは今年のままにします。',
       '「相手が言ったこと」と「こちら（弁護士）が言ったこと」は必ず分けてください。「〜とのこと」「〜と言われた」「先方は〜」は相手の発言、「〜と伝えた」「〜と回答」「こちらからは〜」は自分の発言です。どちらか判然としない場合は文脈で判断し、決定事項と重複しても構いません。',
+      '次のアクションの期限は 2 つに分けます。due（締切）はそのこと自体をいつまでに済ませるか（提出期限・回答期限など）、replyBy（返信期限）は依頼者・相手方などの返事や資料をいつまで待つかです。例: 「答弁書は 10/15 提出。答弁書案を依頼者に送り 10/10 までに返事をもらう」→ due=10/15、replyBy=10/10。メモに無い期限は作らず null にします。',
       '次のアクションは、弁護士がタスクとして追いかける単位で挙げます。細かく分けず、ひとまとまりの仕事は 1 件にします（例: 「依頼者に和解案を説明して意向を確認し、来週金曜までに相手方へ回答する」は 1 件）。多くても 3 件。決定事項の言い換えや、すでに終わったこと、「メモを残す」のような当然の作業は含めません。何も無ければ空にします。',
     ].join('\n'),
     user: `今日: ${today}\n事件: ${ctx.caseTitle ?? '不明'}\n依頼者: ${ctx.clientName ?? '不明'}\n種別: ${ctx.kind}\n相手: ${ctx.counterpart ?? '（メモから判断）'}\n電話番号: ${ctx.phone ?? '（メモから判断）'}\n\nメモ:\n${rawText}`,
@@ -267,7 +275,7 @@ export async function structureNote(rawText: string, ctx: { caseTitle?: string; 
     maxTokens: 2000,
   });
   // それでも去年などになっていたら直す
-  return { ...r, nextActions: r.nextActions.map((a) => ({ ...a, due: fixDueYear(a.due) })) };
+  return { ...r, nextActions: r.nextActions.map((a) => ({ ...a, due: fixDueYear(a.due), replyBy: fixDueYear(a.replyBy) })) };
 }
 
 export interface AddNoteOptions {
@@ -294,7 +302,7 @@ export async function addCaseNote(input: CaseNoteInput, opts: AddNoteOptions = {
     const s = await structureNote(input.rawText, { caseTitle: c.title, clientName: client?.name, kind: input.kind, counterpart, phone });
     gist = s.gist;
     decisions = s.decisions;
-    nextActions = s.nextActions.map((a) => ({ title: a.title, due: a.due }));
+    nextActions = s.nextActions.map((a) => ({ title: a.title, due: a.due, replyBy: a.replyBy }));
     waitingFor = s.waitingFor;
     counterpart = counterpart ?? s.counterpart ?? null;
     phone = phone ?? s.phone ?? null;
@@ -325,20 +333,17 @@ export async function addCaseNote(input: CaseNoteInput, opts: AddNoteOptions = {
   const chosen = nextActions.map((a, i) => ({ a, i })).filter(({ i }) => !opts.taskIndexes || opts.taskIndexes.includes(i));
   if (opts.createTasks && chosen.length) {
     const status = taskStatusForWaiting(waitingFor);
-    // 記録の期限は日付だけ（時刻は決めない）
-    const dueIso = (due?: string | null) => (due ? dateOnlyDeadline(due) : null);
     const updated: typeof nextActions = nextActions.map((a) => ({ ...a }));
     if (opts.createTasks === 'single') {
-      // 1 つのタスクにまとめる: 題名は先頭のアクション（複数なら「ほか n 件」）、メモに全アクションと要旨、期限は最も早いもの
+      // 1 つのタスクにまとめる: 題名は先頭のアクション（複数なら「ほか n 件」）、メモに全アクションと要旨、締切・返信期限はそれぞれ最も早いもの
       const first = chosen[0].a;
       const title = chosen.length === 1 ? first.title : `${first.title} ほか ${chosen.length - 1} 件`;
-      const dues = chosen.map(({ a }) => a.due).filter((d): d is string => !!d).sort();
-      const note = [chosen.map(({ a }) => `・${a.title}${a.due ? `（期限 ${a.due}）` : ''}`).join('\n'), gist ? `\n${gist}` : ''].join('\n').trim();
-      const t = await createTask({ title, clientId: c.clientId, caseId: c.id, conversationId: null, status, followUpAt: dueIso(dues[0] ?? null), note, syncToChatwork: false });
+      const note = [chosen.map(({ a }) => `・${a.title}${actionNote(a)}`).join('\n'), gist ? `\n${gist}` : ''].join('\n').trim();
+      const t = await createTask({ title, clientId: c.clientId, caseId: c.id, conversationId: null, status, ...taskDeadlinesOf(earliestOf(chosen.map(({ a }) => a)), status), note, syncToChatwork: false });
       for (const { i } of chosen) updated[i] = { ...updated[i], taskId: t.id };
     } else {
       for (const { a, i } of chosen) {
-        const t = await createTask({ title: a.title, clientId: c.clientId, caseId: c.id, conversationId: null, status, followUpAt: dueIso(a.due), note: gist, syncToChatwork: false });
+        const t = await createTask({ title: a.title, clientId: c.clientId, caseId: c.id, conversationId: null, status, ...taskDeadlinesOf(a, status), note: gist, syncToChatwork: false });
         updated[i] = { ...updated[i], taskId: t.id };
       }
     }
@@ -354,7 +359,8 @@ const noteTaskSuggestionSchema = z.object({
     .array(
       z.object({
         title: z.string().describe('タスク名。弁護士が見て何をするか分かる言い方で、40 字以内'),
-        due: z.string().nullable().describe('期限 YYYY-MM-DD。記録から読み取れなければ null'),
+        due: z.string().nullable().describe('締切 YYYY-MM-DD: そのタスク自体をいつまでに済ませるか（例: 答弁書の提出期限）。記録から読み取れなければ null'),
+        replyBy: z.string().nullable().describe('返信期限 YYYY-MM-DD: 返信待ちのタスクで、依頼者・相手方などの返事をいつまで待つか（例: 答弁書案への依頼者の返事）。返信待ちでない・読み取れなければ null'),
         status: z.enum(ACTIVE_TASK_STATUSES).describe('こちらが動くなら open、依頼者の返事待ちなら waiting_client、相手方・裁判所・保険会社などの待ちなら waiting_other、事務局（事務所の職員）の回答や作業を待つなら waiting_staff'),
         note: z.string().describe('そのタスクのメモ（背景・決まったこと）。1〜2 文'),
       }),
@@ -393,7 +399,7 @@ export async function suggestNoteTasks(noteId: number): Promise<NoteTaskSuggesti
     row.theirSaid.length ? `相手が言ったこと:\n${row.theirSaid.map((x) => `・${x}`).join('\n')}` : '',
     row.ourSaid.length ? `こちらが言ったこと:\n${row.ourSaid.map((x) => `・${x}`).join('\n')}` : '',
     row.decisions.length ? `決定事項:\n${row.decisions.map((x) => `・${x}`).join('\n')}` : '',
-    row.nextActions.length ? `記録にある次のアクション:\n${row.nextActions.map((a) => `・${a.title}${a.due ? `（期限 ${dueDate(a.due)}）` : ''}${a.taskId ? '（タスク化済み）' : ''}`).join('\n')}` : '',
+    row.nextActions.length ? `記録にある次のアクション:\n${row.nextActions.map((a) => `・${a.title}${actionNote(a)}${a.taskId ? '（タスク化済み）' : ''}`).join('\n')}` : '',
     row.waitingFor && row.waitingFor !== 'none' ? `待ち: ${row.waitingFor}` : '',
     `元メモ:\n${row.rawText ?? ''}`,
     open.length ? `この事件の未了タスク（重複させない）:\n${open.map((t) => `・${t.title}`).join('\n')}` : '',
@@ -405,6 +411,7 @@ export async function suggestNoteTasks(noteId: number): Promise<NoteTaskSuggesti
       'タスクは「弁護士や事務局が実際に手を動かす単位」で挙げます。細かい手順に分けず、ひとまとまりの仕事は 1 件にします。多くても 4 件。',
       'すでに終わったこと、決定事項の言い換え、「記録を残す」のような当然の作業、事件の未了タスクと同じ内容は挙げません。挙げるものが無ければ tasks は空にします。',
       '期限は記録から読み取れるときだけ入れます（「来週金曜まで」なども今日を基準に日付にします）。読み取れなければ null にします。',
+      '期限は 2 つに分けます。due（締切）はタスク自体の締切（提出期限・回答期限など）、replyBy（返信期限）は返信待ちのタスクで返事をいつまで待つか。例: 答弁書の提出期限が 10/15 で、答弁書案への依頼者の返事を 10/10 まで待つなら、「答弁書案について依頼者の返事待ち」（waiting_client、replyBy=10/10、due=10/15）のように両方入れます。',
       '年の書かれていない期限（「11/10」など）は、今日以降で最も近いその日付にします（今日より前の月日なら来年）。',
       'タスク化済みと書かれている次のアクションは、もう一度挙げません。',
     ].join('\n'),
@@ -412,7 +419,7 @@ export async function suggestNoteTasks(noteId: number): Promise<NoteTaskSuggesti
     schema: noteTaskSuggestionSchema,
     effort: 'low',
     maxTokens: 2000,
-  }).then((r) => ({ ...r, tasks: r.tasks.map((t) => ({ ...t, due: fixDueYear(t.due) })) }));
+  }).then((r) => ({ ...r, tasks: r.tasks.map((t) => ({ ...t, due: fixDueYear(t.due), replyBy: isWaitingStatus(t.status) ? fixDueYear(t.replyBy) : null })) }));
 }
 
 /** 保存済みの記録からタスクを作るときの指定 */
@@ -420,13 +427,15 @@ export interface NoteTaskInput {
   /** each = 次のアクションごと / single = まとめて 1 件 / custom = 題名で 1 件 / list = 画面で直した案をそのまま登録 */
   mode: 'each' | 'single' | 'custom' | 'list';
   /** list のとき登録するタスク（AI の案を直したもの） */
-  tasks?: { title: string; due?: string | null; status?: TaskStatus; note?: string | null }[];
+  tasks?: { title: string; due?: string | null; replyBy?: string | null; status?: TaskStatus; note?: string | null }[];
   /** each・single のとき、タスクにする「次のアクション」の番号（省略すると未タスク化のものすべて） */
   indexes?: number[];
   /** custom のときの題名 */
   title?: string | null;
-  /** 期限（YYYY-MM-DD。省略するとアクションの期限、それも無ければ既定の日数後） */
+  /** 締切（YYYY-MM-DD。省略するとアクションの締切） */
   due?: string | null;
+  /** 返信期限（YYYY-MM-DD。返信待ちのとき。省略するとアクションの返信期限、それも無ければ既定の日数後） */
+  replyBy?: string | null;
   status?: TaskStatus;
   note?: string | null;
   syncToChatwork?: boolean;
@@ -446,6 +455,35 @@ const dueToIso = (due?: string | null) => {
   const d = dueDate(due);
   return d ? dateOnlyDeadline(d) : null;
 };
+
+/** メモや AI への説明に添える期限（「（締切 11/10(火)・返信期限 11/5(木)）」） */
+function actionNote(a: { due?: string | null; replyBy?: string | null }): string {
+  const label = actionDeadlinesLabel({ due: dueDate(a.due), replyBy: dueDate(a.replyBy) }, { withYear: true });
+  return label ? `（${label}）` : '';
+}
+
+/** いくつかのアクションをまとめるときの期限（締切・返信期限それぞれ最も早いもの） */
+function earliestOf(list: { due?: string | null; replyBy?: string | null }[]): { due: string | null; replyBy?: string | null } {
+  const min = (xs: (string | null | undefined)[]) => xs.map(dueDate).filter((x): x is string => !!x).sort()[0] ?? null;
+  // 返信期限を持たない古い記録だけなら、古い読み方（返信待ちの期限＝期限）に合わせて undefined のままにする
+  const hasReply = list.some((a) => a.replyBy !== undefined);
+  return { due: min(list.map((a) => a.due)), ...(hasReply ? { replyBy: min(list.map((a) => a.replyBy)) } : {}) };
+}
+
+/**
+ * 次のアクション・タスク案の期限を、タスクの締切（dueAt）と返信期限（followUpAt）に振り分ける。
+ * 返信期限の項目を持たない古い記録は、以前の読み方のまま（返信待ちなら期限を返信期限にする）
+ */
+export function taskDeadlinesOf(a: { due?: string | null; replyBy?: string | null }, status: TaskStatus): { dueAt: string | null; followUpAt: string | null } {
+  const waiting = isWaitingStatus(status);
+  if (a.replyBy === undefined && waiting) return { dueAt: null, followUpAt: dueToIso(a.due) };
+  return { dueAt: dueToIso(a.due), followUpAt: waiting ? dueToIso(a.replyBy) : null };
+}
+
+/** 画面で締切・返信期限を入れたら、アクションの期限より優先する */
+function withOverride(a: { due?: string | null; replyBy?: string | null }, input: { due?: string | null; replyBy?: string | null }) {
+  return { ...a, ...(input.due ? { due: input.due } : {}), ...(input.replyBy ? { replyBy: input.replyBy } : {}) };
+}
 
 /**
  * 保存済みの記録をタスクにする。
@@ -467,16 +505,19 @@ export async function createTasksFromNote(noteId: number, input: NoteTaskInput) 
     const list = (input.tasks ?? []).map((t) => ({ ...t, title: t.title.trim() })).filter((t) => t.title);
     if (list.length === 0) throw new Error('登録するタスクがありません');
     for (const t of list) {
-      const created0 = await createTask({ ...base, status: t.status ?? status, title: t.title, followUpAt: dueToIso(t.due ?? input.due), note: t.note ?? row.gist ?? null });
+      const st = t.status ?? status;
+      const dl = { due: t.due ?? input.due ?? null, replyBy: t.replyBy ?? input.replyBy ?? null };
+      const created0 = await createTask({ ...base, status: st, title: t.title, ...taskDeadlinesOf(dl, st), note: t.note ?? row.gist ?? null });
       created.push({ id: created0.id, title: created0.title });
-      actions.push({ title: t.title, due: dueDate(t.due ?? input.due), taskId: created0.id });
+      actions.push({ title: t.title, due: dueDate(dl.due), replyBy: isWaitingStatus(st) ? dueDate(dl.replyBy) : null, taskId: created0.id });
     }
   } else if (input.mode === 'custom') {
     const title = (input.title ?? '').trim() || noteHeadline(row);
-    const t = await createTask({ ...base, title, followUpAt: dueToIso(input.due), note: input.note ?? row.gist ?? null });
+    const dl = { due: input.due ?? null, replyBy: input.replyBy ?? null };
+    const t = await createTask({ ...base, title, ...taskDeadlinesOf(dl, status), note: input.note ?? row.gist ?? null });
     created.push({ id: t.id, title: t.title });
     // 記録にも「タスクにしたもの」として残す
-    actions.push({ title, due: dueDate(input.due), taskId: t.id });
+    actions.push({ title, due: dueDate(dl.due), replyBy: isWaitingStatus(status) ? dueDate(dl.replyBy) : null, taskId: t.id });
   } else {
     // 指定が無ければ、まだタスクにしていないアクションを全部
     const chosen = actions.map((a, i) => ({ a, i })).filter(({ a, i }) => (input.indexes ? input.indexes.includes(i) : !a.taskId) && !a.taskId);
@@ -484,14 +525,13 @@ export async function createTasksFromNote(noteId: number, input: NoteTaskInput) 
     if (input.mode === 'single') {
       const first = chosen[0]!.a;
       const title = (input.title ?? '').trim() || (chosen.length === 1 ? first.title : `${first.title} ほか ${chosen.length - 1} 件`);
-      const dues = chosen.map(({ a }) => a.due).filter((x): x is string => !!x).sort();
-      const note = input.note ?? [chosen.map(({ a }) => `・${a.title}${a.due ? `（期限 ${dueDate(a.due)}）` : ''}`).join('\n'), row.gist ? `\n${row.gist}` : ''].join('\n').trim();
-      const t = await createTask({ ...base, title, followUpAt: dueToIso(input.due ?? dues[0] ?? null), note });
+      const note = input.note ?? [chosen.map(({ a }) => `・${a.title}${actionNote(a)}`).join('\n'), row.gist ? `\n${row.gist}` : ''].join('\n').trim();
+      const t = await createTask({ ...base, title, ...taskDeadlinesOf(withOverride(earliestOf(chosen.map(({ a }) => a)), input), status), note });
       created.push({ id: t.id, title: t.title });
       for (const { i } of chosen) actions[i] = { ...actions[i]!, taskId: t.id };
     } else {
       for (const { a, i } of chosen) {
-        const t = await createTask({ ...base, title: a.title, followUpAt: dueToIso(input.due ?? a.due), note: input.note ?? row.gist ?? null });
+        const t = await createTask({ ...base, title: a.title, ...taskDeadlinesOf(withOverride(a, input), status), note: input.note ?? row.gist ?? null });
         created.push({ id: t.id, title: t.title });
         actions[i] = { ...actions[i]!, taskId: t.id };
       }
@@ -519,7 +559,7 @@ export function updateCaseNote(id: number, patch: Partial<Omit<CaseNoteInput, 'c
   if (patch.decisions !== undefined) set.decisions = patch.decisions.map((x) => x.trim()).filter(Boolean);
   if (patch.nextActions !== undefined) {
     set.nextActions = patch.nextActions
-      .map((a) => ({ title: a.title.trim(), due: a.due || null, taskId: a.taskId ?? cur.nextActions.find((x) => x.title === a.title.trim())?.taskId ?? null }))
+      .map((a) => ({ title: a.title.trim(), due: a.due || null, replyBy: a.replyBy || null, taskId: a.taskId ?? cur.nextActions.find((x) => x.title === a.title.trim())?.taskId ?? null }))
       .filter((a) => a.title);
   }
   if (patch.waitingFor !== undefined) set.waitingFor = patch.waitingFor ?? null;

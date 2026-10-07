@@ -103,3 +103,21 @@ export function fixDueYear(ymd: string | null | undefined, now = new Date()): st
   while (at(y) < limit) y++;
   return at(y);
 }
+
+/** 「2026-11-10」→「11/10(火)」（年が今年でなければ、または withYear なら「2027/1/5(火)」） */
+export function shortYmd(ymd: string | null | undefined, now = new Date(), withYear = false): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(ymd ?? '');
+  if (!m) return '';
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const wd = WEEKDAY_JA[new Date(Date.UTC(y, mo - 1, d)).getUTCDay()];
+  return y === toJstParts(now).year && !withYear ? `${mo}/${d}(${wd})` : `${y}/${mo}/${d}(${wd})`;
+}
+
+/**
+ * 次のアクション・タスク案の期限の表示（「締切 11/10(火)・返信期限 11/5(木)」）。無ければ空。
+ * 保存する文（タスクのメモなど）には withYear で年を付ける（来年読んでも分かるように）
+ */
+export function actionDeadlinesLabel(a: { due?: string | null; replyBy?: string | null }, opts: { now?: Date; withYear?: boolean } = {}): string {
+  const f = (x: string) => shortYmd(x, opts.now ?? new Date(), opts.withYear);
+  return [a.due ? `締切 ${f(a.due)}` : '', a.replyBy ? `返信期限 ${f(a.replyBy)}` : ''].filter(Boolean).join('・');
+}
