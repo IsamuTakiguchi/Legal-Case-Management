@@ -6,7 +6,8 @@ import { LongText } from '../lib/LongText';
 import { useDraft, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
 import { fmtDate, fmtRelative } from '../lib/format';
-import { TaskDeadlines, NewTaskDeadlines } from '../lib/Deadline';
+import { TaskDeadlines, NewTaskDeadlines, fmtDeadline } from '../lib/Deadline';
+import { MemoBadge } from '../lib/Memo';
 import { TASK_STATUSES, TASK_STATUS_LABEL, taskDeadline, isWaitingStatus, type TaskStatus } from '@lcm/shared';
 import { useSort, readingKey, type SortOption } from '../lib/sort';
 import { Icon } from '../lib/icons';
@@ -33,6 +34,9 @@ interface Task {
   confirmMessageId?: number | null;
   chatworkAssignedByName?: string | null;
   chatworkRepliedAt?: string | null;
+  /** 時期未定の備忘のきっかけ（「和解の前」など）と、見直す日 */
+  trigger?: string | null;
+  reviewAt?: string | null;
   updatedAt: string;
 }
 
@@ -75,9 +79,10 @@ export default function Tasks() {
   const [newFollowUp, setNewFollowUp] = useState<string | null>(null);
   const [newDue, setNewDue] = useState<string | null>(null);
   const [sync, setSync] = useState(false);
-  const list = useQuery({ queryKey: ['tasks', status], queryFn: () => api.get<Task[]>(`/tasks?status=${status}`), refetchInterval: 60_000 });
+  // 「時期未定の備忘」は、未完了のうちきっかけ付きで締切がまだ無いもの
+  const list = useQuery({ queryKey: ['tasks', status], queryFn: () => api.get<Task[]>(`/tasks?status=${status === 'memo' ? 'active' : status}`), refetchInterval: 60_000 });
   const sort = useSort('tasks', TASK_SORTS, 'deadline');
-  const rows = sort.apply(list.data ?? []);
+  const rows = sort.apply((list.data ?? []).filter((t) => status !== 'memo' || (t.trigger && !t.dueAt)));
   const [clientId, setClientId] = useState('');
   const [caseId, setCaseId] = useState('');
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -140,6 +145,7 @@ export default function Tasks() {
   // 事務局から振られた確認事項を、依頼者に確認するパネルを開いているタスク
   const [confirmingId, setConfirmingId] = useState<number | null>(null);
   const nudge = useMutation({ mutationFn: (id: number) => api.post(`/tasks/${id}/nudge`), onSuccess: refresh });
+  const snooze = useMutation({ mutationFn: (id: number) => api.post(`/tasks/${id}/memo-snooze`, { days: 14 }), onSuccess: refresh });
   const importCw = useMutation({ mutationFn: () => api.post<{ imported: number; completed: number }>('/tasks/import-chatwork'), onSuccess: refresh });
   const now = Date.now();
   return (
@@ -149,6 +155,7 @@ export default function Tasks() {
         <select className="input ml-auto w-auto" value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="active">未完了</option>
           <option value="waiting">連絡待ち（依頼者・相手方・事務局）</option>
+          <option value="memo">時期未定の備忘</option>
           {TASK_STATUSES.map((s) => (
             <option key={s} value={s}>
               {TASK_STATUS_LABEL[s]}
@@ -312,6 +319,11 @@ export default function Tasks() {
                           <span className="font-medium">{t.title}</span>
                         )}
                         {t.chatworkTaskId && <span className="badge badge-chatwork ml-1">CW</span>}
+                        {t.trigger && (
+                          <span className="ml-1">
+                            <MemoBadge trigger={t.trigger} reviewAt={t.reviewAt} />
+                          </span>
+                        )}
                         <TaskEditButton className="ml-2" onClick={() => setEditingId(t.id)} />
                         <ChatworkTaskReply task={t} onDone={refresh} onSent={setMsg} />
                         {t.chatworkReplyable && t.chatworkAssignedByName && <div className="text-[11px] text-slate-500">{t.chatworkAssignedByName}さんから（Chatwork）</div>}
@@ -326,6 +338,15 @@ export default function Tasks() {
                     {t.waitingSince && <div>{fmtRelative(t.waitingSince)}から待ち</div>}
                     {/* 締切は対応中でも返信待ちでも同じ欄（返信待ちにしても消えない）。返信待ちは返信期限も */}
                     <TaskDeadlines task={t} onChange={(patch) => update.mutate({ id: t.id, patch })} />
+                    {/* 時期未定の備忘: 締切が決まるまでは見直す日を出し、「まだ未定」で先に延ばせる */}
+                    {t.trigger && !t.dueAt && t.status !== 'done' && (
+                      <div className="mt-0.5 flex items-center gap-1">
+                        <span className={t.reviewAt && new Date(t.reviewAt).getTime() < now ? 'font-semibold text-orange-600' : 'text-slate-500'}>見直し {t.reviewAt ? fmtDeadline(t.reviewAt) : '未設定'}</span>
+                        <button className="btn btn-sm px-1.5 py-0 text-[11px]" disabled={snooze.isPending} onClick={() => snooze.mutate(t.id)} title="まだ時期が決まっていないので、2 週間後にまた見直します">
+                          まだ未定
+                        </button>
+                      </div>
+                    )}
                   </td>
                   <td className="w-px whitespace-nowrap px-3 py-2 text-right">
                     <div className="flex justify-end gap-1">

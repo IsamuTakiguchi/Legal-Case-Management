@@ -6,6 +6,7 @@ import { formatJaDateTime, formatJaDate, fixDueYear, dateOnlyDeadline, actionDea
 import { createTask, chatworkReplyable } from './tasks.js';
 import { syncClientFolderWithStatus } from './clientFolders.js';
 import { logger } from '../logger.js';
+import { checkMemosForNoteInBackground } from './memos.js';
 
 export type CaseRow = typeof schema.cases.$inferSelect;
 
@@ -330,6 +331,12 @@ export async function addCaseNote(input: CaseNoteInput, opts: AddNoteOptions = {
     })
     .returning()
     .get();
+  // この事件の時期未定の備忘（「和解の前に報告」など）のきっかけが来ていないかを裏で見る
+  try {
+    checkMemosForNoteInBackground(row.id, c.id);
+  } catch (err) {
+    logger.warn({ err }, '備忘のきっかけの判定の起動に失敗');
+  }
   const chosen = nextActions.map((a, i) => ({ a, i })).filter(({ i }) => !opts.taskIndexes || opts.taskIndexes.includes(i));
   if (opts.createTasks && chosen.length) {
     const status = taskStatusForWaiting(waitingFor);

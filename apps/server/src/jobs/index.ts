@@ -7,6 +7,7 @@ import { pollChatwork } from './chatworkPoll.js';
 import { morningDigest } from './digest.js';
 import { syncCalendar, checkPostEvents } from '../services/court.js';
 import { checkOverdueWaitingTasks, importChatworkTasks } from '../services/tasks.js';
+import { checkMemoReviews } from '../services/memos.js';
 import { checkStaleSessions } from '../services/scheduling.js';
 import { checkCreditorOverdue } from '../services/creditors.js';
 import { flushAlertNotifications } from '../services/notify.js';
@@ -86,7 +87,7 @@ export const JOBS: JobDef[] = [
   { name: 'chatworkSweep', label: 'Chatwork 全ルームの取りこぼし拾い（毎晩）', cron: '20 18 * * *', run: () => pollChatwork({ allRooms: true }), enabled: () => isConfigured('chatwork') },
   { name: 'calendarSync', label: 'カレンダー同期', cron: '*/15 * * * *', run: syncCalendar, enabled: () => isGoogleConnected() },
   { name: 'postEventCheck', label: '期日終了後の次回期日確認', cron: '5,20,35,50 * * * *', run: async () => ({ alerts: checkPostEvents() }), enabled: () => true },
-  { name: 'waitingCheck', label: '返信待ちの期限確認', cron: '10 * * * *', run: async () => ({ overdue: checkOverdueWaitingTasks(), stale: checkStaleSessions(), creditors: checkCreditorOverdue() }), enabled: () => true },
+  { name: 'waitingCheck', label: '返信待ちの期限確認', cron: '10 * * * *', run: async () => ({ overdue: checkOverdueWaitingTasks(), stale: checkStaleSessions(), creditors: checkCreditorOverdue(), memos: checkMemoReviews() }), enabled: () => true },
   { name: 'notifyAlerts', label: 'アラート通知', cron: '15,45 * * * *', run: async () => ({ notified: await flushAlertNotifications() }), enabled: () => isConfigured('chatwork') },
   // Chatwork のタスクは 10 分ごとに自動で取り込む（画面のボタンを押さなくてよい）
   { name: 'chatworkTasks', label: 'Chatwork タスクの自動取込（10 分ごと）', cron: '*/10 * * * *', run: importChatworkTasks, enabled: () => isConfigured('chatwork'), quiet: true },

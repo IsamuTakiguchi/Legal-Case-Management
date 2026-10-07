@@ -17,6 +17,11 @@ export function defaultFollowUp(from = new Date()): Date {
   return new Date(dateOnlyDeadline(jstYmd(d)));
 }
 
+/** 時期未定の備忘を見直す日の既定（2 週間後。日付だけ） */
+export function defaultMemoReview(from = new Date(), days = 14): Date {
+  return new Date(dateOnlyDeadline(jstYmd(new Date(from.getTime() + days * 86400_000))));
+}
+
 export async function createTask(input: TaskInput): Promise<TaskRow> {
   const now = new Date().toISOString();
   const waiting = isWaitingStatus(input.status);
@@ -38,6 +43,10 @@ export async function createTask(input: TaskInput): Promise<TaskRow> {
       // 対応中のタスクの期限は期日（dueAt）に持つ。連絡待ちの期限（followUpAt）とは分ける
       followUpAt: waiting ? (input.followUpAt ?? defaultFollowUp().toISOString()) : null,
       dueAt: input.dueAt ?? (waiting ? null : (input.followUpAt ?? null)),
+      trigger: input.trigger?.trim() || null,
+      // 時期未定の備忘は、見直す日を決めておく（既定は 2 週間後）
+      reviewAt: input.trigger?.trim() ? (input.reviewAt ?? defaultMemoReview().toISOString()) : null,
+      sourceMessageId: input.sourceMessageId ?? null,
     })
     .returning()
     .get();
@@ -71,6 +80,14 @@ export function updateTask(id: number, patch: Partial<TaskInput> & { status?: Ta
   if (patch.conversationId !== undefined) set.conversationId = patch.conversationId ?? null;
   if (patch.followUpAt !== undefined) set.followUpAt = patch.followUpAt ?? null;
   if (patch.dueAt !== undefined) set.dueAt = patch.dueAt ?? null;
+  if (patch.trigger !== undefined) {
+    set.trigger = patch.trigger?.trim() || null;
+    if (set.trigger && !cur.reviewAt && patch.reviewAt === undefined) set.reviewAt = defaultMemoReview().toISOString();
+  }
+  if (patch.reviewAt !== undefined) {
+    set.reviewAt = patch.reviewAt ?? null;
+    resolveAlertsByKeyPrefix(`memo_review:${id}:`);
+  }
   if (patch.status && patch.status !== cur.status) {
     set.status = patch.status;
     const waiting = isWaitingStatus(patch.status);
@@ -84,6 +101,8 @@ export function updateTask(id: number, patch: Partial<TaskInput> & { status?: Ta
       set.completedAt = now;
       resolveAlertsByKeyPrefix(`waiting_overdue:${id}:`);
       resolveAlertsByKeyPrefix(`reply_received:${id}:`);
+      resolveAlertsByKeyPrefix(`memo_review:${id}:`);
+      resolveAlertsByKeyPrefix(`memo_triggered:${id}:`);
       if (cur.chatworkTaskId && cur.chatworkRoomId && isConfigured('chatwork')) {
         cw.setTaskStatus(cur.chatworkRoomId, cur.chatworkTaskId, 'done').catch((err) => logger.warn({ err }, 'Chatwork タスク完了に失敗'));
       }

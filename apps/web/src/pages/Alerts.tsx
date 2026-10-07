@@ -7,6 +7,7 @@ import { ClientPicker } from '../lib/ClientPicker';
 import { ContactLinkForm } from '../lib/ContactLinkForm';
 import { channelBadge, channelLabel, fmtDateTime, fromLocalInput, todayLocalInput } from '../lib/format';
 import { schedulingLink } from '../lib/alertLink';
+import { MemoSuggestionCard, type MemoCandidate } from '../lib/Memo';
 import { ALERT_TYPE_LABEL, type AlertType } from '@lcm/shared';
 
 interface Alert {
@@ -84,6 +85,17 @@ export default function Alerts() {
                       事件を開く
                     </Link>
                   ) : null}
+                  {type === 'memo_suggested' && Array.isArray(a.payload.items) && (
+                    <div className="space-y-2">
+                      <MemoSuggestionCard suggestion={{ alertId: a.id, messageId: Number(a.payload.messageId), items: a.payload.items as MemoCandidate[] }} onChanged={refresh} />
+                      {a.payload.conversationId ? (
+                        <Link to={`/inbox/${a.payload.conversationId}`} className="btn btn-sm">
+                          会話を開く
+                        </Link>
+                      ) : null}
+                    </div>
+                  )}
+                  {(type === 'memo_review' || type === 'memo_triggered') && <MemoAlertActions alert={a} onDone={refresh} />}
                   {type === 'line_quota' && (
                     <Link to="/settings" className="btn btn-sm">
                       設定を確認
@@ -95,6 +107,38 @@ export default function Alerts() {
           </ul>
         </section>
       ))}
+    </div>
+  );
+}
+
+/** 時期未定の備忘の見直し・きっかけ: 済んだら完了、まだならもう少し先に見直す */
+function MemoAlertActions({ alert, onDone }: { alert: Alert; onDone: () => void }) {
+  const taskId = Number(alert.payload.taskId);
+  const [err, setErr] = useState('');
+  const done = useMutation({ mutationFn: () => api.put(`/tasks/${taskId}`, { status: 'done' }), onSuccess: onDone, onError: (e) => setErr((e as Error).message) });
+  const snooze = useMutation({ mutationFn: () => api.post(`/tasks/${taskId}/memo-snooze`, { days: 14 }), onSuccess: onDone, onError: (e) => setErr((e as Error).message) });
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <button className="btn btn-sm btn-primary" disabled={done.isPending} onClick={() => done.mutate()} title="報告などが済んだら完了にします">
+        済んだので完了
+      </button>
+      <button className="btn btn-sm" disabled={snooze.isPending} onClick={() => snooze.mutate()} title="まだ時期が来ていないので、2 週間後にまた見直します">
+        まだ（2 週間後に見直す）
+      </button>
+      <Link to="/tasks?status=memo" className="btn btn-sm" title="時期が決まったら、タスク一覧で締切を入れます">
+        締切を決める
+      </Link>
+      {alert.payload.conversationId ? (
+        <Link to={`/inbox/${alert.payload.conversationId}`} className="btn btn-sm">
+          会話を開く
+        </Link>
+      ) : null}
+      {alert.payload.caseId ? (
+        <Link to={`/cases/${alert.payload.caseId}`} className="btn btn-sm">
+          事件を開く
+        </Link>
+      ) : null}
+      {err && <span className="text-xs text-red-600">{err}</span>}
     </div>
   );
 }

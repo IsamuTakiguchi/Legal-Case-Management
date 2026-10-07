@@ -326,6 +326,14 @@ export const tasks = sqliteTable(
     /** そのメッセージに Chatwork で最後に返信した日時 */
     chatworkRepliedAt: text('chatwork_replied_at'),
     dueAt: text('due_at'),
+    /**
+     * 時期未定の備忘。日付はまだ決まらないが、きっかけ（「和解の前」「次回期日の後」など）が来たらやること。
+     * これがあるタスクは「時期未定」として扱い、見直す日（reviewAt）に要確認へ出す
+     */
+    trigger: text('trigger'),
+    reviewAt: text('review_at'),
+    /** 備忘のもとになった受信メッセージ */
+    sourceMessageId: integer('source_message_id'),
     completedAt: text('completed_at'),
     createdAt: text('created_at').notNull().default(now()),
     updatedAt: text('updated_at').notNull().default(now()),

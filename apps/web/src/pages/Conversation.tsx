@@ -7,12 +7,13 @@ import { useDraft, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
 import { ContactLinkForm } from '../lib/ContactLinkForm';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
+import { MemoBadge, MemoPanel, MemoSuggestionCard, type MemoSuggestion } from '../lib/Memo';
 import { ClientConfirmPanel } from '../lib/ClientConfirmPanel';
 import { channelBadge, channelLabel, fmtDateTime, fmtBytes, fromLocalInput, toLocalInput, todayLocalInput } from '../lib/format';
 import { Icon } from '../lib/icons';
 import { useSpotlight } from '../lib/spotlight';
 import { quickSendTimes } from '../lib/sendTimes';
-import { TaskDeadlines, NewTaskDeadlines, WaitDeadlineSelect } from '../lib/Deadline';
+import { TaskDeadlines, NewTaskDeadlines, WaitDeadlineSelect, fmtDeadline } from '../lib/Deadline';
 import { dateOnlyDeadline, SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply, messageLink, type EventKind } from '@lcm/shared';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 import { AttachmentImage, canPreviewImage } from '../lib/AttachmentImage';
@@ -89,6 +90,10 @@ interface Conv {
   clientPersons?: { id: number; name: string; title: string | null }[];
   /** Chatwork のリアクション（ワンタップ返信）のボタン。Chatwork 以外では空 */
   reactions?: { label: string; text: string; emoji: string }[];
+  /** AI が受信から見つけた、時期未定の宿題の候補（未登録のもの） */
+  memoSuggestions?: MemoSuggestion[];
+  /** この相手（依頼者・事件）の時期未定の備忘 */
+  memos?: { id: number; title: string; trigger: string; reviewAt: string | null }[];
 }
 interface Scheduled {
   id: number;
@@ -157,6 +162,7 @@ export default function Conversation() {
   const [showStaffAsk, setShowStaffAsk] = useState(false);
   // 事務局からの確認事項を依頼者に確認するパネル（ボタンから開くときは、いちばん新しい受信メッセージを対象にする）
   const [showClientConfirm, setShowClientConfirm] = useState(false);
+  const [showMemo, setShowMemo] = useState(false);
   const [showExtract, setShowExtract] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [linkClientId, setLinkClientId] = useState('');
@@ -410,6 +416,19 @@ export default function Conversation() {
           <div className="card border-slate-200 bg-slate-50 text-sm text-slate-600">
             <span className="badge badge-gray mr-2">事務局</span>
             事務局メンバーからの伝言です。どの依頼者・事件の話かは、伝言ごとに「紐付け」で指定します（本文に依頼者名があれば自動で付きます）。「タスク化」でそのままタスクにできます。
+          </div>
+        )}
+        {(c.memoSuggestions?.length ?? 0) > 0 && (
+          <div className="card border-orange-200 bg-orange-50">
+            <div className="mb-2 text-sm">
+              <span className="font-semibold text-orange-800">⏳ 時期が決まっていない宿題がありそうです</span>
+              <span className="ml-2 text-xs text-slate-500">備忘に登録しておくと、見直す日やきっかけが来たときにお知らせします</span>
+            </div>
+            <div className="space-y-2">
+              {c.memoSuggestions!.map((sg) => (
+                <MemoSuggestionCard key={sg.alertId} suggestion={sg} onChanged={invalidate} />
+              ))}
+            </div>
           </div>
         )}
         {!c.clientId && !c.staff && (
@@ -697,6 +716,9 @@ export default function Conversation() {
                 📨 依頼者に確認
               </button>
             )}
+            <button className="btn btn-sm" onClick={() => setShowMemo(!showMemo)} title="「和解の前に教えてほしい」のように、日付がまだ決まらない宿題を備忘に残します">
+              ⏳ 備忘
+            </button>
             <button className="btn btn-sm" onClick={() => judge.mutate()} disabled={!text || judge.isPending}>
               返信待ちになる？
             </button>
@@ -790,6 +812,7 @@ export default function Conversation() {
               </div>
             </div>
           )}
+          {showMemo && <MemoPanel key={latestInbound?.id ?? 0} messageId={latestInbound?.id ?? null} conversationId={c.id} clientId={c.clientId} onClose={() => setShowMemo(false)} />}
           {showClientConfirm && latestInbound && (
             <ClientConfirmPanel
               key={latestInbound.id}
@@ -854,6 +877,25 @@ export default function Conversation() {
                 </li>
               ))}
             </ul>
+          </div>
+        )}
+        {(c.memos?.length ?? 0) > 0 && (
+          <div className="card">
+            <h3 className="mb-2 text-sm font-semibold">時期未定の備忘</h3>
+            <ul className="space-y-1.5 text-xs">
+              {c.memos!.map((m) => (
+                <li key={m.id}>
+                  <div className="font-medium">{m.title}</div>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-1">
+                    <MemoBadge trigger={m.trigger} reviewAt={m.reviewAt} />
+                    {m.reviewAt && <span className="text-slate-400">見直し {fmtDeadline(m.reviewAt)}</span>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <Link to="/tasks" className="mt-1 inline-block text-xs text-blue-700 hover:underline">
+              タスク一覧で締切を決める・完了にする
+            </Link>
           </div>
         )}
         <TaskMini conversationId={c.id} clientId={c.clientId} />
