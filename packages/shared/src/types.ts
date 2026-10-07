@@ -47,6 +47,9 @@ export const ALERT_TYPES = [
   'scheduled_send_failed',
   'line_followed',
   'line_blocked',
+  'memo_suggested',
+  'memo_review',
+  'memo_triggered',
 ] as const;
 export type AlertType = (typeof ALERT_TYPES)[number];
 export const ALERT_TYPE_LABEL: Record<AlertType, string> = {
@@ -61,6 +64,9 @@ export const ALERT_TYPE_LABEL: Record<AlertType, string> = {
   scheduled_send_failed: '送信予約が失敗',
   line_followed: 'LINE 友だち追加（依頼者に紐付け）',
   line_blocked: 'LINE が届きません（ブロック・友だち解除）',
+  memo_suggested: '時期未定の宿題（備忘の候補）',
+  memo_review: '時期未定の備忘を見直す',
+  memo_triggered: '備忘のきっかけが来たかもしれません',
 };
 
 export const ATTACHMENT_STATUSES = ['pending', 'stored', 'unassigned', 'failed'] as const;
@@ -223,6 +229,11 @@ export const taskInputSchema = z.object({
   /** 対応中のタスクの期日 */
   dueAt: z.string().datetime({ offset: true }).optional().nullable(),
   note: z.string().optional().nullable(),
+  /** 時期未定の備忘のきっかけ（「和解の前」など）。あれば時期未定のタスクとして扱う */
+  trigger: z.string().trim().max(200).optional().nullable(),
+  /** 時期未定の備忘を見直す日 */
+  reviewAt: z.string().datetime({ offset: true }).optional().nullable(),
+  sourceMessageId: z.number().int().optional().nullable(),
   syncToChatwork: z.boolean().default(false),
 });
 export type TaskInput = z.infer<typeof taskInputSchema>;

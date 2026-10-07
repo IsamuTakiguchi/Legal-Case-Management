@@ -4,6 +4,8 @@ import { taskInputSchema, TASK_STATUSES, WAITING_TASK_STATUSES } from '@lcm/shar
 import { createTask, updateTask, nudgeTask, listTasks, importChatworkTasks, syncTaskToChatwork, bulkUpdateTasks, deleteTask } from '../services/tasks.js';
 import { openAlerts, resolveAlert } from '../services/alerts.js';
 import { replyToChatworkTask } from '../services/taskReply.js';
+import { createMemo, detectMemos, memoInputSchema, snoozeMemo } from '../services/memos.js';
+import { isConfigured } from '../config.js';
 import { db, schema } from '../db/index.js';
 import { eq, desc } from 'drizzle-orm';
 
@@ -56,6 +58,27 @@ taskRoutes.post('/tasks/:id/chatwork-reply', async (c) => {
 });
 
 taskRoutes.post('/tasks/import-chatwork', async (c) => c.json(await importChatworkTasks()));
+
+// ---- 時期未定の備忘 ----
+
+/** 時期未定の備忘を登録（受信メッセージから作るときは sourceMessageId を渡す） */
+taskRoutes.post('/memos', async (c) => {
+  // 要確認の候補（memo_suggested）は、画面で候補をすべて片付けたときに閉じる
+  return c.json(await createMemo(memoInputSchema.parse(await c.req.json())));
+});
+
+/** 受信メッセージから、時期未定の宿題の候補を AI で探す（手動） */
+taskRoutes.post('/messages/:id/memos/detect', async (c) => {
+  if (!isConfigured('anthropic')) return c.json({ error: 'AI（Anthropic API キー）が未設定です。題名ときっかけを直接入力してください' }, 400);
+  const r = await detectMemos(Number(c.req.param('id')));
+  return c.json({ items: r.items });
+});
+
+/** まだ時期未定: 見直す日を先に延ばす */
+taskRoutes.post('/tasks/:id/memo-snooze', async (c) => {
+  const body = z.object({ days: z.number().int().min(1).max(365).default(14) }).parse(await c.req.json().catch(() => ({})));
+  return c.json(snoozeMemo(Number(c.req.param('id')), body.days));
+});
 
 // ---- アラート ----
 taskRoutes.get('/alerts', (c) => {

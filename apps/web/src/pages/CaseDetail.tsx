@@ -8,6 +8,7 @@ import { RoomPicker } from '../lib/RoomPicker';
 import { HoldForm, HoldLocationEditor, HoldAddCandidates, fmtEventRange, type RescheduleTarget } from '../lib/HoldForm';
 import { LongText } from '../lib/LongText';
 import { TaskDeadlines, NewTaskDeadlines, TaskDeadlineSelect, FOLLOW_LABEL, DUE_HINT, FOLLOW_HINT } from '../lib/Deadline';
+import { MemoBadge, MemoForm, MEMO_HINT } from '../lib/Memo';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { fmtDateTime, fmtDate, fmtYen, fmtBytes, toLocalInput, fromLocalInput, channelLabel } from '../lib/format';
 import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, messageLink, ACTIVE_TASK_STATUSES, taskStatusForWaiting, formatWareki, parseJaDate, addYearsIso, taskDeadline, jstYmd, actionDeadlinesLabel, isWaitingStatus, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
@@ -53,7 +54,7 @@ interface CaseData {
   referrer: string | null;
   staff: { id: number; name: string } | null;
   notes: Note[];
-  tasks: { id: number; title: string; note: string | null; status: string; dueAt: string | null; followUpAt: string | null; chatworkTaskId: number | null; chatworkReplyable?: boolean; chatworkAssignedByName?: string | null; chatworkRepliedAt?: string | null }[];
+  tasks: { id: number; title: string; note: string | null; status: string; dueAt: string | null; followUpAt: string | null; chatworkTaskId: number | null; chatworkReplyable?: boolean; chatworkAssignedByName?: string | null; chatworkRepliedAt?: string | null; trigger?: string | null; reviewAt?: string | null }[];
   events: { id: number; title: string; startAt: string; endAt: string; kind: string; location: string | null; status: string | null }[];
 }
 /** 次のアクションの期限を YYYY-MM-DD に（古い記録の ISO もその日本時間の日付に） */
@@ -134,6 +135,7 @@ export default function CaseDetail() {
   const { id } = useParams();
   const qc = useQueryClient();
   const [tab, setTab] = useState<'overview' | 'timeline' | 'creditors'>('overview');
+  const [addingMemo, setAddingMemo] = useState(false);
   // 中身（タスク名・メモ）を直している未了タスク
   const [editingTask, setEditingTask] = useState<number | null>(null);
   const d = useQuery({ queryKey: ['case', id], queryFn: () => api.get<CaseData>(`/cases/${id}`) });
@@ -332,7 +334,7 @@ export default function CaseDetail() {
                           {t.note && <span className="block truncate text-xs text-slate-500" title={t.note}>{t.note.split('\n')[0]}</span>}
                         </span>
                         <TaskEditButton onClick={() => setEditingTask(t.id)} />
-                        <span className="badge badge-gray">{TASK_STATUS_LABEL[t.status as TaskStatus]}</span>
+                        {t.trigger && !t.dueAt ? <MemoBadge trigger={t.trigger} reviewAt={t.reviewAt} /> : <span className="badge badge-gray">{TASK_STATUS_LABEL[t.status as TaskStatus]}</span>}
                         {/* 締切（タスクそのもの）と、返信待ちなら返信期限。押すと変えられる */}
                         <span className="flex flex-wrap items-center">
                           <TaskDeadlines
@@ -357,6 +359,23 @@ export default function CaseDetail() {
                   })}
                 {c.tasks.filter((t) => t.status !== 'done').length === 0 && <li className="text-slate-500">なし</li>}
               </ul>
+              {addingMemo ? (
+                <div className="mb-3 rounded-md border border-orange-200 bg-orange-50/50 p-2">
+                  <div className="mb-1 text-xs text-slate-500">日付はまだ決まらないが、きっかけが来たらやること（例: 和解の前に和解案を保険会社に報告）</div>
+                  <MemoForm
+                    caseId={c.id}
+                    onDone={() => {
+                      setAddingMemo(false);
+                      qc.invalidateQueries({ queryKey: ['case', id] });
+                    }}
+                    onCancel={() => setAddingMemo(false)}
+                  />
+                </div>
+              ) : (
+                <button className="btn btn-sm mb-2" onClick={() => setAddingMemo(true)} title={MEMO_HINT}>
+                  ⏳ 時期未定の備忘を追加
+                </button>
+              )}
               <CaseTaskForm
                 caseId={c.id}
                 hasStaff={!!c.staff}

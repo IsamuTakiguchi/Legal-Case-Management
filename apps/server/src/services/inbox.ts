@@ -3,6 +3,7 @@ import { db, schema } from '../db/index.js';
 import type { InboundMessage } from '../channels/types.js';
 import { findClientByIdentity, raiseUnlinkedContact, cleanDisplayName } from './identity.js';
 import { findPersonByIdentity } from './clientPersons.js';
+import { detectMemosInBackground } from './memos.js';
 import { isLineGroupThread } from '../channels/line.js';
 import { processAttachment } from './attachments.js';
 import { shouldWaitForMerge, holdForMerge } from './attachmentMerge.js';
@@ -223,6 +224,14 @@ export async function ingestMessage(
       onInboundForTasks(conv.id, message);
     } catch (err) {
       logger.warn({ err }, '返信待ちタスクの更新に失敗');
+    }
+    // 「和解の前に教えてほしい」のような時期未定の宿題を裏で拾う。過去分のさかのぼり取り込みは見ない
+    if (!backfill) {
+      try {
+        detectMemosInBackground(message.id);
+      } catch (err) {
+        logger.warn({ err }, '時期未定の備忘の検出の起動に失敗');
+      }
     }
     // 端末へすぐ知らせる。過去分のさかのぼり取り込みは通知しない
     if (!backfill) {

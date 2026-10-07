@@ -19,6 +19,7 @@ import { judgeWaiting } from '../services/tasks.js';
 import { listTemplates } from '../services/templates.js';
 import { getSetting } from '../services/settings.js';
 import { activeCasesForClient } from '../services/cases.js';
+import { memoSuggestionsFor, openMemos } from '../services/memos.js';
 import { sendMessageSchema, draftRequestSchema, caseContactInputSchema, parseChatworkReactions, staffAskDraftSchema, staffAskSendSchema, type Channel } from '@lcm/shared';
 
 export const inboxRoutes = new Hono();
@@ -115,7 +116,10 @@ inboxRoutes.get('/conversations/:id', (c) => {
   // 法人の担当者（会話の相手の担当者と、選び直す候補）
   const clientPerson = conv.clientPersonId ? getClientPerson(conv.clientPersonId) : null;
   const clientPersons = conv.clientId ? listClientPersons(conv.clientId).map((p) => ({ id: p.id, name: p.name, title: p.title })) : [];
-  return c.json({ ...conv, drafts, suggestions, scheduled, reactions, pendingHolds, clientPerson: clientPerson ? { id: clientPerson.id, name: clientPerson.name, title: clientPerson.title } : null, clientPersons });
+  // 時期未定の宿題の候補（まだ備忘に登録していないもの）と、この相手の時期未定の備忘
+  const memoSuggestions = memoSuggestionsFor(conv.id);
+  const memos = openMemos({ clientId: conv.clientId ?? null, caseId: conv.contact?.caseId ?? null }).map((t) => ({ id: t.id, title: t.title, trigger: t.trigger, reviewAt: t.reviewAt }));
+  return c.json({ ...conv, drafts, suggestions, scheduled, reactions, pendingHolds, memoSuggestions, memos, clientPerson: clientPerson ? { id: clientPerson.id, name: clientPerson.name, title: clientPerson.title } : null, clientPersons });
 });
 
 inboxRoutes.post('/conversations/:id/link', async (c) => {
