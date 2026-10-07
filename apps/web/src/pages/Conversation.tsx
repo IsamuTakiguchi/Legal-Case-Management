@@ -155,6 +155,8 @@ export default function Conversation() {
   const [showFiles, setShowFiles] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
   const [showStaffAsk, setShowStaffAsk] = useState(false);
+  // 事務局からの確認事項を依頼者に確認するパネル（ボタンから開くときは、いちばん新しい受信メッセージを対象にする）
+  const [showClientConfirm, setShowClientConfirm] = useState(false);
   const [showExtract, setShowExtract] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [linkClientId, setLinkClientId] = useState('');
@@ -282,6 +284,8 @@ export default function Conversation() {
 
   const c = conv.data;
   const storedAtts = useMemo(() => c?.messages.flatMap((m) => m.attachments.filter((a) => a.status === 'stored')) ?? [], [c]);
+  // いちばん新しい受信メッセージ（事務局からの確認事項を依頼者に確認するときの対象）
+  const latestInbound = useMemo(() => [...(c?.messages ?? [])].reverse().find((m) => m.direction === 'in') ?? null, [c]);
   // 開いた時点の未読数を覚えておく（サーバーは開いた瞬間に既読にするので、取り直すと 0 になる）
   const [unreadMark, setUnreadMark] = useState<{ id: number; count: number } | null>(null);
   useEffect(() => {
@@ -476,7 +480,7 @@ export default function Conversation() {
                       className="ml-1 rounded bg-green-100 px-1 text-[10px] text-green-800 hover:underline"
                       title="この質問から依頼者に送った確認を開きます"
                     >
-                      ✓ 依頼者に確認済み（{m.clientConfirms!.at(-1)!.channel === 'gmail' ? 'Gmail' : 'LINE'}・{fmtDateTime(m.clientConfirms!.at(-1)!.at)}）
+                      ✓ 依頼者に確認済み（{({ gmail: 'Gmail', line: 'LINE', chatwork: 'Chatwork' } as Record<string, string>)[m.clientConfirms!.at(-1)!.channel] ?? m.clientConfirms!.at(-1)!.channel}・{fmtDateTime(m.clientConfirms!.at(-1)!.at)}）
                     </Link>
                   )}
                 </div>
@@ -512,7 +516,7 @@ export default function Conversation() {
                       type="button"
                       className="font-medium text-blue-700 hover:underline"
                       onClick={() => setConfirmFor(confirmFor === m.id ? null : m.id)}
-                      title="この質問を、自分から依頼者に確認する文に書き直して、Gmail か LINE で依頼者に送ります"
+                      title="この質問を、自分から依頼者に確認する文に書き直して、Gmail・LINE・Chatwork で依頼者に送ります"
                     >
                       📨 依頼者に確認
                     </button>
@@ -684,6 +688,15 @@ export default function Conversation() {
             <button className="btn btn-sm" onClick={() => setShowStaffAsk(!showStaffAsk)} title="届いた連絡を引用して、Chatwork で担当事務局に確認します">
               💬 事務局に確認
             </button>
+            {c.channel === 'chatwork' && latestInbound && (
+              <button
+                className="btn btn-sm"
+                onClick={() => setShowClientConfirm(!showClientConfirm)}
+                title="事務局からの確認事項（いちばん新しい受信メッセージ）を、自分から依頼者に確認する文に書き直して、Gmail・LINE・Chatwork で依頼者に送ります。ほかのメッセージは、メッセージの下の「📨 依頼者に確認」から"
+              >
+                📨 依頼者に確認
+              </button>
+            )}
             <button className="btn btn-sm" onClick={() => judge.mutate()} disabled={!text || judge.isPending}>
               返信待ちになる？
             </button>
@@ -776,6 +789,14 @@ export default function Conversation() {
                 ))}
               </div>
             </div>
+          )}
+          {showClientConfirm && latestInbound && (
+            <ClientConfirmPanel
+              key={latestInbound.id}
+              messageId={latestInbound.id}
+              onClose={() => setShowClientConfirm(false)}
+              onSent={invalidate}
+            />
           )}
           {showStaffAsk && <StaffAskPanel base={`/conversations/${c.id}`} draftKey={`conv:${c.id}`} onClose={() => setShowStaffAsk(false)} onSent={invalidate} />}
           {showSchedule && <SchedulePanel conversationId={c.id} onText={(t) => setText((prev) => (prev ? `${prev}\n\n${t}` : t))} onDone={invalidate} />}

@@ -173,7 +173,25 @@ export function listTasks(filter: { status?: TaskStatus | 'active' | 'waiting'; 
     .orderBy(desc(schema.tasks.updatedAt))
     .all();
   const me = chatworkReplyMe();
-  return rows.map((r) => ({ ...r.task, clientName: r.clientName ?? null, caseTitle: r.caseTitle ?? null, chatworkReplyable: chatworkReplyable(r.task, me) }));
+  // Chatwork で振られたタスクは、元のメッセージ（取り込んでいれば）から「依頼者に確認」できる
+  const cwIds = [...new Set(rows.map((r) => r.task.chatworkMessageId).filter((x): x is string => !!x))];
+  const msgByCw = new Map(
+    cwIds.length
+      ? db()
+          .select({ id: schema.messages.id, externalId: schema.messages.externalId })
+          .from(schema.messages)
+          .where(and(eq(schema.messages.channel, 'chatwork'), eq(schema.messages.direction, 'in'), inArray(schema.messages.externalId, cwIds)))
+          .all()
+          .map((m) => [m.externalId, m.id] as const)
+      : [],
+  );
+  return rows.map((r) => ({
+    ...r.task,
+    clientName: r.clientName ?? null,
+    caseTitle: r.caseTitle ?? null,
+    chatworkReplyable: chatworkReplyable(r.task, me),
+    confirmMessageId: r.task.chatworkMessageId ? (msgByCw.get(r.task.chatworkMessageId) ?? null) : null,
+  }));
 }
 
 function chatworkReplyMe(): number | null {

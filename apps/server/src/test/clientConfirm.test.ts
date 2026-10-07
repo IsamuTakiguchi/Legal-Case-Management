@@ -118,7 +118,32 @@ describe('事務局の質問から依頼者に確認する', () => {
 
   it('メールも LINE も無い依頼者には送れない', () => {
     const other = db().insert(schema.clients).values({ name: '佐藤 次郎' }).returning().get();
-    expect(clientConfirmContext(questionId, { clientId: other.id }).blocked).toContain('メールアドレスか LINE');
+    expect(clientConfirmContext(questionId, { clientId: other.id }).blocked).toContain('メールアドレス・LINE・Chatwork ルームが登録されていない');
+  });
+
+  it('依頼者とのやり取りが Chatwork ルームなら、Chatwork でも確認を送れる', async () => {
+    db().update(schema.clients).set({ chatworkRoomId: 7700 }).where(eq(schema.clients.id, clientId)).run();
+    const ctx = clientConfirmContext(questionId);
+    expect(ctx.channels.map((c) => c.channel).sort()).toEqual(['chatwork', 'gmail', 'line']);
+    const r = await sendClientConfirm(questionId, { clientId, caseId, channel: 'chatwork', text: '源泉徴収票がお手元にあるか、ご確認ください。', notifyStaff: true });
+    expect(r.channel).toBe('chatwork');
+    // 依頼者のルームに送り、事務局には「Chatwork で確認しました」と返す
+    expect(sent.find((x) => x.thread === '7700')?.text).toContain('源泉徴収票');
+    expect(sent.find((x) => x.thread === '9100')?.text).toContain('Chatworkで確認しました');
+  });
+
+  it('Chatwork で振られたタスクは、元のメッセージから依頼者に確認できる（タスク一覧に元のメッセージを出す）', async () => {
+    const { listTasks } = await import('../services/tasks.js');
+    const q = db().select().from(schema.messages).where(eq(schema.messages.id, questionId)).get()!;
+    const t = db()
+      .insert(schema.tasks)
+      .values({ title: '源泉徴収票の確認', status: 'open', clientId, chatworkTaskId: 31, chatworkRoomId: 9100, chatworkMessageId: q.externalId, chatworkAssignedById: 5001 })
+      .returning()
+      .get();
+    const other = db().insert(schema.tasks).values({ title: '手で作ったタスク', status: 'open', clientId }).returning().get();
+    const list = listTasks({ status: 'active' } as Parameters<typeof listTasks>[0]);
+    expect(list.find((x) => x.id === t.id)?.confirmMessageId).toBe(questionId);
+    expect(list.find((x) => x.id === other.id)?.confirmMessageId).toBeNull();
   });
 
   it('Chatwork 以外のメッセージや、自分の送信からは作らない', () => {

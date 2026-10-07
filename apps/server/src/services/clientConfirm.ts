@@ -15,15 +15,15 @@ import { CHANNEL_LABEL, familyName, formatJaDateTime } from '@lcm/shared';
 
 /**
  * 事務局から Chatwork で来た質問（「◯◯さんに△△を確認してください」など）を、
- * 弁護士本人が依頼者に確認する文に組み立て直して、Gmail か LINE で依頼者に送る。
+ * 弁護士本人が依頼者に確認する文に組み立て直して、Gmail・LINE・Chatwork（依頼者とのルーム）で依頼者に送る。
  * 送ったら、元の質問に Chatwork で「確認しました」と返せる。
  */
 
 /** 依頼者への確認に使えるチャネル */
-export const CONFIRM_CHANNELS = ['gmail', 'line'] as const;
+export const CONFIRM_CHANNELS = ['gmail', 'line', 'chatwork'] as const;
 export type ConfirmChannel = (typeof CONFIRM_CHANNELS)[number];
 /** 画面や事務局への返事に出す短い名前（「LINE公式」ではなく「LINE」） */
-const SHORT_LABEL: Record<ConfirmChannel, string> = { gmail: 'Gmail', line: 'LINE' };
+const SHORT_LABEL: Record<ConfirmChannel, string> = { gmail: 'Gmail', line: 'LINE', chatwork: 'Chatwork' };
 
 export interface ClientConfirmChannel {
   channel: ConfirmChannel;
@@ -101,7 +101,7 @@ function staffReply(clientName: string | null, channel: ConfirmChannel | null): 
   return `${who}に${channel ? `${SHORT_LABEL[channel]}で` : ''}確認しました。回答が来たら共有します。`;
 }
 
-/** 依頼者本人（法人なら担当者も）に送れる Gmail / LINE と、それぞれの既存の会話 */
+/** 依頼者本人（法人なら担当者も）に送れる Gmail / LINE / Chatwork と、それぞれの既存の会話 */
 function confirmChannels(client: typeof schema.clients.$inferSelect): ClientConfirmChannel[] {
   const own = clientOwnConversations(client.id).filter((c) => !c.archived);
   return availableChannels(client)
@@ -161,7 +161,7 @@ export function clientConfirmContext(messageId: number, opts: { clientId?: numbe
   const blocked = !client
     ? 'どの依頼者への確認かを選んでください'
     : channels.length === 0
-      ? `${client.name}さんのメールアドレスか LINE が登録されていないか、Gmail・LINE がアプリに接続されていません`
+      ? `${client.name}さんのメールアドレス・LINE・Chatwork ルームが登録されていないか、そのチャネルがアプリに接続されていません`
       : null;
   // 依頼者は決まっているが送る手段が無い → 画面でその場で連絡先を登録できるようにする
   const needsContact = !!client && channels.length === 0;
