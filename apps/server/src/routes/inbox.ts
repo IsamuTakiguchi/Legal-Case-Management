@@ -177,6 +177,8 @@ inboxRoutes.post('/conversations/:id/draft', async (c) => {
   const conv = getConversation(id);
   if (!conv) return c.json({ error: 'not found' }, 404);
   const activeCase = conv.clientId ? activeCasesForClient(conv.clientId)[0] : null;
+  // 法人の担当者とのやり取りなら、その人に宛てる
+  const person = conv.clientPersonId ? getClientPerson(conv.clientPersonId) : null;
   const text = await draftReply(
     req,
     {
@@ -186,6 +188,8 @@ inboxRoutes.post('/conversations/:id/draft', async (c) => {
       contactName: conv.contact?.name ?? null,
       contactRole: conv.contact?.roleLabel ?? null,
       contactCaseTitle: conv.contact?.caseTitle ?? null,
+      personName: person?.name ?? null,
+      personTitle: person?.title ?? null,
       thread: conv.messages.map((m) => ({ direction: m.direction as 'in' | 'out', body: m.body, sentAt: m.sentAt, senderName: m.senderName })),
       caseSummary: activeCase?.summary ?? null,
     },
