@@ -114,7 +114,7 @@ export default function Inbox() {
               set('q', q);
             }}
           >
-            <input className="input md:w-56" placeholder="本文を検索（3文字以上）" value={q} onChange={(e) => setQ(e.target.value)} />
+            <input className="input md:w-56" placeholder="名前・本文を検索" title="相手の名前・メールアドレス・件名・依頼者名・関係者名と、本文から探します。空白で区切るとすべてを含むものを探します" value={q} onChange={(e) => setQ(e.target.value)} />
           </form>
         </div>
       </div>
