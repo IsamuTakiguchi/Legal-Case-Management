@@ -4,7 +4,14 @@ import { proposeSlotsSchema, confirmSlotSchema, nextHearingInputSchema, EVENT_KI
 import { proposeSlots, confirmSlot, cancelSession, listSessions, findFreeSlots, extractChosenSlot } from '../services/scheduling.js';
 import { syncCalendar, checkPostEvents, resolveNextHearing, listCourtDocs, listClientFolder, upcomingEvents, relinkEvent, listCalendarEvents, createCalendarEvent, editCalendarEvent, removeCalendarEvent, createHoldSet, confirmHold, cancelHoldSet, cancelHoldCandidate, addHoldCandidates, startReschedule, setHoldSetLocation } from '../services/court.js';
 import { createZoomMeeting } from '../integrations/zoom.js';
-import { extractScheduleFromConversation, registerScheduleFromConversation, extractSchedulePreferences, confirmHoldFromConversation, conversationHolds } from '../services/scheduleExtract.js';
+import { extractScheduleFromConversation, registerScheduleFromConversation, extractSchedulePreferences, confirmHoldFromConversation, conversationHolds, setEventMeetingFromConversation } from '../services/scheduleExtract.js';
+
+/** 相手が発行した WEB 会議（URL は http(s) のみ） */
+const externalMeetingSchema = z.object({
+  url: z.string().trim().url().max(2000).refine((u) => /^https?:\/\//i.test(u), 'URL は http(s) で始まるものを入れてください'),
+  meetingId: z.string().trim().max(100).nullable().optional(),
+  passcode: z.string().trim().max(100).nullable().optional(),
+});
 import { holdProposalContext, draftHoldProposal, sendHoldProposal } from '../services/holdProposal.js';
 import { db, schema } from '../db/index.js';
 import { eq } from 'drizzle-orm';
@@ -68,8 +75,14 @@ schedulingRoutes.get('/conversations/:id/schedule/holds', (c) => c.json(conversa
 
 /** 会話の画面から、仮押さえの候補の 1 つで確定する */
 schedulingRoutes.post('/conversations/:id/schedule/confirm-hold', async (c) => {
-  const body = z.object({ sessionId: z.number().int(), eventId: z.number().int() }).parse(await c.req.json());
-  return c.json(await confirmHoldFromConversation(Number(c.req.param('id')), body.sessionId, body.eventId));
+  const body = z.object({ sessionId: z.number().int(), eventId: z.number().int(), meetingBy: z.enum(['us', 'them']).optional(), meeting: externalMeetingSchema.nullable().optional() }).parse(await c.req.json());
+  return c.json(await confirmHoldFromConversation(Number(c.req.param('id')), body.sessionId, body.eventId, { meetingBy: body.meetingBy, meeting: body.meeting }));
+});
+
+/** 相手から後で届いた WEB 会議の URL を、すでに入っている予定に入れる */
+schedulingRoutes.post('/conversations/:id/schedule/meeting', async (c) => {
+  const body = z.object({ eventId: z.number().int(), meeting: externalMeetingSchema }).parse(await c.req.json());
+  return c.json(await setEventMeetingFromConversation(Number(c.req.param('id')), body.eventId, body.meeting));
 });
 
 /** 読み取った（修正済みの）日程をカレンダーに登録 */
@@ -84,6 +97,9 @@ schedulingRoutes.post('/conversations/:id/schedule/register', async (c) => {
       description: z.string().nullable().optional(),
       caseId: z.number().int().nullable().optional(),
       web: z.boolean().optional(),
+      // WEB 会議の URL を誰が発行するか（them: 相手が発行。こちらでは作らない）
+      meetingBy: z.enum(['us', 'them']).optional(),
+      meeting: externalMeetingSchema.nullable().optional(),
       // 日程変更のとき、取り消す元の予定
       replaceEventId: z.number().int().nullable().optional(),
       // 候補に無い日時で決まったとき、あわせて取り消す仮押さえ

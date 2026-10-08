@@ -3,9 +3,9 @@ import { eq, and, inArray, desc, ne, gte, lte } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { generateStructured } from '../integrations/anthropic.js';
 import { familyName, formatJaDateTime, toJstParts, OPEN_CASE_STATUSES, type EventKind } from '@lcm/shared';
-import { createCalendarEvent, createHoldSet, removeCalendarEvent, cancelHoldSet, confirmHold, pendingHoldsFor, type PendingHoldSet } from './court.js';
+import { createCalendarEvent, editCalendarEvent, createHoldSet, removeCalendarEvent, cancelHoldSet, confirmHold, pendingHoldsFor, type PendingHoldSet } from './court.js';
 import { getSetting, businessHours, fmtHm } from './settings.js';
-import { issueZoomIfNeeded, webLocation, webMeetingProvider, webMeetingText } from './webMeeting.js';
+import { issueZoomIfNeeded, webLocation, webMeetingProvider, webMeetingText, findMeetingInText, externalLocation, externalMeetingText, externalProviderOf, withExternalMeeting, EXTERNAL_PROVIDER_LABEL, type ExternalMeeting } from './webMeeting.js';
 import { logger } from '../logger.js';
 
 /**
@@ -158,10 +158,40 @@ export async function extractScheduleFromConversation(conversationId: number, op
     counterpartName,
     /** いま使える WEB 会議の提供元（zoom / meet / none）。画面の案内に使う */
     webProvider: webMeetingProvider(),
+    /** 相手のメッセージに書かれていた WEB 会議の URL（相手が発行したもの）。新しいものを優先 */
+    externalMeeting: meetingFromMessages(msgs),
     /** 登録時の件名（確定用） */
     title: `${counterpartName} ${content}`.trim(),
     summary: slots.length ? slots.map((s) => `${formatJaDateTime(new Date(s.startAt))}〜`).join(' / ') : '',
   };
+}
+
+/** 相手から届いたメッセージ（新しい順）に書かれた WEB 会議の URL */
+export function meetingFromMessages(msgs: { direction: string; body: string; sentAt: string; senderName: string | null }[]) {
+  for (const m of [...msgs].reverse()) {
+    if (m.direction !== 'in') continue;
+    const found = findMeetingInText(m.body);
+    if (found) return { ...found, label: EXTERNAL_PROVIDER_LABEL[externalProviderOf(found.url)], sentAt: m.sentAt, senderName: m.senderName };
+  }
+  return null;
+}
+
+/**
+ * 相手から後で届いた WEB 会議の URL を、この相手の予定に入れる（説明欄の案内と場所を差し替える）。
+ * 別の依頼者の予定には入れない
+ */
+export async function setEventMeetingFromConversation(conversationId: number, eventId: number, meeting: ExternalMeeting) {
+  const d = db();
+  const conv = d.select().from(schema.conversations).where(eq(schema.conversations.id, conversationId)).get();
+  if (!conv) throw new Error('会話が見つかりません');
+  const ev = d.select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, eventId)).get();
+  if (!ev) throw new Error('予定が見つかりません（すでに削除された可能性があります）');
+  if (!conv.clientId || ev.clientId !== conv.clientId) throw new Error('この会話の相手の予定ではありません');
+  // 場所が空、または WEB 会議の既定の名前なら、相手方の会議に置き換える（事務所などの場所が入っていればそのまま）
+  const genericPlace = !ev.location || /^(WEB\s*会議|Zoom|Google Meet|Microsoft Teams|Teams|Webex)(（相手方発行）)?$/i.test(ev.location.trim());
+  const row = await editCalendarEvent(ev.id, { description: withExternalMeeting(ev.description, meeting), ...(genericPlace ? { location: externalLocation(meeting) } : {}) });
+  logger.info({ conversationId, eventId }, '相手方が発行した WEB 会議の URL を予定に入れました');
+  return { event: row, webText: externalMeetingText(meeting) };
 }
 
 /** 日時（分単位）が同じ仮押さえの候補を探す */
@@ -192,10 +222,11 @@ export function conversationHolds(conversationId: number): PendingHoldSet[] {
 }
 
 /** 会話の画面から、仮押さえの候補の 1 つで確定する（ほかの候補は消える。WEB 会議ならここで会議 URL を発行） */
-export async function confirmHoldFromConversation(conversationId: number, sessionId: number, eventId: number) {
+export async function confirmHoldFromConversation(conversationId: number, sessionId: number, eventId: number, opts: { meetingBy?: 'us' | 'them'; meeting?: ExternalMeeting | null } = {}) {
   const hold = holdOfConversation(conversationId, sessionId);
   if (!hold.candidates.some((c) => c.eventId === eventId)) throw new Error('選んだ日時はこの仮押さえの候補ではありません');
-  const r = await confirmHold(sessionId, eventId);
+  // 相手が URL を発行するなら、こちらでは会議を作らずに相手の URL を入れる
+  const r = await confirmHold(sessionId, eventId, opts.meetingBy === 'them' ? { theirs: { meeting: opts.meeting?.url ? opts.meeting : null } } : {});
   logger.info({ conversationId, sessionId, eventId }, '会話から仮押さえを確定しました');
   return { event: r, webText: r?.webText ?? '', rescheduled: hold.rescheduleOf };
 }
@@ -313,6 +344,9 @@ export interface RegisterScheduleInput {
   caseId?: number | null;
   /** WEB 会議で行う。確定なら Zoom / Meet をその場で発行し、仮押さえなら確定時に発行する */
   web?: boolean;
+  /** WEB 会議の URL を誰が発行するか。them なら発行せず、相手が発行した meeting を予定に入れる（まだ無ければ「届いたら追加」と残す） */
+  meetingBy?: 'us' | 'them';
+  meeting?: ExternalMeeting | null;
   /**
    * 日程変更（リスケ）のとき、変更前の予定の ID。
    * 確定なら新しい予定を入れたうえで元の予定を取り消す。仮押さえなら、候補のどれかを確定した時点で取り消す
@@ -362,7 +396,29 @@ export async function registerScheduleFromConversation(conversationId: number, i
     caseId = open.sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9))[0]?.id ?? null;
   }
   const baseDescription = [input.description ?? '', `会話から登録（受信箱 #${conversationId}）`].filter(Boolean).join('\n');
-  const provider = input.web ? webMeetingProvider() : 'none';
+  // 相手が URL を発行するなら、こちらでは会議を作らない
+  const theirs = !!input.web && input.meetingBy === 'them';
+  const meeting = theirs && input.meeting?.url ? input.meeting : null;
+  const provider = input.web && !theirs ? webMeetingProvider() : 'none';
+  if (input.mode === 'confirmed' && theirs) {
+    const sl = input.slots[0];
+    const row = await createCalendarEvent({
+      title: input.title,
+      startAt: sl.startAt,
+      endAt: sl.endAt,
+      kind: input.kind === 'hold' ? 'meeting' : input.kind,
+      clientId: client?.id ?? null,
+      caseId,
+      location: externalLocation(meeting, input.location),
+      description: withExternalMeeting(baseDescription, meeting),
+    });
+    if (holdToCancel) await cancelHoldSet(holdToCancel.sessionId);
+    if (original) {
+      await cancelRunningReschedules(original.id);
+      await removeCalendarEvent(original.id);
+    }
+    return { mode: 'confirmed' as const, events: [row], web: null, webText: externalMeetingText(meeting), replaced: replacedInfo, cancelledHolds: holdToCancel?.candidates.length ?? 0 };
+  }
   if (input.mode === 'confirmed') {
     const sl = input.slots[0];
     const minutes = Math.max(15, Math.round((new Date(sl.endAt).getTime() - new Date(sl.startAt).getTime()) / 60_000));
@@ -412,10 +468,14 @@ export async function registerScheduleFromConversation(conversationId: number, i
     clientId: client?.id ?? original?.clientId ?? null,
     caseId,
     counterpartName: client ? null : who,
-    location: input.location ?? original?.location ?? null,
-    description: original ? [`${formatJaDateTime(new Date(original.startAt))} の「${original.title}」の日程変更`, baseDescription].join('\n') : baseDescription,
+    location: theirs ? externalLocation(meeting, input.location) : (input.location ?? original?.location ?? null),
+    description: (() => {
+      const desc = original ? [`${formatJaDateTime(new Date(original.startAt))} の「${original.title}」の日程変更`, baseDescription].join('\n') : baseDescription;
+      return theirs ? withExternalMeeting(desc, meeting) : desc;
+    })(),
     slots: input.slots,
-    web: input.web ?? false,
+    // 相手が URL を発行するなら、確定したときにこちらで会議を作らない
+    web: theirs ? false : (input.web ?? false),
     // 候補のどれかを確定した時点で、元の予定を取り消す（それまでは元の予定も残す）
     rescheduleEventId: original?.id ?? null,
     conversationId,
