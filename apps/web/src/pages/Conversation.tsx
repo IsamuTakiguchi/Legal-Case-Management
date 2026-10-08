@@ -1424,6 +1424,59 @@ interface Extracted {
   holds?: PendingHold[];
   /** 読み取った日時と同じ仮押さえの候補 */
   holdMatch?: { sessionId: number; eventId: number } | null;
+  /** 相手のメッセージに書かれていた WEB 会議の URL（相手が発行したもの） */
+  externalMeeting?: { url: string; meetingId: string | null; passcode: string | null; label: string; sentAt: string; senderName: string | null } | null;
+}
+
+/** WEB 会議の URL を誰が発行するか。them のときは相手の URL（まだ届いていなければ空） */
+interface MeetingChoice {
+  by: 'us' | 'them';
+  url: string;
+  meetingId: string;
+  passcode: string;
+}
+
+const meetingBody = (m: MeetingChoice) => ({ meetingBy: m.by, meeting: m.by === 'them' && m.url.trim() ? { url: m.url.trim(), meetingId: m.meetingId.trim() || null, passcode: m.passcode.trim() || null } : null });
+
+/** WEB 会議の URL をこちらで発行するか、相手が発行したものを使うか */
+function MeetingByFields({ value, onChange, provider, detected, holdMode }: { value: MeetingChoice; onChange: (v: MeetingChoice) => void; provider: 'zoom' | 'meet' | 'none'; detected: Extracted['externalMeeting']; holdMode?: boolean }) {
+  return (
+    <div className="space-y-1.5 rounded border border-slate-200 p-2">
+      <div className="flex flex-wrap items-center gap-3 text-sm">
+        <span className="text-xs text-slate-500">会議 URL</span>
+        <label className="flex items-center gap-1">
+          <input type="radio" checked={value.by === 'us'} onChange={() => onChange({ ...value, by: 'us' })} />
+          {holdMode ? 'こちらで発行（WEB の仮押さえなら確定時に発行）' : `こちらで発行（${WEB_PROVIDER_LABEL[provider]}）`}
+        </label>
+        <label className="flex items-center gap-1">
+          <input type="radio" checked={value.by === 'them'} onChange={() => onChange({ ...value, by: 'them' })} />
+          相手が発行した URL を使う
+        </label>
+      </div>
+      {value.by === 'them' && (
+        <div className="space-y-1">
+          <input className="input" value={value.url} onChange={(e) => onChange({ ...value, url: e.target.value })} placeholder="https://zoom.us/j/…（まだ届いていなければ空のまま。届いたら後から入れられます）" aria-label="相手の会議 URL" />
+          <div className="flex flex-wrap gap-2 text-xs text-slate-500">
+            <label className="flex items-center gap-1">
+              ミーティング ID
+              <input className="input w-auto" value={value.meetingId} onChange={(e) => onChange({ ...value, meetingId: e.target.value })} placeholder="任意" />
+            </label>
+            <label className="flex items-center gap-1">
+              パスコード
+              <input className="input w-auto" value={value.passcode} onChange={(e) => onChange({ ...value, passcode: e.target.value })} placeholder="任意" />
+            </label>
+          </div>
+          <div className="text-xs text-slate-500">
+            {detected && value.url.trim() === detected.url
+              ? `${detected.senderName ?? '相手'}さんのメッセージ（${fmtDateTime(detected.sentAt)}）から読み取りました。こちらでは会議を作らず、この URL を予定の説明欄に入れます。`
+              : value.url.trim()
+                ? 'こちらでは会議を作らず、この URL を予定の説明欄に入れます。'
+                : 'こちらでは会議を作りません。予定には「相手方が URL を発行」と残し、URL が届いたらこの画面の読み取り直しから予定に入れられます。'}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 interface PendingHold {
@@ -1459,6 +1512,11 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
   const [slots, setSlots] = useState<{ start: string; quote?: string; timeKnown?: boolean }[]>([]);
   const [web, setWeb] = useState(false);
   const [webText, setWebText] = useState('');
+  // 相手が発行した会議の URL を予定に入れたとき（「発行しました」ではなく「入れました」と出す）
+  const [webTextTheirs, setWebTextTheirs] = useState(false);
+  const [meeting, setMeeting] = useState<MeetingChoice>({ by: 'us', url: '', meetingId: '', passcode: '' });
+  // 後から届いた会議 URL を入れる、すでに入っている予定
+  const [meetingEventId, setMeetingEventId] = useState('');
   const [err, setErr] = useState('');
   const [done, setDone] = useState('');
   // 日程変更（リスケ）のとき、取り消す元の予定。'' は「新しく入れるだけ」
@@ -1478,8 +1536,13 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
       setTitle(r.title);
       setKind(r.kind);
       setDuration(r.durationMinutes);
-      setWeb(r.web);
+      // 相手のメッセージに会議 URL があれば、WEB 会議で相手が発行したものを使う設定にしておく（画面で変えられる）
+      const ext = r.externalMeeting ?? null;
+      setWeb(r.web || !!ext);
       setWebText('');
+      setMeeting(ext ? { by: 'them', url: ext.url, meetingId: ext.meetingId ?? '', passcode: ext.passcode ?? '' } : { by: 'us', url: '', meetingId: '', passcode: '' });
+      const upcoming = (r.existingEvents ?? []).find((ev) => new Date(ev.endAt).getTime() > Date.now());
+      setMeetingEventId(ext && upcoming ? String(upcoming.id) : '');
       setLocation(r.web ? (r.location ?? '') : (r.location ?? ''));
       setCaseId(cases[0] ? String(cases[0].id) : '');
       setSlots(r.slots.map((s) => ({ start: toLocalInput(s.startAt), quote: s.quote, timeKnown: s.timeKnown })));
@@ -1514,6 +1577,7 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
         caseId: caseId ? Number(caseId) : null,
         location: location || null,
         web,
+        ...(web ? meetingBody(meeting) : {}),
         replaceEventId: replaceId ? Number(replaceId) : null,
         cancelHoldSessionId: mode === 'confirmed' && cancelHoldId ? Number(cancelHoldId) : null,
         slots: (mode === 'confirmed' ? slots.slice(0, 1) : slots)
@@ -1525,13 +1589,14 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
       }),
     onSuccess: (r) => {
       setWebText(r.webText ?? '');
+      setWebTextTheirs(web && meeting.by === 'them');
       const was = (x: Replaced) => `${fmtDateTime(x.startAt)}「${x.title}」`;
       setDone(
         r.mode === 'confirmed'
           ? r.replaced
             ? `元の予定 ${was(r.replaced)} を取り消して、新しい日時で登録しました`
             : 'カレンダーに登録しました'
-          : `${r.events.length} 件を仮押さえしました。確定したら「予定」画面の「この候補で確定」を押してください${web ? '（そのときに会議 URL を発行します）' : ''}${
+          : `${r.events.length} 件を仮押さえしました。確定したら「予定」画面の「この候補で確定」を押してください${web && meeting.by === 'us' ? '（そのときに会議 URL を発行します）' : ''}${
               r.replaces ? `。確定した時点で、元の予定 ${was(r.replaces)} は取り消されます` : ''
             }`,
       );
@@ -1541,16 +1606,30 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
     onError: (e) => setErr((e as Error).message),
   });
   const confirmHold = useMutation({
-    mutationFn: () => api.post<{ webText: string; rescheduled: { title: string; startAt: string } | null }>(`/conversations/${conversationId}/schedule/confirm-hold`, pick),
+    mutationFn: () => api.post<{ webText: string; rescheduled: { title: string; startAt: string } | null }>(`/conversations/${conversationId}/schedule/confirm-hold`, { ...pick, ...(meeting.by === 'them' ? meetingBody(meeting) : {}) }),
     onSuccess: (r) => {
       setWebText(r.webText ?? '');
+      setWebTextTheirs(meeting.by === 'them');
       setDone(`仮押さえの候補で確定しました。ほかの候補の仮押さえは削除しました${r.rescheduled ? `。元の予定 ${fmtDateTime(r.rescheduled.startAt)}「${r.rescheduled.title}」は取り消しました` : ''}`);
       setErr('');
       onDone();
     },
     onError: (e) => setErr((e as Error).message),
   });
+  // 後から届いた会議 URL を、すでに入っている予定に入れる
+  const setEventMeeting = useMutation({
+    mutationFn: () => api.post<{ webText: string; event: { title: string; startAt: string } }>(`/conversations/${conversationId}/schedule/meeting`, { eventId: Number(meetingEventId), meeting: meetingBody({ ...meeting, by: 'them' }).meeting }),
+    onSuccess: (r) => {
+      setWebText(r.webText ?? '');
+      setWebTextTheirs(true);
+      setDone(`${fmtDateTime(r.event.startAt)}「${r.event.title}」に、相手方の会議 URL を入れました`);
+      setErr('');
+      onDone();
+    },
+    onError: (e) => setErr((e as Error).message),
+  });
   const holds = res?.holds ?? [];
+  const upcomingEvents = (res?.existingEvents ?? []).filter((ev) => new Date(ev.endAt).getTime() > Date.now());
   useEffect(() => {
     if (!res && !extract.isPending) extract.mutate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1575,11 +1654,14 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
       )}
       {done && webText && (
         <div className="mb-2 rounded border border-blue-200 bg-blue-50 p-2">
-          <div className="mb-1 text-xs font-medium text-blue-900">会議 URL を発行しました（予定の説明欄にも入れました）</div>
+          <div className="mb-1 text-xs font-medium text-blue-900">{webTextTheirs ? '相手方の会議 URL を予定の説明欄に入れました' : '会議 URL を発行しました（予定の説明欄にも入れました）'}</div>
           <pre className="whitespace-pre-wrap break-all font-mono text-xs text-slate-700">{webText}</pre>
-          <button type="button" className="btn btn-sm mt-2" onClick={() => onText(webText)}>
-            返信欄に入れる
-          </button>
+          {/* 相手が発行した URL は相手に送り返さない */}
+          {!webTextTheirs && (
+            <button type="button" className="btn btn-sm mt-2" onClick={() => onText(webText)}>
+              返信欄に入れる
+            </button>
+          )}
         </div>
       )}
       {res && !done && (
@@ -1587,6 +1669,26 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
           <div className="rounded bg-slate-50 p-2 text-xs text-slate-600">
             {res.holdMatch ? '仮押さえ中の候補のうち、やり取りで決まった日時が見つかりました。そのまま確定できます。' : res.status === 'none' ? '日程に関するやり取りは見つかりませんでした。下で手入力もできます。' : res.status === 'confirmed' && holds.length > 0 ? '日時は確定しているようですが、仮押さえ中の候補とは一致しません。候補を選んで確定するか、候補に無い日時として登録してください。' : res.status === 'confirmed' ? '日時は確定しているようです。' : '候補が挙がっていますが未確定のようです。仮押さえとして登録できます。'} {res.note}
           </div>
+          {res.externalMeeting && upcomingEvents.length > 0 && (
+            <div className="space-y-1.5 rounded border border-blue-200 bg-blue-50/60 p-2">
+              <div className="text-xs text-blue-900">
+                {res.externalMeeting.senderName ?? '相手'}さんから {res.externalMeeting.label} の URL が届いています（{fmtDateTime(res.externalMeeting.sentAt)}）。すでに入っている予定に入れるなら、予定を選んでください。
+              </div>
+              <div className="break-all font-mono text-xs text-slate-700">{res.externalMeeting.url}</div>
+              <div className="flex flex-wrap items-center gap-2">
+                <select className="input w-auto max-w-full" value={meetingEventId} onChange={(e) => setMeetingEventId(e.target.value)} aria-label="URL を入れる予定">
+                  {upcomingEvents.map((ev) => (
+                    <option key={ev.id} value={ev.id}>
+                      {fmtDateTime(ev.startAt)}　{ev.title}
+                    </option>
+                  ))}
+                </select>
+                <button className="btn btn-sm btn-primary" disabled={!meetingEventId || setEventMeeting.isPending} onClick={() => setEventMeeting.mutate()}>
+                  {setEventMeeting.isPending ? '入れています…' : 'この予定に URL を入れる'}
+                </button>
+              </div>
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-3">
             {holds.length > 0 && (
               <label className="flex items-center gap-1">
@@ -1629,6 +1731,7 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
                   </div>
                 </div>
               ))}
+              <MeetingByFields value={meeting} onChange={setMeeting} provider={res.webProvider} detected={res.externalMeeting} holdMode />
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   className="btn btn-primary shrink-0 whitespace-nowrap"
@@ -1642,7 +1745,7 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
                 >
                   {confirmHold.isPending ? '確定中…' : 'この候補で確定'}
                 </button>
-                <span className="text-xs text-slate-500">「仮」が外れて確定の予定になります。WEB 会議の仮押さえなら、ここで会議 URL を発行します。</span>
+                <span className="text-xs text-slate-500">「仮」が外れて確定の予定になります。{meeting.by === 'them' ? '会議 URL はこちらでは発行せず、相手方のものを入れます。' : 'WEB 会議の仮押さえなら、ここで会議 URL を発行します。'}</span>
               </div>
             </div>
           )}
@@ -1683,14 +1786,19 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
             </div>
             <div>
               <label className="label">場所</label>
-              <input className="input" value={location} onChange={(e) => setLocation(e.target.value)} placeholder={web ? WEB_PROVIDER_LABEL[res.webProvider] : '事務所 など'} />
+              <input className="input" value={location} onChange={(e) => setLocation(e.target.value)} placeholder={web ? (meeting.by === 'them' ? '（空なら「Zoom（相手方発行）」など）' : WEB_PROVIDER_LABEL[res.webProvider]) : '事務所 など'} />
             </div>
             <div className="md:col-span-2">
               <label className="flex flex-wrap items-center gap-2 text-sm">
                 <input type="checkbox" checked={web} onChange={(e) => setWeb(e.target.checked)} />
-                WEB 会議で行う（{WEB_PROVIDER_LABEL[res.webProvider]} の URL を発行する）
+                WEB 会議で行う
               </label>
               {web && (
+                <div className="mt-1">
+                  <MeetingByFields value={meeting} onChange={setMeeting} provider={res.webProvider} detected={res.externalMeeting} />
+                </div>
+              )}
+              {web && meeting.by === 'us' && (
                 <p className="mt-1 text-xs text-slate-500">
                   {res.webProvider === 'none'
                     ? 'Zoom も Google Meet も使えない設定です。初期設定で Zoom を登録するか、Google に接続すると URL を自動で発行します。いまは場所に「WEB会議」とだけ入ります。'

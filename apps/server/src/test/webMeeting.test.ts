@@ -132,3 +132,95 @@ describe('WEB 会議（Zoom）の発行', () => {
 });
 
 const { eq } = await import('drizzle-orm');
+
+const { findMeetingInText, externalMeetingText, externalLocation, EXTERNAL_PENDING_LINE } = await import('../services/webMeeting.js');
+const { setEventMeetingFromConversation, confirmHoldFromConversation, meetingFromMessages } = await import('../services/scheduleExtract.js');
+
+const ZOOM_INVITE = `岡田です。下記の Zoom でお願いいたします。
+
+Zoomミーティングに参加する
+https://us02web.zoom.us/j/81234567890?pwd=AbCdEf123。
+
+ミーティングID: 812 3456 7890
+パスコード: 654321`;
+
+describe('相手が発行した WEB 会議の URL', () => {
+  it('本文から Zoom・Meet・Teams の URL と、ミーティング ID・パスコードを取り出す', () => {
+    expect(findMeetingInText(ZOOM_INVITE)).toEqual({ url: 'https://us02web.zoom.us/j/81234567890?pwd=AbCdEf123', meetingId: '812 3456 7890', passcode: '654321' });
+    expect(findMeetingInText('当日は https://meet.google.com/abc-defg-hij からお入りください')?.url).toBe('https://meet.google.com/abc-defg-hij');
+    expect(findMeetingInText('Teams: https://teams.microsoft.com/l/meetup-join/19%3ameeting_x')?.url).toContain('teams.microsoft.com');
+    // 会議以外の URL（資料のアップロード先など）は拾わない
+    expect(findMeetingInText('資料は https://example.com/upload からお願いします')).toBeNull();
+    expect(externalMeetingText({ url: 'https://zoom.us/j/1', meetingId: '1', passcode: 'p' })).toBe('Zoom（相手方発行）: https://zoom.us/j/1\nミーティング ID: 1\nパスコード: p');
+    expect(externalLocation({ url: 'https://meet.google.com/x' })).toBe('Google Meet（相手方発行）');
+    expect(externalLocation(null)).toBe('WEB会議（相手方発行）');
+    // 相手から届いたものだけ、新しいものを優先して拾う（自分が送った URL は相手の発行ではない）
+    const found = meetingFromMessages([
+      { direction: 'in', body: '旧: https://zoom.us/j/111', sentAt: '2026-10-01T00:00:00Z', senderName: '岡田' },
+      { direction: 'in', body: ZOOM_INVITE, sentAt: '2026-10-02T00:00:00Z', senderName: '岡田' },
+      { direction: 'out', body: 'こちらの https://zoom.us/j/999 で', sentAt: '2026-10-03T00:00:00Z', senderName: null },
+    ]);
+    expect(found).toMatchObject({ url: 'https://us02web.zoom.us/j/81234567890?pwd=AbCdEf123', label: 'Zoom', senderName: '岡田' });
+  });
+
+  it('確定で「相手が発行」なら、こちらの Zoom は作らず相手の URL を予定に入れる', async () => {
+    created.length = 0;
+    const { conv } = seedConversation('岡田 彬弘', 'x-1');
+    const meeting = findMeetingInText(ZOOM_INVITE)!;
+    const r = await registerScheduleFromConversation(conv.id, { mode: 'confirmed', title: '岡田 打合せ', kind: 'meeting', slots: [slot('2027-11-05T01:00:00.000Z')], web: true, meetingBy: 'them', meeting });
+    expect(created.length).toBe(0);
+    const ev = r.events[0]!;
+    expect(ev.location).toBe('Zoom（相手方発行）');
+    expect(ev.description).toContain('Zoom（相手方発行）: https://us02web.zoom.us/j/81234567890?pwd=AbCdEf123');
+    expect(ev.description).toContain('パスコード: 654321');
+    expect(r.webText).toContain('ミーティング ID: 812 3456 7890');
+  });
+
+  it('URL がまだ届いていなければ「届いたら追加」と残し、後から届いた URL を入れられる（入れ直しても重ならない）', async () => {
+    created.length = 0;
+    const { conv, client } = seedConversation('東京 保険', 'x-2');
+    const r = await registerScheduleFromConversation(conv.id, { mode: 'confirmed', title: '東京 打合せ', kind: 'meeting', slots: [slot('2027-11-06T01:00:00.000Z')], web: true, meetingBy: 'them', meeting: null });
+    expect(created.length).toBe(0);
+    const ev = r.events[0]!;
+    expect(ev.location).toBe('WEB会議（相手方発行）');
+    expect(ev.description).toContain(EXTERNAL_PENDING_LINE);
+
+    const first = await setEventMeetingFromConversation(conv.id, ev.id, { url: 'https://zoom.us/j/111', passcode: 'aaa' });
+    expect(first.event!.description).not.toContain(EXTERNAL_PENDING_LINE);
+    expect(first.event!.description).toContain('Zoom（相手方発行）: https://zoom.us/j/111');
+    expect(first.event!.location).toBe('Zoom（相手方発行）');
+    const second = await setEventMeetingFromConversation(conv.id, ev.id, { url: 'https://meet.google.com/new-url' });
+    expect(second.event!.description).not.toContain('zoom.us/j/111');
+    expect(second.event!.description).not.toContain('パスコード: aaa');
+    expect(second.event!.description).toContain('Google Meet（相手方発行）: https://meet.google.com/new-url');
+    expect(second.event!.description).toContain('会話から登録');
+    expect(second.event!.location).toBe('Google Meet（相手方発行）');
+
+    // 事務所など、入力した場所はそのまま
+    db().update(schema.calendarEvents).set({ location: '相手方事務所' }).where(eq(schema.calendarEvents.id, ev.id)).run();
+    expect((await setEventMeetingFromConversation(conv.id, ev.id, { url: 'https://zoom.us/j/222' })).event!.location).toBe('相手方事務所');
+    // 別の依頼者の予定には入れない
+    const other = seedConversation('別 依頼者', 'x-3');
+    await expect(setEventMeetingFromConversation(other.conv.id, ev.id, { url: 'https://zoom.us/j/333' })).rejects.toThrow('この会話の相手の予定ではありません');
+    expect(client.id).toBeGreaterThan(0);
+  });
+
+  it('仮押さえで「相手が発行」なら、確定してもこちらでは作らない。WEB の仮押さえも、確定のときに相手の URL を選べる', async () => {
+    created.length = 0;
+    const { conv } = seedConversation('大阪 損保', 'x-4');
+    const r = await registerScheduleFromConversation(conv.id, { mode: 'holds', title: '大阪 打合せ', kind: 'meeting', slots: [slot('2027-11-07T01:00:00.000Z'), slot('2027-11-08T01:00:00.000Z')], web: true, meetingBy: 'them', meeting: null });
+    expect(r.events[0]!.location).toBe('WEB会議（相手方発行）');
+    const confirmed = await confirmHold(r.sessionId!, r.events[0]!.id);
+    expect(created.length).toBe(0);
+    expect(confirmed.description).toContain(EXTERNAL_PENDING_LINE);
+
+    // こちらで発行する予定だった WEB の仮押さえを、相手の URL で確定する
+    const r2 = await registerScheduleFromConversation(conv.id, { mode: 'holds', title: '大阪 打合せ2', kind: 'meeting', slots: [slot('2027-11-09T01:00:00.000Z'), slot('2027-11-10T01:00:00.000Z')], web: true });
+    const c2 = await confirmHoldFromConversation(conv.id, r2.sessionId!, r2.events[1]!.id, { meetingBy: 'them', meeting: { url: 'https://zoom.us/j/444', meetingId: '444' } });
+    expect(created.length).toBe(0);
+    expect(c2.webText).toBe('Zoom（相手方発行）: https://zoom.us/j/444\nミーティング ID: 444');
+    expect(c2.event.description).toContain('Zoom（相手方発行）: https://zoom.us/j/444');
+    expect(c2.event.description).not.toContain('確定したときに会議 URL を発行します');
+    expect(c2.event.location).toBe('Zoom（相手方発行）');
+  });
+});

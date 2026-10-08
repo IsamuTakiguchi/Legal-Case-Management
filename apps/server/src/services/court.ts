@@ -10,7 +10,7 @@ import { joinPath } from '../integrations/onedrive.js';
 import { logger } from '../logger.js';
 import { randomUUID } from 'node:crypto';
 import { isGoogleConnected } from '../integrations/google.js';
-import { issueZoomIfNeeded, webLocation, webMeetingProvider, webMeetingText, type WebMeeting } from './webMeeting.js';
+import { issueZoomIfNeeded, webLocation, webMeetingProvider, webMeetingText, externalLocation, externalMeetingText, withExternalMeeting, type WebMeeting, type ExternalMeeting } from './webMeeting.js';
 
 /** Google カレンダーを同期し、種別と依頼者を推定してキャッシュ */
 export async function syncCalendar(): Promise<{ synced: number }> {
@@ -491,7 +491,11 @@ export async function setHoldSetLocation(sessionId: number, location: string | n
 const holdMeta = new Map<number, { kind: EventKind; confirmedTitle: string }>();
 
 /** 候補のうち 1 つを確定。残りの仮押さえを削除し、選んだ予定を確定に切り替える */
-export async function confirmHold(sessionId: number, eventId: number) {
+/**
+ * 仮押さえの候補の 1 つで確定する。
+ * theirs を渡すと、WEB 会議の URL はこちらで発行せず、相手が発行したもの（まだ届いていなければ null）を予定に入れる
+ */
+export async function confirmHold(sessionId: number, eventId: number, opts: { theirs?: { meeting: ExternalMeeting | null } } = {}) {
   const session = db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, sessionId)).get();
   if (!session) throw new Error('日程調整が見つかりません');
   if (session.state !== 'proposing') throw new Error('この日程調整はすでに確定または取消されています');
@@ -515,7 +519,13 @@ export async function confirmHold(sessionId: number, eventId: number) {
       .trim() || null;
   // WEB 会議の予定は、確定したこの 1 件についてだけ会議 URL を発行する
   let web: WebMeeting | null = null;
-  if (session.web) {
+  let location: string | null | undefined;
+  let theirsText = '';
+  if (opts.theirs) {
+    description = withExternalMeeting(description, opts.theirs.meeting);
+    location = externalLocation(opts.theirs.meeting, session.location);
+    theirsText = externalMeetingText(opts.theirs.meeting);
+  } else if (session.web) {
     const provider = webMeetingProvider();
     web = await issueZoomIfNeeded(provider, { topic: title, startAt: new Date(chosen.startAt), durationMinutes: Math.max(15, Math.round((new Date(chosen.endAt).getTime() - new Date(chosen.startAt).getTime()) / 60_000)) });
     if (provider === 'meet' && isGoogleConnected() && !isLocalEventId(chosen.googleEventId)) {
@@ -525,7 +535,7 @@ export async function confirmHold(sessionId: number, eventId: number) {
     const text = webMeetingText(web);
     if (text) description = [text, description].filter(Boolean).join('\n');
   }
-  const updated = await editCalendarEvent(chosen.id, { title, kind, tentative: false, description });
+  const updated = await editCalendarEvent(chosen.id, { title, kind, tentative: false, description, ...(location !== undefined ? { location } : {}) });
   if (web?.provider === 'zoom' && web.id) {
     db().update(schema.schedulingSessions).set({ zoom: { id: web.id, joinUrl: web.url ?? '', password: web.password } }).where(eq(schema.schedulingSessions.id, sessionId)).run();
   }
@@ -541,7 +551,7 @@ export async function confirmHold(sessionId: number, eventId: number) {
     .run();
   holdMeta.delete(sessionId);
   resolveAlertsByKeyPrefix(`scheduling_stale:${sessionId}`);
-  return { ...updated, web, webText: webMeetingText(web) };
+  return { ...updated, web, webText: theirsText || webMeetingText(web) };
 }
 
 /**
