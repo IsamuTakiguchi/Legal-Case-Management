@@ -117,15 +117,19 @@ function MemoAlertActions({ alert, onDone }: { alert: Alert; onDone: () => void 
   const [err, setErr] = useState('');
   const done = useMutation({ mutationFn: () => api.put(`/tasks/${taskId}`, { status: 'done' }), onSuccess: onDone, onError: (e) => setErr((e as Error).message) });
   const snooze = useMutation({ mutationFn: () => api.post(`/tasks/${taskId}/memo-snooze`, { days: 14 }), onSuccess: onDone, onError: (e) => setErr((e as Error).message) });
+  const activate = useMutation({ mutationFn: () => api.put(`/tasks/${taskId}`, { status: 'open' }), onSuccess: onDone, onError: (e) => setErr((e as Error).message) });
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <button className="btn btn-sm btn-primary" disabled={done.isPending} onClick={() => done.mutate()} title="報告などが済んだら完了にします">
+      <button className="btn btn-sm btn-primary" disabled={activate.isPending} onClick={() => activate.mutate()} title="きっかけが来たので、対応中のタスクにします（それまではタスクの数に入れていません）">
+        タスクにする
+      </button>
+      <button className="btn btn-sm" disabled={done.isPending} onClick={() => done.mutate()} title="報告などが済んだら完了にします">
         済んだので完了
       </button>
       <button className="btn btn-sm" disabled={snooze.isPending} onClick={() => snooze.mutate()} title="まだ時期が来ていないので、2 週間後にまた見直します">
         まだ（2 週間後に見直す）
       </button>
-      <Link to="/tasks?status=memo" className="btn btn-sm" title="時期が決まったら、タスク一覧で締切を入れます">
+      <Link to="/tasks?status=memo" className="btn btn-sm" title="時期が決まったら、タスク一覧で締切を入れます（締切を入れるとタスクになります）">
         締切を決める
       </Link>
       {alert.payload.conversationId ? (

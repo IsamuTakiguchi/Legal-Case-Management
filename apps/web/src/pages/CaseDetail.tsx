@@ -311,7 +311,7 @@ export default function CaseDetail() {
               <h2 className="mb-2 font-semibold">未了タスク</h2>
               <ul className="mb-3 space-y-1">
                 {c.tasks
-                  .filter((t) => t.status !== 'done')
+                  .filter((t) => t.status !== 'done' && t.status !== 'memo')
                   .map((t) => {
                     if (editingTask === t.id)
                       return (
@@ -334,7 +334,7 @@ export default function CaseDetail() {
                           {t.note && <span className="block truncate text-xs text-slate-500" title={t.note}>{t.note.split('\n')[0]}</span>}
                         </span>
                         <TaskEditButton onClick={() => setEditingTask(t.id)} />
-                        {t.trigger && !t.dueAt ? <MemoBadge trigger={t.trigger} reviewAt={t.reviewAt} /> : <span className="badge badge-gray">{TASK_STATUS_LABEL[t.status as TaskStatus]}</span>}
+                        <span className="badge badge-gray">{TASK_STATUS_LABEL[t.status as TaskStatus]}</span>
                         {/* 締切（タスクそのもの）と、返信待ちなら返信期限。押すと変えられる */}
                         <span className="flex flex-wrap items-center">
                           <TaskDeadlines
@@ -357,8 +357,36 @@ export default function CaseDetail() {
                       </li>
                     );
                   })}
-                {c.tasks.filter((t) => t.status !== 'done').length === 0 && <li className="text-slate-500">なし</li>}
+                {c.tasks.filter((t) => t.status !== 'done' && t.status !== 'memo').length === 0 && <li className="text-slate-500">なし</li>}
               </ul>
+              {/* 時期未定の備忘は、きっかけが来るまでタスクに数えない。ここで見て、時期が来たらタスクにする */}
+              {c.tasks.some((t) => t.status === 'memo') && (
+                <div className="mb-3">
+                  <h3 className="mb-1 text-xs font-semibold text-slate-600">時期未定の備忘（タスクの数には入りません）</h3>
+                  <ul className="space-y-1">
+                    {c.tasks
+                      .filter((t) => t.status === 'memo')
+                      .map((t) => (
+                        <li key={t.id} className="flex flex-wrap items-center gap-2">
+                          <span className="min-w-0 flex-1">{t.title}</span>
+                          {t.trigger && <MemoBadge trigger={t.trigger} reviewAt={t.reviewAt} />}
+                          <button
+                            className="btn btn-sm"
+                            title="きっかけが来たので、対応中のタスクにします"
+                            onClick={() =>
+                              api.put(`/tasks/${t.id}`, { status: 'open' }).then(() => {
+                                qc.invalidateQueries({ queryKey: ['case', id] });
+                                qc.invalidateQueries({ queryKey: ['tasks'] });
+                              })
+                            }
+                          >
+                            タスクにする
+                          </button>
+                        </li>
+                      ))}
+                  </ul>
+                </div>
+              )}
               {addingMemo ? (
                 <div className="mb-3 rounded-md border border-orange-200 bg-orange-50/50 p-2">
                   <div className="mb-1 text-xs text-slate-500">日付はまだ決まらないが、きっかけが来たらやること（例: 和解の前に和解案を保険会社に報告）</div>

@@ -79,10 +79,11 @@ export default function Tasks() {
   const [newFollowUp, setNewFollowUp] = useState<string | null>(null);
   const [newDue, setNewDue] = useState<string | null>(null);
   const [sync, setSync] = useState(false);
-  // 「時期未定の備忘」は、未完了のうちきっかけ付きで締切がまだ無いもの
-  const list = useQuery({ queryKey: ['tasks', status], queryFn: () => api.get<Task[]>(`/tasks?status=${status === 'memo' ? 'active' : status}`), refetchInterval: 60_000 });
+  const list = useQuery({ queryKey: ['tasks', status], queryFn: () => api.get<Task[]>(`/tasks?status=${status}`), refetchInterval: 60_000 });
+  // 時期未定の備忘は、きっかけが来るまで未完了の数に入れない（件数だけ別に出す）
+  const memos = useQuery({ queryKey: ['tasks', 'memo'], queryFn: () => api.get<Task[]>('/tasks?status=memo'), enabled: status !== 'memo', refetchInterval: 60_000 });
   const sort = useSort('tasks', TASK_SORTS, 'deadline');
-  const rows = sort.apply((list.data ?? []).filter((t) => status !== 'memo' || (t.trigger && !t.dueAt)));
+  const rows = sort.apply(list.data ?? []);
   const [clientId, setClientId] = useState('');
   const [caseId, setCaseId] = useState('');
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -155,7 +156,6 @@ export default function Tasks() {
         <select className="input ml-auto w-auto" value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="active">未完了</option>
           <option value="waiting">連絡待ち（依頼者・相手方・事務局）</option>
-          <option value="memo">時期未定の備忘</option>
           {TASK_STATUSES.map((s) => (
             <option key={s} value={s}>
               {TASK_STATUS_LABEL[s]}
@@ -180,6 +180,14 @@ export default function Tasks() {
           <span className="text-xs text-slate-400">Chatwork のタスクは 10 分ごとに自動で取り込みます</span>
         )}
       </div>
+      {status !== 'memo' && (memos.data?.length ?? 0) > 0 && (
+        <div className="text-xs text-slate-500">
+          ⏳ 時期未定の備忘が {memos.data!.length} 件あります（きっかけが来るまでタスクの数には入れていません）{' '}
+          <button type="button" className="text-blue-700 hover:underline" onClick={() => setStatus('memo')}>
+            一覧を見る
+          </button>
+        </div>
+      )}
       <form
         className="card flex flex-wrap items-center gap-2"
         onSubmit={(e) => {
@@ -217,7 +225,7 @@ export default function Tasks() {
         />
         {clientId && <CaseSelect clientId={Number(clientId)} value={caseId} onChange={setCaseId} />}
         <select className="input w-auto" value={newStatus} onChange={(e) => setNewStatus(e.target.value as TaskStatus)}>
-          {TASK_STATUSES.filter((s) => s !== 'done').map((s) => (
+          {TASK_STATUSES.filter((s) => s !== 'done' && s !== 'memo').map((s) => (
             <option key={s} value={s}>
               {TASK_STATUS_LABEL[s]}
             </option>
@@ -319,7 +327,7 @@ export default function Tasks() {
                           <span className="font-medium">{t.title}</span>
                         )}
                         {t.chatworkTaskId && <span className="badge badge-chatwork ml-1">CW</span>}
-                        {t.trigger && (
+                        {t.status === 'memo' && t.trigger && (
                           <span className="ml-1">
                             <MemoBadge trigger={t.trigger} reviewAt={t.reviewAt} />
                           </span>
@@ -339,11 +347,14 @@ export default function Tasks() {
                     {/* 締切は対応中でも返信待ちでも同じ欄（返信待ちにしても消えない）。返信待ちは返信期限も */}
                     <TaskDeadlines task={t} onChange={(patch) => update.mutate({ id: t.id, patch })} />
                     {/* 時期未定の備忘: 締切が決まるまでは見直す日を出し、「まだ未定」で先に延ばせる */}
-                    {t.trigger && !t.dueAt && t.status !== 'done' && (
+                    {t.status === 'memo' && (
                       <div className="mt-0.5 flex items-center gap-1">
                         <span className={t.reviewAt && new Date(t.reviewAt).getTime() < now ? 'font-semibold text-orange-600' : 'text-slate-500'}>見直し {t.reviewAt ? fmtDeadline(t.reviewAt) : '未設定'}</span>
                         <button className="btn btn-sm px-1.5 py-0 text-[11px]" disabled={snooze.isPending} onClick={() => snooze.mutate(t.id)} title="まだ時期が決まっていないので、2 週間後にまた見直します">
                           まだ未定
+                        </button>
+                        <button className="btn btn-sm px-1.5 py-0 text-[11px]" disabled={update.isPending} onClick={() => update.mutate({ id: t.id, patch: { status: 'open' } })} title="きっかけが来たので、対応中のタスクにします（締切を入れてもタスクになります）">
+                          タスクにする
                         </button>
                       </div>
                     )}

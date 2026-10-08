@@ -8,7 +8,7 @@ import { DeadlineInput, fmtDeadline } from './Deadline';
  * 時期未定の備忘。「和解の前に和解案を教えてほしい」のように、日付はまだ決まらないが、
  * きっかけが来たらやること（主に報告）を、きっかけと見直す日つきのタスクとして残す
  */
-export const MEMO_HINT = '日付はまだ決まらないが、きっかけ（「和解の前」など）が来たらやること。見直す日と、後の連絡や記録できっかけが来たようなときに要確認でお知らせします';
+export const MEMO_HINT = '日付はまだ決まらないが、きっかけ（「和解の前」など）が来たらやること。きっかけが来るまではタスクの数に入れません。見直す日と、後の連絡や記録できっかけが来たようなときに要確認でお知らせします';
 
 export interface MemoCandidate {
   title: string;
@@ -179,7 +179,7 @@ export function MemoPanel({ messageId, conversationId, clientId, onClose }: { me
           閉じる
         </button>
       </div>
-      <p className="text-xs text-slate-500">「和解の前に和解案を教えてほしい」のように、日付がまだ決まらない宿題を残します。見直す日が来たときや、後の連絡・記録できっかけが来たようなときに要確認でお知らせします。</p>
+      <p className="text-xs text-slate-500">「和解の前に和解案を教えてほしい」のように、日付がまだ決まらない宿題を残します。きっかけが来るまではタスクの数に入れず、見直す日が来たときや、後の連絡・記録できっかけが来たようなときに要確認でお知らせします。</p>
       {messageId && items === null && (
         <div className="flex flex-wrap gap-2">
           <button className="btn btn-sm btn-primary" disabled={detect.isPending} onClick={() => detect.mutate()}>

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { and, eq, isNotNull, isNull, lt, ne, or } from 'drizzle-orm';
+import { and, eq, isNotNull, lt, or } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { generateStructured } from '../integrations/anthropic.js';
 import { isConfigured } from '../config.js';
@@ -42,7 +42,7 @@ const detectSchema = z.object({
 
 /** 時期未定の備忘（未完了で、締切がまだ決まっていないもの） */
 export function openMemos(filter: { clientId?: number | null; caseId?: number | null }) {
-  const conds = [isNotNull(schema.tasks.trigger), ne(schema.tasks.status, 'done'), isNull(schema.tasks.dueAt)];
+  const conds = [eq(schema.tasks.status, 'memo')];
   const scope = [filter.clientId ? eq(schema.tasks.clientId, filter.clientId) : null, filter.caseId ? eq(schema.tasks.caseId, filter.caseId) : null].filter((x) => x !== null);
   if (!scope.length) return [];
   return db()
@@ -183,7 +183,7 @@ export function checkMemoReviews(): number {
     .select({ task: schema.tasks, clientName: schema.clients.name })
     .from(schema.tasks)
     .leftJoin(schema.clients, eq(schema.clients.id, schema.tasks.clientId))
-    .where(and(isNotNull(schema.tasks.trigger), ne(schema.tasks.status, 'done'), isNull(schema.tasks.dueAt), isNotNull(schema.tasks.reviewAt), lt(schema.tasks.reviewAt, now)))
+    .where(and(eq(schema.tasks.status, 'memo'), isNotNull(schema.tasks.reviewAt), lt(schema.tasks.reviewAt, now)))
     .all();
   for (const r of rows) {
     const t = r.task;
@@ -191,7 +191,7 @@ export function checkMemoReviews(): number {
       type: 'memo_review',
       dedupeKey: `memo_review:${t.id}:${t.reviewAt}`,
       title: `${r.clientName ? `${r.clientName} / ` : ''}${t.title}（きっかけ: ${t.trigger}）`,
-      body: 'まだ時期が決まっていませんか？ 決まっていれば締切を入れ、まだなら次に見直す日を決めてください。',
+      body: 'まだ時期が決まっていませんか？ 時期が来ていればタスクにし（締切を入れてもタスクになります）、まだなら次に見直す日を決めてください。',
       payload: { taskId: t.id, conversationId: t.conversationId, caseId: t.caseId, clientId: t.clientId },
     });
   }
@@ -226,7 +226,8 @@ export async function createMemo(input: z.infer<typeof memoInputSchema>) {
   }
   const quote = input.sourceMessageId ? d.select({ body: schema.messages.body, channel: schema.messages.channel }).from(schema.messages).where(eq(schema.messages.id, input.sourceMessageId)).get() : null;
   const note = input.note ?? (quote ? `受信より:\n${withoutGreeting(quote.channel === 'gmail' ? stripQuotedReply(quote.body) : quote.body).slice(0, 600)}` : null);
-  return createTask({ title: input.title, trigger: input.trigger, reviewAt: input.reviewAt ?? null, note, clientId, caseId, conversationId, sourceMessageId: input.sourceMessageId ?? null, status: 'open', syncToChatwork: false });
+  // きっかけが来るまではタスクとして数えない（状態 memo）
+  return createTask({ title: input.title, trigger: input.trigger, reviewAt: input.reviewAt ?? null, note, clientId, caseId, conversationId, sourceMessageId: input.sourceMessageId ?? null, status: 'memo', syncToChatwork: false });
 }
 
 /** 冒頭の宛名と挨拶（「瀧口様」「お世話になっております。」）を外して、用件から始める */

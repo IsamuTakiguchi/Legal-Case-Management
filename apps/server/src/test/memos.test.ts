@@ -30,6 +30,7 @@ vi.mock('../integrations/anthropic.js', async (orig) => ({
 const { openTestDatabase, closeDatabase, db, schema } = await import('../db/index.js');
 const { runMemoDetection, createMemo, checkMemoReviews, checkMemosForNote, snoozeMemo, openMemos, memoSuggestionsFor } = await import('../services/memos.js');
 const { updateTask, listTasks } = await import('../services/tasks.js');
+const { countTasks } = await import('@lcm/shared');
 const { createApp } = await import('../index.js');
 const { setPassword } = await import('../auth/index.js');
 const { eq } = await import('drizzle-orm');
@@ -86,13 +87,17 @@ describe('時期未定の備忘', () => {
 
     const before = Date.now();
     const t = await createMemo({ title: r.items[0]!.title, trigger: r.items[0]!.trigger, sourceMessageId: m.id });
-    expect(t).toMatchObject({ trigger: '和解の前', status: 'open', dueAt: null, caseId: kase.id, clientId: client.id, conversationId: conv.id, sourceMessageId: m.id });
+    expect(t).toMatchObject({ trigger: '和解の前', status: 'memo', dueAt: null, caseId: kase.id, clientId: client.id, conversationId: conv.id, sourceMessageId: m.id });
     // 見直す日は既定で 2 週間後（日付だけ）
     expect(new Date(t.reviewAt!).getTime() - before).toBeGreaterThan(13 * 86400_000);
     // メモは用件から（宛名・挨拶は外す）
     expect(t.note).toMatch(/^受信より:\n掲題の件で、和解の前に和解案について/);
     expect(openMemos({ caseId: kase.id }).map((x) => x.id)).toEqual([t.id]);
-    expect(listTasks({ caseId: kase.id })[0]).toMatchObject({ trigger: '和解の前' });
+    expect(listTasks({ caseId: kase.id })[0]).toMatchObject({ trigger: '和解の前', status: 'memo' });
+    // きっかけが来るまではタスクの数に入れない（未完了・連絡待ちの一覧にも出さない。件数はここから数える）
+    expect(listTasks({ status: 'active', caseId: kase.id })).toHaveLength(0);
+    expect(countTasks(listTasks({ status: 'active' })).open).toBe(0);
+    expect(listTasks({ status: 'memo' }).map((x) => x.id)).toContain(t.id);
   });
 
   it('後から届いた連絡や事件の記録で、きっかけが来たら要確認に出す', async () => {
@@ -110,7 +115,11 @@ describe('時期未定の備忘', () => {
     expect(hits.map((h) => h.id)).toEqual([t.id]);
     expect(db().select().from(schema.alerts).where(eq(schema.alerts.dedupeKey, `memo_triggered:${t.id}:note:${note.id}`)).get()?.status).toBe('open');
 
-    // 完了にすると、きっかけのお知らせも閉じる
+    // 「タスクにする」で対応中になり、数に入る。きっかけのお知らせは閉じる
+    const active = updateTask(t.id, { status: 'open' });
+    expect(active.status).toBe('open');
+    expect(listTasks({ status: 'active', caseId: kase.id }).map((x) => x.id)).toContain(t.id);
+    expect(db().select().from(schema.alerts).where(eq(schema.alerts.dedupeKey, `memo_triggered:${t.id}:message:${m.id}`)).get()?.status).toBe('resolved');
     updateTask(t.id, { status: 'done' });
     expect(db().select().from(schema.alerts).where(eq(schema.alerts.dedupeKey, `memo_triggered:${t.id}:note:${note.id}`)).get()?.status).toBe('resolved');
     expect(openMemos({ caseId: kase.id })).toHaveLength(0);
@@ -126,8 +135,11 @@ describe('時期未定の備忘', () => {
     expect(new Date(snoozed.reviewAt!).getTime()).toBeGreaterThan(Date.now() + 6 * 86400_000);
     expect(db().select().from(schema.alerts).where(eq(schema.alerts.dedupeKey, key)).get()?.status).toBe('resolved');
     expect(openMemos({ caseId: kase.id }).map((x) => x.id)).toContain(t.id);
-    updateTask(t.id, { dueAt: new Date(Date.now() + 86400_000).toISOString() });
+    // 締切が決まったら、時期が決まったのでタスクになる（数にも入る）
+    const due = updateTask(t.id, { dueAt: new Date(Date.now() + 86400_000).toISOString() });
+    expect(due.status).toBe('open');
     expect(openMemos({ caseId: kase.id }).map((x) => x.id)).not.toContain(t.id);
+    expect(listTasks({ status: 'active', caseId: kase.id }).map((x) => x.id)).toContain(t.id);
   });
 
   it('事務局の伝言や短いメッセージは見ない', async () => {

@@ -10,13 +10,15 @@ export const CHANNEL_LABEL: Record<Channel, string> = {
   gmail: 'Gmail',
 };
 
-export const TASK_STATUSES = ['open', 'waiting_client', 'waiting_other', 'waiting_staff', 'done'] as const;
+/** memo は時期未定の備忘。きっかけが来るまではタスクとして数えない（未完了にも連絡待ちにも入れない） */
+export const TASK_STATUSES = ['open', 'waiting_client', 'waiting_other', 'waiting_staff', 'memo', 'done'] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
   open: '対応中',
   waiting_client: '依頼者の返信待ち',
   waiting_other: '相手方・裁判所待ち',
   waiting_staff: '事務局の回答・作業待ち',
+  memo: '時期未定（備忘）',
   done: '完了',
 };
 /** 相手の返事・作業を待っている状態（依頼者・相手方など・事務局）。期限を過ぎたら催促のお知らせを出す */
