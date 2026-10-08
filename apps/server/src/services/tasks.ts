@@ -80,6 +80,8 @@ export function updateTask(id: number, patch: Partial<TaskInput> & { status?: Ta
   if (patch.conversationId !== undefined) set.conversationId = patch.conversationId ?? null;
   if (patch.followUpAt !== undefined) set.followUpAt = patch.followUpAt ?? null;
   if (patch.dueAt !== undefined) set.dueAt = patch.dueAt ?? null;
+  // 時期未定の備忘に締切が入ったら、時期が決まったのでタスクにする（対応中）
+  if (cur.status === 'memo' && patch.dueAt && !patch.status) patch = { ...patch, status: 'open' };
   if (patch.trigger !== undefined) {
     set.trigger = patch.trigger?.trim() || null;
     if (set.trigger && !cur.reviewAt && patch.reviewAt === undefined) set.reviewAt = defaultMemoReview().toISOString();
@@ -90,6 +92,11 @@ export function updateTask(id: number, patch: Partial<TaskInput> & { status?: Ta
   }
   if (patch.status && patch.status !== cur.status) {
     set.status = patch.status;
+    // 備忘からタスクになった・備忘を完了にしたら、見直し・きっかけのお知らせは閉じる
+    if (cur.status === 'memo') {
+      resolveAlertsByKeyPrefix(`memo_review:${id}:`);
+      resolveAlertsByKeyPrefix(`memo_triggered:${id}:`);
+    }
     const waiting = isWaitingStatus(patch.status);
     if (waiting) {
       set.waitingSince = now;
