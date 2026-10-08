@@ -17,6 +17,8 @@ interface ConversationListItem {
   lastMessageAt: string | null;
   unread: number;
   needsReply: boolean;
+  /** 検索ではアーカイブした会話も出す */
+  archived?: boolean;
   staff?: boolean;
   /** LINE のグループ・複数人トーク（返信はグループ全体に届く） */
   lineGroup?: boolean;
@@ -50,6 +52,14 @@ export default function Inbox() {
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [msg, setMsg] = useState('');
+  // 入力しながら探す（日本語入力の確定の Enter では送られないため、少し待ってから自動で探す）
+  useEffect(() => {
+    if (q === filter.q) return;
+    const t = setTimeout(() => set('q', q.trim()), 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q]);
+  const searching = !!filter.q;
   // 絞り込みを変えたら選択を解除
   useEffect(() => setSelected(new Set()), [filter.channel, filter.needsReply, filter.unlinked, filter.q, filter.archived, filter.show]);
   const ids = query.data?.map((c) => c.id) ?? [];
@@ -114,10 +124,27 @@ export default function Inbox() {
               set('q', q);
             }}
           >
-            <input className="input md:w-56" placeholder="名前・本文を検索" title="相手の名前・メールアドレス・件名・依頼者名・関係者名と、本文から探します。空白で区切るとすべてを含むものを探します" value={q} onChange={(e) => setQ(e.target.value)} />
+            <input className="input md:w-56" type="search" placeholder="名前・本文を検索" title="相手の名前・メールアドレス・件名・依頼者名・関係者名と、本文から探します。空白で区切るとすべてを含むものを探します" value={q} onChange={(e) => setQ(e.target.value)} />
           </form>
         </div>
       </div>
+      {searching && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+          <span>
+          「{filter.q}」で検索中: {query.isFetching && !query.data ? '…' : `${query.data?.length ?? 0} 件`}（「未対応」などの表示の切り替えやアーカイブに関係なく、すべての会話から探しています）
+          </span>
+          <button
+            type="button"
+            className="text-blue-700 hover:underline"
+            onClick={() => {
+              setQ('');
+              set('q', '');
+            }}
+          >
+            検索をやめる
+          </button>
+        </div>
+      )}
       <StaleUnanswered compact />
       {(query.data?.length ?? 0) > 0 && (
         <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -186,11 +213,12 @@ export default function Inbox() {
                     {c.contact && c.client && <span className="min-w-0 truncate text-xs text-slate-500">{c.client.name} / {c.contact.caseTitle}</span>}
                     <span className="ml-auto shrink-0 whitespace-nowrap text-xs text-slate-400">{fmtRelative(c.lastMessageAt)}</span>
                   </div>
-                  {(!c.clientId || c.needsReply || c.unread > 0 || c.subject || c.staff) && (
+                  {(!c.clientId || c.needsReply || c.unread > 0 || c.subject || c.staff || (searching && c.archived)) && (
                     <div className="mt-0.5 flex items-center gap-2">
                       {c.staff && <span className="badge badge-gray shrink-0 whitespace-nowrap">事務局</span>}
                       {!c.clientId && !c.staff && <span className="badge badge-orange shrink-0 whitespace-nowrap">未紐付け</span>}
                       {c.needsReply && <span className="badge badge-blue shrink-0 whitespace-nowrap">要返信</span>}
+                      {searching && c.archived && <span className="badge badge-gray shrink-0 whitespace-nowrap">アーカイブ</span>}
                       {c.unread > 0 && <span className="badge badge-blue shrink-0">{c.unread}</span>}
                       {c.subject && !(c.channel === 'chatwork' && !c.client) && <span className="min-w-0 truncate text-xs text-slate-500">{c.subject}</span>}
                     </div>
@@ -199,7 +227,7 @@ export default function Inbox() {
                 </div>
               </Link>
               <div className="flex shrink-0 flex-col gap-1 self-center px-2 md:px-3">
-                {filter.archived !== '1' && c.needsReply && (
+                {!c.archived && c.needsReply && (
                   <button type="button" className="btn btn-sm whitespace-nowrap" onClick={() => rowAction.mutate({ id: c.id, action: 'resolve' })} disabled={rowAction.isPending} title="要返信を外して既読にします">
                     対応済み
                   </button>
@@ -207,11 +235,11 @@ export default function Inbox() {
                 <button
                   type="button"
                   className="btn btn-sm whitespace-nowrap text-slate-600"
-                  onClick={() => rowAction.mutate({ id: c.id, action: filter.archived === '1' ? 'unarchive' : 'archive' })}
+                  onClick={() => rowAction.mutate({ id: c.id, action: c.archived ? 'unarchive' : 'archive' })}
                   disabled={rowAction.isPending}
-                  title={filter.archived === '1' ? 'アーカイブを解除して受信箱に戻します' : '受信箱から外します（「アーカイブ」で見られます）'}
+                  title={c.archived ? 'アーカイブを解除して受信箱に戻します' : '受信箱から外します（「アーカイブ」で見られます）'}
                 >
-                  {filter.archived === '1' ? '解除' : 'アーカイブ'}
+                  {c.archived ? '解除' : 'アーカイブ'}
                 </button>
               </div>
             </li>

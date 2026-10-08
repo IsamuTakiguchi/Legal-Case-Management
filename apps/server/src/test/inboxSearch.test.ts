@@ -74,6 +74,31 @@ describe('受信箱の検索（名前・本文）', () => {
     expect(found('_')).toEqual([]);
   });
 
+  it('検索中は「未対応」などの表示の切り替えやアーカイブに関係なく探す（返信済みの会話も見つかる）', () => {
+    const replied = conv({ counterpartName: '菊岡正博', counterpartAddress: 'kikuoka@example.com' }, 'お世話になっております。');
+    // 自分が最後に返信した（「未対応」には出ない）
+    db()
+      .insert(schema.messages)
+      .values({ conversationId: replied.id, channel: 'gmail', externalId: `m-out-${replied.id}`, direction: 'out', body: '承知しました。', sentAt: new Date().toISOString() })
+      .run();
+    const archived = conv({ counterpartName: '菊岡 京子', archived: true }, '連絡です');
+    expect(listConversations({ show: 'unanswered', inboundOnly: true }).map((c) => c.id)).not.toContain(replied.id);
+    const hits = listConversations({ q: '菊岡', show: 'unanswered', inboundOnly: true }).map((c) => c.id);
+    expect(hits).toEqual(expect.arrayContaining([replied.id, archived.id]));
+  });
+
+  it('全角・半角、大文字・小文字、カタカナ・ひらがなの違いを問わない', () => {
+    const k = conv({ counterpartName: 'ｷｸｵｶ ﾏｻﾋﾛ', counterpartAddress: 'Masahiro.Kikuoka@Example.com' }, 'ＡＢＣ商事の件');
+    expect(found('きくおか')).toContain(k.id);
+    expect(found('キクオカ')).toContain(k.id);
+    expect(found('ｋｉｋｕｏｋａ')).toContain(k.id);
+    expect(found('MASAHIRO')).toContain(k.id);
+    // 本文の全角英字は、半角で入れても見つかる
+    expect(found('ABC商事')).toContain(k.id);
+    // 別の項目どうしをまたいで当たらない（表示名の末尾＋アドレスの先頭）
+    expect(found('まさひろmasahiro')).not.toContain(k.id);
+  });
+
   it('件数で切る前に絞るので、古い会話も見つかる', () => {
     const old = conv({ counterpartName: '古川 健' }, '昔の連絡', { minutesAgo: 60 * 24 * 400 });
     expect(found('古川', 1)).toEqual([old.id]);

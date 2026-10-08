@@ -325,11 +325,15 @@ export function listConversations(filter: {
   const d = db();
   const conds = [];
   if (filter.clientId) conds.push(eq(schema.conversations.clientId, filter.clientId));
-  if (filter.inboundOnly) conds.push(isNotNull(schema.conversations.lastInboundAt));
+  // 検索中は「未対応」などの表示の切り替えやアーカイブに関係なく、すべての会話から探す（返信済みの会話も見つかるように）
+  const searching = !!filter.q?.trim();
+  if (filter.inboundOnly && !searching) conds.push(isNotNull(schema.conversations.lastInboundAt));
   // 最後のメッセージがどちら向きかは、会話の控えの日時ではなくメッセージ本体から見る（取り込み方によって控えがずれていても正しく出す）
   const lastDirection = sql`(select m.direction from messages m where m.conversation_id = ${schema.conversations.id} order by m.sent_at desc, m.id desc limit 1)`;
   const hasInbound = sql`exists (select 1 from messages m where m.conversation_id = ${schema.conversations.id} and m.direction = 'in')`;
-  if (filter.show === 'unanswered') {
+  if (searching) {
+    // 表示の切り替えは使わない
+  } else if (filter.show === 'unanswered') {
     // 相手からの連絡で終わっている会話だけ（自分が送って終わったものは出さない）
     conds.push(sql`${lastDirection} = 'in'`);
   } else if (filter.show === 'mine-last') {
@@ -342,10 +346,10 @@ export function listConversations(filter: {
   if (filter.channel) conds.push(eq(schema.conversations.channel, filter.channel));
   if (filter.needsReply) conds.push(eq(schema.conversations.needsReply, true));
   if (filter.unlinked) conds.push(isNull(schema.conversations.clientId));
-  conds.push(eq(schema.conversations.archived, filter.archived ?? false));
+  if (!searching) conds.push(eq(schema.conversations.archived, filter.archived ?? false));
   // 検索は、件数で切る前に絞る（古い会話でも見つかるように）
-  if (filter.q?.trim()) {
-    const ids = searchConversationIds(filter.q);
+  if (searching) {
+    const ids = searchConversationIds(filter.q!);
     if (ids.length === 0) return [];
     conds.push(inArray(schema.conversations.id, ids));
   }
@@ -376,8 +380,17 @@ export function listConversations(filter: {
   });
 }
 
-/** 空白（半角・全角）を外す。「山田太郎」で「山田 太郎」も見つかるように */
-const noSpace = (col: ReturnType<typeof sql.raw>) => sql`replace(replace(coalesce(${col}, ''), ' ', ''), '　', '')`;
+/**
+ * 検索の比べ方をそろえる。全角・半角（ＮＦＫＣ）、大文字・小文字、空白の有無、カタカナ・ひらがなの違いを無視する。
+ * 「菊岡」で「菊岡 正博」「菊岡　正博」も、「きくおか」で「キクオカ」も見つかるように
+ */
+export function normalizeForSearch(s: string | null | undefined): string {
+  return (s ?? '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\s\u3000\u200b-\u200d\ufeff]+/g, '')
+    .replace(/[\u30a1-\u30f6]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60));
+}
 
 /**
  * 受信箱の検索。名前（相手の表示名・メールアドレス・件名・依頼者名とふりがな・関係者名と所属・担当者名・
@@ -386,39 +399,46 @@ const noSpace = (col: ReturnType<typeof sql.raw>) => sql`replace(replace(coalesc
 export function searchConversationIds(q: string): number[] {
   const d = db();
   const terms = q
-    .split(/[\s　]+/)
+    .split(/[\s\u3000]+/)
     .map((t) => t.trim())
     .filter(Boolean)
     .slice(0, 5);
+  if (!terms.length) return [];
+  // 名前: 会話ごとに名前の項目をつなげ、比べ方をそろえてから探す（SQL の LIKE では全角・半角やカナの違いを吸収できない）
+  const nameRows = d.all<{ id: number; names: string | null }>(sql`
+    SELECT c.id AS id,
+      coalesce(c.counterpart_name, '') || char(1) || coalesce(c.counterpart_address, '') || char(1) || coalesce(c.subject, '') || char(1) ||
+      coalesce(cl.name, '') || char(1) || coalesce(cl.kana, '') || char(1) ||
+      coalesce(cc.name, '') || char(1) || coalesce(cc.kana, '') || char(1) || coalesce(cc.organization, '') || char(1) ||
+      coalesce(cp.name, '') || char(1) || coalesce(cp.kana, '') AS names
+    FROM conversations c
+    LEFT JOIN clients cl ON cl.id = c.client_id
+    LEFT JOIN case_contacts cc ON cc.id = c.contact_id
+    LEFT JOIN client_persons cp ON cp.id = c.client_person_id
+  `);
+  const names = new Map<number, string>();
+  for (const r of nameRows) names.set(r.id, normalizeForSearch(r.names));
+  // メッセージの送信者名（グループの発言者など）
+  for (const r of d.all<{ id: number; name: string }>(sql`SELECT DISTINCT conversation_id AS id, sender_name AS name FROM messages WHERE sender_name IS NOT NULL AND sender_name <> ''`)) {
+    names.set(r.id, `${names.get(r.id) ?? ''}\u0001${normalizeForSearch(r.name)}`);
+  }
   let result: Set<number> | null = null;
   for (const term of terms) {
-    // LIKE の % _ は文字として探す（エスケープ文字は !）
-    const like = `%${term.replace(/[!%_]/g, (c) => `!${c}`)}%`;
+    const key = normalizeForSearch(term);
     const ids = new Set<number>();
-    const byName = d.all<{ id: number }>(sql`
-      SELECT c.id FROM conversations c
-      LEFT JOIN clients cl ON cl.id = c.client_id
-      LEFT JOIN case_contacts cc ON cc.id = c.contact_id
-      LEFT JOIN client_persons cp ON cp.id = c.client_person_id
-      WHERE ${noSpace(sql.raw('c.counterpart_name'))} LIKE ${like} ESCAPE '!'
-         OR c.counterpart_address LIKE ${like} ESCAPE '!'
-         OR c.subject LIKE ${like} ESCAPE '!'
-         OR ${noSpace(sql.raw('cl.name'))} LIKE ${like} ESCAPE '!'
-         OR ${noSpace(sql.raw('cl.kana'))} LIKE ${like} ESCAPE '!'
-         OR ${noSpace(sql.raw('cc.name'))} LIKE ${like} ESCAPE '!'
-         OR ${noSpace(sql.raw('cc.kana'))} LIKE ${like} ESCAPE '!'
-         OR ${noSpace(sql.raw('cc.organization'))} LIKE ${like} ESCAPE '!'
-         OR ${noSpace(sql.raw('cp.name'))} LIKE ${like} ESCAPE '!'
-         OR ${noSpace(sql.raw('cp.kana'))} LIKE ${like} ESCAPE '!'
-         OR c.id IN (SELECT m.conversation_id FROM messages m WHERE ${noSpace(sql.raw('m.sender_name'))} LIKE ${like} ESCAPE '!')
-    `);
-    for (const r of byName) ids.add(r.id);
-    // 本文: 3 文字以上は全文検索（trigram）、2 文字以下は全文検索が使えないので本文をそのまま探す
-    const byBody =
-      term.length >= 3
-        ? d.all<{ id: number }>(sql`SELECT DISTINCT m.conversation_id AS id FROM messages m WHERE m.id IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ${ftsQuery(term)} LIMIT 2000)`)
-        : d.all<{ id: number }>(sql`SELECT DISTINCT m.conversation_id AS id FROM messages m WHERE m.body LIKE ${like} ESCAPE '!' LIMIT 2000`);
-    for (const r of byBody) ids.add(r.id);
+    for (const [id, hay] of names) if (key && hay.includes(key)) ids.add(id);
+    // 本文: 3 文字以上は全文検索（trigram）、2 文字以下は全文検索が使えないので本文をそのまま探す。
+    // 入力どおり・半角にそろえたもの（ＮＦＫＣ）・英数字を全角にしたものの 3 通りで探す（本文の書き方がまちまちなので）
+    const half = term.normalize('NFKC');
+    const full = half.replace(/[!-~]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0xfee0));
+    for (const t of new Set([term, half, full])) {
+      const like = `%${t.replace(/[!%_]/g, (c) => `!${c}`)}%`;
+      const byBody =
+        t.length >= 3
+          ? d.all<{ id: number }>(sql`SELECT DISTINCT m.conversation_id AS id FROM messages m WHERE m.id IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ${ftsQuery(t)} LIMIT 2000)`)
+          : d.all<{ id: number }>(sql`SELECT DISTINCT m.conversation_id AS id FROM messages m WHERE m.body LIKE ${like} ESCAPE '!' LIMIT 2000`);
+      for (const r of byBody) ids.add(r.id);
+    }
     const prev: Set<number> | null = result;
     const next: Set<number> = prev ? new Set([...prev].filter((x) => ids.has(x))) : ids;
     if (!next.size) return [];
