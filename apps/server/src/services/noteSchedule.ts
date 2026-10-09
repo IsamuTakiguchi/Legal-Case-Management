@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { generateStructured } from '../integrations/anthropic.js';
 import { findFreeSlots, type Slot } from './scheduling.js';
-import { businessHours, fmtHm, getSettingInt } from './settings.js';
+import { businessHours, fmtHm, getSetting, getSettingInt } from './settings.js';
 import { createCalendarEvent, createHoldSet } from './court.js';
 import { issueZoomIfNeeded, webLocation, webMeetingProvider, webMeetingText } from './webMeeting.js';
 import { CASE_NOTE_KIND_LABEL, familyName, formatJaDateTime, toJstParts, type CaseNoteKind, type EventKind, type SchedulePreferences } from '@lcm/shared';
@@ -45,6 +45,7 @@ const noteScheduleSchema = z.object({
         kind: z.enum(['meeting', 'consult', 'hearing', 'other']).describe('meeting=打合せ / consult=相談 / hearing=裁判所の期日 / other=その他'),
         durationMinutes: z.number().int().nullable().describe('所要時間（分）。書かれていなければ null'),
         location: z.string().nullable().describe('場所が書かれていればそのまま（例: 奈良地裁 第3民事部、事務所、Zoom）。無ければ null'),
+        web: z.boolean().describe('ウェブ会議で行うか。裁判所の期日なら「双方ウェブ」「ウェブ期日」「WEB」「Teams」など、出頭せずにウェブで参加するものは true。出頭・来所なら false'),
         quote: z.string().describe('根拠となった記録の一節（短く）'),
       }),
     )
@@ -58,9 +59,23 @@ export interface FixedEvent {
   timeKnown: boolean;
   content: string;
   kind: EventKind;
-  /** 記録に書かれていた場所（無ければ null） */
+  /** 記録に書かれていた場所（無ければ null）。ウェブの期日は設定の場所（既定「ブース」） */
   location: string | null;
+  /** ウェブで行う予定か（ウェブの期日は件名を「WEB裁判」にする） */
+  web: boolean;
   quote: string;
+}
+
+/** ウェブで行うと読める書き方（「双方ウェブ」「ウェブ期日」「WEB」「Teams」など） */
+const WEB_WORDS_RE = /ウェブ|ＷＥＢ|ｗｅｂ|web|teams|ティームズ|オンライン/i;
+
+/**
+ * ウェブで行う裁判所の期日は、カレンダーの決まった書き方にする。
+ * 件名は「WEB裁判（事件名）」（内容の末尾の括弧書きは残す）、場所は事務所のブース（設定で変えられる）
+ */
+export function webHearingStyle(content: string): { content: string; location: string } {
+  const paren = /（[^（）]*(?:（[^（）]*）[^（）]*)*）\s*$/.exec(content)?.[0]?.trim() ?? '';
+  return { content: `${getSetting('web_hearing_title') || 'WEB裁判'}${paren}`, location: getSetting('web_hearing_location') || 'ブース' };
 }
 
 export interface NoteScheduleProposal {
@@ -194,13 +209,20 @@ export async function proposeScheduleFromNote(
     .map((f) => {
       const startAt = new Date(f.startAt);
       const minutes = Math.min(480, Math.max(15, f.durationMinutes ?? defaultMinutes));
+      const kind = (f.kind === 'other' ? 'meeting' : f.kind) as EventKind;
+      const content = f.content.trim() || (f.kind === 'hearing' ? '期日' : '打合せ');
+      const location = f.location?.trim() || null;
+      // AI が web を落としても、場所や根拠の一節に「双方ウェブ」などがあればウェブとみなす
+      const web = !!f.web || WEB_WORDS_RE.test(`${location ?? ''} ${f.quote}`);
+      const style = kind === 'hearing' && web ? webHearingStyle(content) : null;
       return {
         startAt: startAt.toISOString(),
         endAt: new Date(startAt.getTime() + minutes * 60_000).toISOString(),
         timeKnown: f.timeKnown,
-        content: f.content.trim() || (f.kind === 'hearing' ? '期日' : '打合せ'),
-        kind: (f.kind === 'other' ? 'meeting' : f.kind) as EventKind,
-        location: f.location?.trim() || null,
+        content: style?.content ?? content,
+        kind,
+        location: style?.location ?? location,
+        web,
         quote: f.quote,
       };
     })

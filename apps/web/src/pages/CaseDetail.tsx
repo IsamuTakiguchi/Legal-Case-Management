@@ -1779,7 +1779,8 @@ interface FixedEvent {
 function FixedEventRow({ noteId, f, clientName, onDone }: { noteId: number; f: FixedEvent; clientName: string | null; onDone: () => void }) {
   const surname = clientName ? clientName.split(/[\s\u3000]/)[0]! : '';
   const [start, setStart] = useState(() => toLocalInput(f.startAt));
-  const [title, setTitle] = useState(`${surname ? `${surname} ` : ''}${f.content}`);
+  // 件名は「河村亮祐　WEB裁判（損害賠償請求事件）」のように、名前と内容の間を全角の空白にする
+  const [title, setTitle] = useState(`${surname ? `${surname}　` : ''}${f.content}`);
   const [kind, setKind] = useState<EventKind>(f.kind);
   const [duration, setDuration] = useState(String(Math.max(15, Math.round((new Date(f.endAt).getTime() - new Date(f.startAt).getTime()) / 60_000))));
   const [web, setWeb] = useState(false);
@@ -1834,9 +1835,9 @@ function FixedEventRow({ noteId, f, clientName, onDone }: { noteId: number; f: F
           <span className="label">所要（分）</span>
           <input className="input w-16 py-0.5" type="number" min={15} step={15} value={duration} onChange={(e) => setDuration(e.target.value)} disabled={done} />
         </label>
-        <label className="min-w-0 flex-1">
+        <label className="min-w-[8rem] flex-1">
           <span className="label">場所</span>
-          <input className="input min-w-32 py-0.5" value={location} onChange={(e) => setLocation(e.target.value)} placeholder={web ? '空欄なら会議 URL だけ' : '例: 奈良地裁 / 事務所'} maxLength={200} disabled={done} aria-label="場所" />
+          <input className="input w-full py-0.5" value={location} onChange={(e) => setLocation(e.target.value)} placeholder={web ? '空欄なら会議 URL だけ' : '例: 奈良地裁 / 事務所'} maxLength={200} disabled={done} aria-label="場所" />
         </label>
         <label className="flex items-center gap-1 whitespace-nowrap pb-1 text-xs text-slate-600">
           <input type="checkbox" checked={web} onChange={(e) => setWeb(e.target.checked)} disabled={done} />
