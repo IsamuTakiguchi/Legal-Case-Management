@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import { useSpotlight } from '../lib/spotlight';
 import { useDraftRecord, useDraftGroup, useDraft, DraftHint } from '../lib/draft';
 import { RoomPicker } from '../lib/RoomPicker';
+import { ClientPicker } from '../lib/ClientPicker';
 import { HoldForm, HoldLocationEditor, HoldAddCandidates, fmtEventRange, type RescheduleTarget } from '../lib/HoldForm';
 import { LongText } from '../lib/LongText';
 import { TaskDeadlines, NewTaskDeadlines, TaskDeadlineSelect, FOLLOW_LABEL, DUE_HINT, FOLLOW_HINT } from '../lib/Deadline';
@@ -136,6 +137,8 @@ export default function CaseDetail() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<'overview' | 'timeline' | 'creditors'>('overview');
   const [addingMemo, setAddingMemo] = useState(false);
+  // 紐付けを直している予定
+  const [relinking, setRelinking] = useState<number | null>(null);
   // 中身（タスク名・メモ）を直している未了タスク
   const [editingTask, setEditingTask] = useState<number | null>(null);
   const d = useQuery({ queryKey: ['case', id], queryFn: () => api.get<CaseData>(`/cases/${id}`) });
@@ -425,10 +428,15 @@ export default function CaseDetail() {
                   const resch = holds.data?.find((h) => h.rescheduleOf?.eventId === e.id);
                   const future = new Date(e.startAt).getTime() > Date.now();
                   return (
-                    <li key={e.id} className="flex flex-wrap items-center gap-2">
-                      <span className="w-28 text-slate-500">{fmtDateTime(e.startAt)}</span>
+                    <li key={e.id} className="border-b border-slate-100 pb-1 last:border-0">
+                      {/* 狭い列でも件名がつぶれないよう、日時・ボタンの行と件名の行を分ける */}
+                      <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-slate-500">{fmtDateTime(e.startAt)}</span>
                       <span className="badge badge-gray">{EVENT_KIND_LABEL[e.kind as EventKind]}</span>
-                      <span className="min-w-0 flex-1">{e.title}</span>
+                      <span className="ml-auto flex flex-wrap items-center gap-2">
+                      <button className="text-xs text-slate-500 hover:text-blue-700 hover:underline" onClick={() => setRelinking(relinking === e.id ? null : e.id)} title="別の依頼者・事件に紐付けてしまったときに直します">
+                        紐付けを直す
+                      </button>
                       {resch ? (
                         <span className="badge badge-blue" title="変更後の候補を仮押さえ中です">
                           日程変更の調整中
@@ -449,6 +457,22 @@ export default function CaseDetail() {
                           </button>
                         )
                       )}
+                      </span>
+                      </div>
+                      <div className="break-words">{e.title}</div>
+                      {relinking === e.id && (
+                        <EventRelink
+                          eventId={e.id}
+                          clientId={c.client?.id ?? null}
+                          caseId={c.id}
+                          onClose={() => setRelinking(null)}
+                          onDone={() => {
+                            setRelinking(null);
+                            qc.invalidateQueries({ queryKey: ['case', id] });
+                            qc.invalidateQueries({ queryKey: ['calendar'] });
+                          }}
+                        />
+                      )}
                     </li>
                   );
                 })}
@@ -460,6 +484,60 @@ export default function CaseDetail() {
       )}
       {tab === 'timeline' && <Timeline caseId={c.id} />}
       {tab === 'creditors' && <Creditors caseId={c.id} stages={c.caseType?.creditorStages ?? []} />}
+    </div>
+  );
+}
+
+/**
+ * 予定の紐付け（依頼者・事件）を直す。別の依頼者の事件に付けてしまったときなど。
+ * Google カレンダーの予定にも書き込むので、同期で元に戻らない
+ */
+function EventRelink({ eventId, clientId, caseId, onClose, onDone }: { eventId: number; clientId: number | null; caseId: number; onClose: () => void; onDone: () => void }) {
+  const [client, setClient] = useState(clientId ? String(clientId) : '');
+  const [kase, setKase] = useState(String(caseId));
+  const [err, setErr] = useState('');
+  const cases = useQuery({ queryKey: ['cases', 'client', client], queryFn: () => api.get<{ id: number; title: string; status: string }[]>(`/cases?clientId=${client}`), enabled: !!client });
+  const save = useMutation({
+    mutationFn: () => api.put(`/calendar/events/${eventId}`, { clientId: client ? Number(client) : null, caseId: kase ? Number(kase) : null }),
+    onSuccess: onDone,
+    onError: (e) => setErr((e as Error).message),
+  });
+  return (
+    <div className="fade-in mt-1 w-full space-y-1.5 rounded-md border border-blue-200 bg-blue-50/50 p-2 text-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-slate-500">依頼者</span>
+        <ClientPicker
+          value={client}
+          onChange={(v) => {
+            setClient(v);
+            setKase('');
+          }}
+          emptyLabel="（なし）"
+          selectClassName="min-w-40 flex-1"
+        />
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-slate-500">事件</span>
+        <select className="input w-auto max-w-full" value={kase} onChange={(e) => setKase(e.target.value)} disabled={!client} aria-label="事件">
+          <option value="">（なし）</option>
+          {(cases.data ?? []).map((k) => (
+            <option key={k.id} value={k.id}>
+              {k.title}
+              {k.status !== 'active' ? `（${CASE_STATUS_LABEL[k.status as keyof typeof CASE_STATUS_LABEL] ?? k.status}）` : ''}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="text-xs text-slate-500">Google カレンダーの予定はそのまま（件名・日時は変わりません）。紐付けだけを直します。</div>
+      {err && <div className="text-xs text-red-600">{err}</div>}
+      <div className="flex gap-2">
+        <button className="btn btn-sm btn-primary" disabled={save.isPending || (client === (clientId ? String(clientId) : '') && kase === String(caseId))} onClick={() => save.mutate()}>
+          {save.isPending ? '保存中…' : '紐付けを保存'}
+        </button>
+        <button className="btn btn-sm" onClick={onClose}>
+          やめる
+        </button>
+      </div>
     </div>
   );
 }

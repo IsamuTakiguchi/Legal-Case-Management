@@ -6,6 +6,7 @@ import type { EventKind } from '@lcm/shared';
 const TZ = 'Asia/Tokyo';
 
 export interface EventTag {
+  /** 0 は「紐付けなし」と手で決めたもの（同期で件名から依頼者を推し量らない）。null・未設定は未決定 */
   clientId?: number | null;
   caseId?: number | null;
   kind: EventKind;
@@ -128,13 +129,18 @@ export async function createEvent(opts: {
   return s;
 }
 
+/** 紐付けの値。0（手で「なし」にした）は '0' のまま残し、未決定は空にする */
+export function tagValue(v: number | null | undefined): string {
+  return v === 0 ? '0' : v ? String(v) : '';
+}
+
 export async function updateEvent(
   eventId: string,
   patch: { title?: string; description?: string; location?: string; startAt?: Date; endAt?: Date; tentative?: boolean; tag?: EventTag; meet?: boolean },
 ): Promise<CalendarEventSummary | null> {
   const cal = calendarApi();
   const priv: Record<string, string> | undefined = patch.tag
-    ? { kind: patch.tag.kind, app: 'lcm', clientId: patch.tag.clientId ? String(patch.tag.clientId) : '', caseId: patch.tag.caseId ? String(patch.tag.caseId) : '' }
+    ? { kind: patch.tag.kind, app: 'lcm', clientId: tagValue(patch.tag.clientId), caseId: tagValue(patch.tag.caseId) }
     : undefined;
   const res = await cal.events.patch({
     calendarId: calId(),
