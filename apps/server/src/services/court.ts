@@ -24,9 +24,12 @@ export async function syncCalendar(): Promise<{ synced: number }> {
   for (const e of events) {
     seen.add(e.id);
     let kind: EventKind = e.tag.kind ?? classifyEventTitle(e.title);
-    let clientId = e.tag.clientId ?? null;
-    let caseId = e.tag.caseId ?? null;
-    if (!clientId && !isNonClientTitle(e.title)) {
+    // 0 は手で「紐付けなし」にしたもの。件名から推し量って付け直さない
+    const noClient = e.tag.clientId === 0;
+    const noCase = e.tag.caseId === 0;
+    let clientId = noClient ? null : (e.tag.clientId ?? null);
+    let caseId = noCase ? null : (e.tag.caseId ?? null);
+    if (!clientId && !noClient && !isNonClientTitle(e.title)) {
       // 姓が長い順に照合し、同姓の依頼者は別名（フルネーム等）で区別できるようにする
       const hit = clients
         .map((c) => ({ c, names: [c.name, familyName(c.name), ...c.aliases] }))
@@ -34,7 +37,7 @@ export async function syncCalendar(): Promise<{ synced: number }> {
         .find((x) => titleMentionsClient(e.title, x.names));
       if (hit) clientId = hit.c.id;
     }
-    if (clientId && !caseId) {
+    if (clientId && !caseId && !noCase) {
       // 進行事件 → 残務処理 → 相談 の優先順で割り当てる
       const open = d.select().from(schema.cases).where(and(eq(schema.cases.clientId, clientId), inArray(schema.cases.status, OPEN_CASE_STATUSES))).orderBy(desc(schema.cases.updatedAt)).all();
       const rank: Record<string, number> = { active: 0, wrapup: 1, consultation: 2 };
@@ -231,9 +234,36 @@ export function todaysEvents() {
     .map((r) => ({ ...r.ev, clientName: r.clientName ?? null }));
 }
 
-export function relinkEvent(id: number, patch: { clientId?: number | null; caseId?: number | null; kind?: EventKind }) {
-  db().update(schema.calendarEvents).set(patch).where(eq(schema.calendarEvents.id, id)).run();
+/**
+ * 予定の紐付け（依頼者・事件・種別）だけを変える。
+ * Google カレンダーの予定にも紐付けを書き込む（書かないと、次の同期で元の紐付けに戻ってしまう）。
+ * 「なし」にしたものは、件名から依頼者を推し量って付け直さないよう、手で外した印を残す
+ */
+export async function relinkEvent(id: number, patch: { clientId?: number | null; caseId?: number | null; kind?: EventKind }) {
+  const row = db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, id)).get();
+  if (!row) throw new Error('予定が見つかりません');
+  const clientId = patch.clientId !== undefined ? patch.clientId : row.clientId;
+  let caseId = patch.caseId !== undefined ? patch.caseId : row.caseId;
+  // 依頼者を変えたのに、事件が前の依頼者のもののままなら外す
+  if (caseId && patch.clientId !== undefined) {
+    const kase = db().select({ clientId: schema.cases.clientId }).from(schema.cases).where(eq(schema.cases.id, caseId)).get();
+    if (!kase || kase.clientId !== clientId) caseId = null;
+  }
+  // 事件だけ選んだら、その事件の依頼者に合わせる
+  let finalClient = clientId;
+  if (caseId && patch.clientId === undefined) {
+    finalClient = db().select({ clientId: schema.cases.clientId }).from(schema.cases).where(eq(schema.cases.id, caseId)).get()?.clientId ?? clientId;
+  }
+  const kind = patch.kind ?? (row.kind as EventKind);
+  if (!isLocalEventId(row.googleEventId) && isGoogleConnected()) {
+    const explicit = (v: number | null, touched: boolean) => (v ?? (touched ? 0 : null));
+    await cal.updateEvent(row.googleEventId, { tag: { kind, clientId: explicit(finalClient, patch.clientId !== undefined), caseId: explicit(caseId, patch.caseId !== undefined || patch.clientId !== undefined) } });
+  }
+  db().update(schema.calendarEvents).set({ clientId: finalClient, caseId, kind }).where(eq(schema.calendarEvents.id, id)).run();
+  refreshNextHearing(row.caseId);
+  if (caseId !== row.caseId) refreshNextHearing(caseId);
   resolveAlertsByKeyPrefix(`next_hearing_missing:`);
+  return db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, id)).get()!;
 }
 
 // ---- 予定の一覧・登録・編集・削除（Google カレンダーと連動。未接続ならアプリ内だけに保存） ----
@@ -357,7 +387,9 @@ export async function editCalendarEvent(id: number, patch: Partial<CalendarEvent
   const description = patch.description !== undefined ? patch.description : row.description;
   const tentative = patch.tentative !== undefined ? patch.tentative : row.status === 'tentative';
   if (!isLocalEventId(row.googleEventId) && isGoogleConnected()) {
-    await cal.updateEvent(row.googleEventId, { title, startAt: s, endAt: e, location: location ?? '', description: description ?? '', tentative, tag: { clientId, caseId, kind } });
+    // 依頼者・事件を「なし」にして保存したときは、同期で付け直さないよう手で外した印（0）を残す
+    const tag = { kind, clientId: clientId ?? (patch.clientId !== undefined ? 0 : null), caseId: caseId ?? (patch.caseId !== undefined ? 0 : null) };
+    await cal.updateEvent(row.googleEventId, { title, startAt: s, endAt: e, location: location ?? '', description: description ?? '', tentative, tag });
   }
   db()
     .update(schema.calendarEvents)

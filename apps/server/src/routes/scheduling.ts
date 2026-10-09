@@ -151,8 +151,7 @@ schedulingRoutes.put('/calendar/events/:id', async (c) => {
   const id = Number(c.req.param('id'));
   // 紐付けだけの変更（依頼者・事件・種別）は Google 側を触らない
   if (body.title === undefined && body.startAt === undefined && body.endAt === undefined && body.location === undefined && body.description === undefined && body.tentative === undefined) {
-    relinkEvent(id, { clientId: body.clientId, caseId: body.caseId, kind: body.kind });
-    return c.json(db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, id)).get());
+    return c.json(await relinkEvent(id, { clientId: body.clientId, caseId: body.caseId, kind: body.kind }));
   }
   return c.json(await editCalendarEvent(id, body));
 });
