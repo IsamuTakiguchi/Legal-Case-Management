@@ -139,9 +139,37 @@ describe('記録から日程調整', () => {
         kind: 'hearing',
         // 記録に書かれていた場所も返す（画面の「場所」に入る）
         location: '奈良地裁 第3民事部',
+        web: false,
         quote: '次回期日は 10 月 11 日 13 時 30 分',
       },
     ]);
+  });
+
+  it('ウェブで行う期日は、件名を「WEB裁判（事件名）」、場所をブースにする（設定で変えられる）', async () => {
+    const { note } = seedNote({ decisions: ['次回期日は 11 月 20 日 10 時 30 分、双方ウェブ'] });
+    extracted = extraction({
+      found: false,
+      fixed: [
+        // AI が web を落としても、場所の「双方ウェブ」でウェブとみなす
+        { startAt: '2099-11-20T10:30:00+09:00', timeKnown: true, content: '次回期日（損害賠償請求事件）', kind: 'hearing', durationMinutes: 30, location: '双方ウェブ', web: false, quote: '次回期日は 11 月 20 日 10 時 30 分、双方ウェブ' },
+        { startAt: '2099-11-27T13:30:00+09:00', timeKnown: true, content: '第2回弁論準備', kind: 'hearing', durationMinutes: 30, location: null, web: true, quote: 'Teams で' },
+        // 出頭する期日や、ウェブの打合せはそのまま
+        { startAt: '2099-12-04T10:00:00+09:00', timeKnown: true, content: '尋問期日（交通事故（物損））', kind: 'hearing', durationMinutes: 120, location: '奈良地裁', web: false, quote: '尋問は出頭' },
+        { startAt: '2099-12-05T10:00:00+09:00', timeKnown: true, content: '打合せ', kind: 'meeting', durationMinutes: 60, location: null, web: true, quote: 'ウェブで打合せ' },
+      ],
+    });
+    const r = await proposeScheduleFromNote(note.id);
+    expect(r.fixed[0]).toMatchObject({ content: 'WEB裁判（損害賠償請求事件）', location: 'ブース', web: true, kind: 'hearing' });
+    expect(r.fixed[1]).toMatchObject({ content: 'WEB裁判', location: 'ブース', web: true });
+    expect(r.fixed[2]).toMatchObject({ content: '尋問期日（交通事故（物損））', location: '奈良地裁', web: false });
+    expect(r.fixed[3]).toMatchObject({ content: '打合せ', location: null, web: true });
+    // 括弧の中に括弧があっても事件名を残す
+    setSetting('web_hearing_title', 'WEB期日');
+    setSetting('web_hearing_location', '2階ブース');
+    extracted = extraction({ found: false, fixed: [{ startAt: '2099-11-20T10:30:00+09:00', timeKnown: true, content: '第3回期日（交通事故（物損））', kind: 'hearing', durationMinutes: 30, location: 'ウェブ', web: true, quote: '' }] });
+    expect((await proposeScheduleFromNote(note.id)).fixed[0]).toMatchObject({ content: 'WEB期日（交通事故（物損））', location: '2階ブース' });
+    setSetting('web_hearing_title', 'WEB裁判');
+    setSetting('web_hearing_location', 'ブース');
   });
 
   it('決まっている日時は、過ぎたものを捨てて早い順に返し、所要が無ければ既定の長さにする', async () => {

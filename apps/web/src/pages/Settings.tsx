@@ -94,6 +94,8 @@ const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean; 
   { key: 'travel_buffer_minutes', label: '外出予定の前後に空ける移動時間（分）', hint: '場所が事務所でも WEB でもない予定（裁判所など）の前後は、この時間を空けて候補を出します' },
   { key: 'slot_gap_minutes', label: '予定と予定の間に空ける時間（分）', hint: 'すべての予定の前後に空ける余裕。0 なら続けて入れます' },
   { key: 'default_meeting_minutes', label: '既定の所要時間（分）' },
+  { key: 'web_hearing_title', label: 'ウェブの期日の件名', hint: '記録から予定を登録するとき、「双方ウェブ」などウェブで行う裁判所の期日は「依頼者名　WEB裁判（事件名）」の形にします。その「WEB裁判」の部分です' },
+  { key: 'web_hearing_location', label: 'ウェブの期日の場所', hint: '記録から予定を登録するとき、ウェブで行う裁判所の期日の場所に入れます（例: ブース）' },
   {
     key: 'hold_proposal_template',
     label: '候補日の打診文',
