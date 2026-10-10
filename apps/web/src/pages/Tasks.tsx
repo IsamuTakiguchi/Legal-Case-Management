@@ -153,7 +153,8 @@ export default function Tasks() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-xl font-bold">タスク・返信待ち</h1>
-        <select className="input ml-auto w-auto" value={status} onChange={(e) => setStatus(e.target.value)}>
+        {/* スマホでは見出しの下に左寄せで幅いっぱい（右寄せにすると中途半端な位置にずれる）。PC は右寄せ */}
+        <select className="input w-full md:ml-auto md:w-auto" value={status} onChange={(e) => setStatus(e.target.value)} aria-label="表示するタスク">
           <option value="active">未完了</option>
           <option value="waiting">連絡待ち（依頼者・相手方・事務局）</option>
           {TASK_STATUSES.map((s) => (
@@ -162,7 +163,7 @@ export default function Tasks() {
             </option>
           ))}
         </select>
-        <select className="input w-auto" value={sort.key} onChange={(e) => sort.setKey(e.target.value)} aria-label="並べ替え">
+        <select className="input w-full md:w-auto" value={sort.key} onChange={(e) => sort.setKey(e.target.value)} aria-label="並べ替え">
           {TASK_SORTS.map((o) => (
             <option key={o.key} value={o.key}>
               並べ替え: {o.label}
