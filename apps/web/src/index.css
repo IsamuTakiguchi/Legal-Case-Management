@@ -440,9 +440,10 @@ td > select.input {
   min-width: 0;
 }
 
-/* スマホ幅: 表は横スクロール、入力欄は 16px（iOS のフォーカス時ズームを防ぐ） */
+/* スマホ幅: 表は横スクロール、入力欄は 16px（iOS のフォーカス時ズームを防ぐ）。
+   table-stack の表（タスク一覧）は、横スクロールさせずに 1 件ずつのカードに組み替える */
 @media (max-width: 767px) {
-  table.w-full {
+  table.w-full:not(.table-stack) {
     display: block;
     overflow-x: auto;
     white-space: nowrap;
