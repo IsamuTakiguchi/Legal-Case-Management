@@ -277,9 +277,10 @@ export default function Tasks() {
         )}
         {msg && <span className="fade-in ml-auto text-xs text-slate-600">{msg}</span>}
       </div>
-      <div className="card overflow-x-auto p-0">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-left text-xs text-slate-500">
+      {/* スマホでは表をやめて 1 件ずつのカードにする（横スクロールさせない）。md 以上は表 */}
+      <div className="card p-0 md:overflow-x-auto">
+        <table className="table-stack block w-full text-sm md:table">
+          <thead className="hidden bg-slate-50 text-left text-xs text-slate-500 md:table-header-group">
             <tr>
               <th className="w-px px-3 py-2"></th>
               <th className="px-3 py-2">状態</th>
@@ -289,17 +290,17 @@ export default function Tasks() {
               <th className="px-3 py-2"></th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="block md:table-row-group">
             {rows.map((t) => {
               const over = t.followUpAt && new Date(t.followUpAt).getTime() < now && t.status !== 'done' && t.status !== 'open';
               return (
                 <Fragment key={t.id}>
-                <tr className={`border-t border-slate-100 ${selected.has(t.id) ? 'bg-blue-50' : over ? 'bg-orange-50' : ''}`}>
-                  <td className="w-px px-3 py-2">
+                <tr className={`flex flex-wrap items-center border-t border-slate-100 py-1 first:border-t-0 md:table-row md:py-0 md:first:border-t ${selected.has(t.id) ? 'bg-blue-50' : over ? 'bg-orange-50' : ''}`}>
+                  <td className="pl-3 pr-1 pt-1 md:w-px md:px-3 md:py-2">
                     <input type="checkbox" checked={selected.has(t.id)} onChange={(e) => toggle(t.id, e.target.checked)} aria-label="選択" />
                   </td>
-                  <td className="w-px whitespace-nowrap px-3 py-2">
-                    <select className="input w-auto py-0.5 text-xs" value={t.status} onChange={(e) => update.mutate({ id: t.id, patch: { status: e.target.value } })}>
+                  <td className="min-w-0 flex-1 pr-3 pt-1 md:w-px md:whitespace-nowrap md:px-3 md:py-2">
+                    <select className="input w-auto max-w-full py-0.5 text-xs" value={t.status} onChange={(e) => update.mutate({ id: t.id, patch: { status: e.target.value } })}>
                       {TASK_STATUSES.map((s) => (
                         <option key={s} value={s}>
                           {TASK_STATUS_LABEL[s]}
@@ -307,7 +308,7 @@ export default function Tasks() {
                       ))}
                     </select>
                   </td>
-                  <td className="min-w-[14rem] px-3 py-2">
+                  <td className="w-full min-w-0 break-words px-3 py-1 md:w-auto md:min-w-[14rem] md:py-2">
                     {editingId === t.id ? (
                       <TaskEditForm
                         task={t}
@@ -339,16 +340,16 @@ export default function Tasks() {
                       </>
                     )}
                   </td>
-                  <td className="max-w-[18rem] px-3 py-2">
+                  <td className="w-full min-w-0 px-3 py-0.5 md:w-auto md:max-w-[18rem] md:py-2">
                     <TaskLinks task={t} onSave={(patch) => update.mutate({ id: t.id, patch })} />
                   </td>
-                  <td className="w-px whitespace-nowrap px-3 py-2 text-xs text-slate-600">
+                  <td className="w-full px-3 py-0.5 text-xs text-slate-600 md:w-px md:whitespace-nowrap md:py-2">
                     {t.waitingSince && <div>{fmtRelative(t.waitingSince)}から待ち</div>}
                     {/* 締切は対応中でも返信待ちでも同じ欄（返信待ちにしても消えない）。返信待ちは返信期限も */}
                     <TaskDeadlines task={t} onChange={(patch) => update.mutate({ id: t.id, patch })} />
                     {/* 時期未定の備忘: 締切が決まるまでは見直す日を出し、「まだ未定」で先に延ばせる */}
                     {t.status === 'memo' && (
-                      <div className="mt-0.5 flex items-center gap-1">
+                      <div className="mt-0.5 flex flex-wrap items-center gap-1">
                         <span className={t.reviewAt && new Date(t.reviewAt).getTime() < now ? 'font-semibold text-orange-600' : 'text-slate-500'}>見直し {t.reviewAt ? fmtDeadline(t.reviewAt) : '未設定'}</span>
                         <button className="btn btn-sm px-1.5 py-0 text-[11px]" disabled={snooze.isPending} onClick={() => snooze.mutate(t.id)} title="まだ時期が決まっていないので、2 週間後にまた見直します">
                           まだ未定
@@ -359,8 +360,8 @@ export default function Tasks() {
                       </div>
                     )}
                   </td>
-                  <td className="w-px whitespace-nowrap px-3 py-2 text-right">
-                    <div className="flex justify-end gap-1">
+                  <td className="w-full px-3 pb-1.5 pt-0.5 empty:hidden md:w-px md:whitespace-nowrap md:py-2 md:text-right">
+                    <div className="flex flex-wrap gap-1 empty:hidden md:flex-nowrap md:justify-end">
                       {t.conversationId && (
                         <Link to={`/inbox/${t.conversationId}`} className="btn btn-sm" title="このタスクの元になった会話を開きます">
                           {isWaitingStatus(t.status) ? '催促文を作成' : '会話を開く'}
@@ -384,8 +385,8 @@ export default function Tasks() {
                   </td>
                 </tr>
                 {confirmingId === t.id && t.confirmMessageId && (
-                  <tr>
-                    <td colSpan={6} className="px-3 pb-3">
+                  <tr className="block md:table-row">
+                    <td colSpan={6} className="block px-3 pb-3 md:table-cell">
                       <ClientConfirmPanel
                         messageId={t.confirmMessageId}
                         waitingTaskDefault={false}
@@ -403,8 +404,8 @@ export default function Tasks() {
               );
             })}
             {list.data?.length === 0 && (
-              <tr>
-                <td colSpan={6} className="px-4 py-4 text-slate-500">
+              <tr className="block md:table-row">
+                <td colSpan={6} className="block px-4 py-4 text-slate-500 md:table-cell">
                   タスクはありません
                 </td>
               </tr>
