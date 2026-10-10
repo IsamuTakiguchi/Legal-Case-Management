@@ -134,14 +134,15 @@ export default function Dashboard() {
         <section className="card md:col-span-2">
           <h2 className="mb-2 font-semibold">返信待ち・連絡待ち</h2>
           {d.waiting.length === 0 && <div className="text-sm text-slate-500">返信待ちはありません</div>}
-          <table className="w-full text-sm">
-            <tbody>
+          {/* スマホでは表をやめて 1 件ずつ折り返す（横スクロールさせない）。md 以上は表 */}
+          <table className="table-stack block w-full text-sm md:table">
+            <tbody className="block md:table-row-group">
               {d.waiting.map((t) => {
                 const over = t.followUpAt && new Date(t.followUpAt).getTime() < now;
                 return (
-                  <tr key={t.id} className="border-t border-slate-100">
-                    <td className="py-1.5 pr-2">{over && <span className="badge badge-orange">期限超過</span>}</td>
-                    <td className="py-1.5 pr-2">
+                  <tr key={t.id} className="flex flex-wrap items-center gap-x-2 border-t border-slate-100 py-1 md:table-row md:py-0">
+                    <td className="max-md:empty:hidden md:py-1.5 md:pr-2">{over && <span className="badge badge-orange">期限超過</span>}</td>
+                    <td className="min-w-0 break-words md:py-1.5 md:pr-2">
                       {t.clientId ? (
                         <Link to={`/clients/${t.clientId}`} className="text-[var(--accent)] hover:underline">
                           {t.clientName}
@@ -155,7 +156,7 @@ export default function Dashboard() {
                         </Link>
                       )}
                     </td>
-                    <td className="py-1.5 pr-2">
+                    <td className="w-full min-w-0 break-words md:w-auto md:py-1.5 md:pr-2">
                       {t.conversationId ? (
                         <Link to={`/inbox/${t.conversationId}`} className="hover:underline">
                           {t.title}
@@ -170,9 +171,9 @@ export default function Dashboard() {
                         </Link>
                       )}
                     </td>
-                    <td className="py-1.5 pr-2 text-slate-500">{TASK_STATUS_LABEL[t.status as TaskStatus]}</td>
-                    <td className="py-1.5 pr-2 text-slate-500">{t.waitingSince ? `${fmtRelative(t.waitingSince)}から` : ''}</td>
-                    <td className="py-1.5">
+                    <td className="text-xs text-slate-500 md:whitespace-nowrap md:py-1.5 md:pr-2 md:text-sm">{TASK_STATUS_LABEL[t.status as TaskStatus]}</td>
+                    <td className="text-xs text-slate-500 max-md:empty:hidden md:whitespace-nowrap md:py-1.5 md:pr-2 md:text-sm">{t.waitingSince ? `${fmtRelative(t.waitingSince)}から` : ''}</td>
+                    <td className="md:py-1.5">
                       <DeadlineEditor compact value={t.followUpAt} onChange={(iso) => setDeadline.mutate({ id: t.id, followUpAt: iso })} />
                     </td>
                   </tr>
@@ -204,7 +205,8 @@ export default function Dashboard() {
                       {r.caseTitle && <span className="ml-1 text-xs font-normal text-slate-500">{r.caseTitle}</span>}
                     </span>
                   )}
-                  <span className="min-w-0 flex-1 truncate text-slate-500">{r.title}</span>
+                  {/* スマホでは内容を次の行に 2 行まで出す（1 行だと数文字で切れてしまう） */}
+                  <span className="line-clamp-2 min-w-0 basis-full text-slate-500 md:line-clamp-none md:flex-1 md:basis-0 md:truncate">{r.title}</span>
                 </Link>
               </li>
             ))}
