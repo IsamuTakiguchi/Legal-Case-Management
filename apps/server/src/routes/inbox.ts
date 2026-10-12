@@ -258,6 +258,8 @@ inboxRoutes.post('/messages/:messageId/client-confirm', async (c) => {
       createWaitingTask: z.boolean().optional(),
       followUpAt: z.string().datetime({ offset: true }).nullable().optional(),
       notifyStaff: z.boolean().optional(),
+      // 送信予約（今は送らず、この時刻に送る）
+      scheduledAt: z.string().datetime({ offset: true }).nullable().optional(),
       staffReplyText: z.string().max(2000).nullable().optional(),
     })
     .parse(await c.req.json());
