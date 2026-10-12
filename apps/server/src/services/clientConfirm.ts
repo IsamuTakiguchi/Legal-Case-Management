@@ -2,6 +2,7 @@ import { and, desc, eq, lt } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { draftReply } from './style.js';
 import { sendToConversation } from './send.js';
+import { scheduleMessage } from './scheduledSend.js';
 import { createTask, defaultFollowUp } from './tasks.js';
 import { staffByChatworkAccount } from './staff.js';
 import { clientOwnConversations } from './contacts.js';
@@ -45,9 +46,13 @@ export interface ClientConfirmChannel {
 export interface ClientConfirmRecord {
   channel: ConfirmChannel;
   conversationId: number;
-  messageId: number;
+  /** 送ったメッセージ。送信予約なら、送るまでは null */
+  messageId: number | null;
   clientId: number;
   at: string;
+  /** 送信予約したときの、送る予定の時刻と予約 */
+  scheduledAt?: string | null;
+  scheduledId?: number | null;
 }
 
 export interface ClientConfirmContext {
@@ -96,9 +101,12 @@ function recordsOf(msg: MessageRow): ClientConfirmRecord[] {
   return Array.isArray(raw.clientConfirms) ? raw.clientConfirms : [];
 }
 
-function staffReply(clientName: string | null, channel: ConfirmChannel | null): string {
+function staffReply(clientName: string | null, channel: ConfirmChannel | null, scheduledAt?: string | null): string {
   const who = clientName ? `${familyName(clientName)}さん` : '依頼者';
-  return `${who}に${channel ? `${SHORT_LABEL[channel]}で` : ''}確認しました。回答が来たら共有します。`;
+  const by = channel ? `${SHORT_LABEL[channel]}で` : '';
+  // 送信予約なら「◯月◯日◯時に〜で確認します」
+  if (scheduledAt) return `${who}に${formatJaDateTime(new Date(scheduledAt))}に${by}確認します。回答が来たら共有します。`;
+  return `${who}に${by}確認しました。回答が来たら共有します。`;
 }
 
 /** 依頼者本人（法人なら担当者も）に送れる Gmail / LINE / Chatwork と、それぞれの既存の会話 */
@@ -261,11 +269,15 @@ export interface ClientConfirmSendInput {
   /** 元の質問に Chatwork で返信して、事務局に知らせる */
   notifyStaff?: boolean;
   staffReplyText?: string | null;
+  /** 指定すると今は送らず、この時刻（ISO 8601）に送る（送信予約） */
+  scheduledAt?: string | null;
 }
 
 /** 依頼者に確認を送る。続けて回答待ちタスクと、事務局への返事 */
 export async function sendClientConfirm(messageId: number, input: ClientConfirmSendInput) {
   if (!input.text.trim()) throw new Error('依頼者に送る本文を入力してください');
+  // 送信予約の時刻は、会話を作ったり事務局に返したりする前に確かめる
+  if (input.scheduledAt && !(Date.parse(input.scheduledAt) >= Date.now() - 60_000)) throw new Error('送信予定時刻が過去です');
   const ctx = clientConfirmContext(messageId, { clientId: input.clientId, caseId: input.caseId ?? null });
   const ch = pickChannel(ctx, input.channel, input.personId);
   const d = db();
@@ -277,12 +289,22 @@ export async function sendClientConfirm(messageId: number, input: ClientConfirmS
     const subject = input.subject?.trim() || `ご確認のお願い${ctx.caseTitle ? `（${ctx.caseTitle}）` : ''}`;
     d.update(schema.conversations).set({ subject }).where(eq(schema.conversations.id, conv.id)).run();
   }
-  const r = await sendToConversation(conv.id, { text: input.text, attachmentIds: [], driveFiles: [], createWaitingTask: false });
-  if (ctx.caseId) d.update(schema.messages).set({ caseId: ctx.caseId, clientId: client.id }).where(eq(schema.messages.id, r.messageId)).run();
+  // 送信予約なら今は送らず、予約だけ入れる（時刻が来たら毎分のジョブが送る。受信箱の「送信予約」から取消・変更できる）
+  const payload = { text: input.text, attachmentIds: [], driveFiles: [], createWaitingTask: false };
+  const scheduled = input.scheduledAt ? scheduleMessage(conv.id, payload, input.scheduledAt) : null;
+  const r = scheduled ? null : await sendToConversation(conv.id, payload);
+  if (r && ctx.caseId) d.update(schema.messages).set({ caseId: ctx.caseId, clientId: client.id }).where(eq(schema.messages.id, r.messageId)).run();
 
   // 元の質問に「確認済み」を残す。依頼者・事件が未紐付けだったら、ここで紐付ける
   const q = d.select().from(schema.messages).where(eq(schema.messages.id, messageId)).get()!;
-  const record: ClientConfirmRecord = { channel: input.channel, conversationId: conv.id, messageId: r.messageId, clientId: client.id, at: new Date().toISOString() };
+  const record: ClientConfirmRecord = {
+    channel: input.channel,
+    conversationId: conv.id,
+    messageId: r?.messageId ?? null,
+    clientId: client.id,
+    at: new Date().toISOString(),
+    ...(scheduled ? { scheduledAt: scheduled.scheduledAt, scheduledId: scheduled.id } : {}),
+  };
   d.update(schema.messages)
     .set({
       raw: { ...((q.raw ?? {}) as Record<string, unknown>), clientConfirms: [...recordsOf(q), record] },
@@ -300,7 +322,8 @@ export async function sendClientConfirm(messageId: number, input: ClientConfirmS
       caseId: ctx.caseId,
       conversationId: conv.id,
       status: 'waiting_client',
-      followUpAt: input.followUpAt ?? ctx.defaultFollowUpAt,
+      // 送信予約なら、返信期限は送る日から数える
+      followUpAt: input.followUpAt ?? (scheduled ? defaultFollowUp(new Date(scheduled.scheduledAt)).toISOString() : ctx.defaultFollowUpAt),
       note: `事務局${ctx.staffName ? `（${ctx.staffName}）` : ''}からの質問:\n${ctx.question.body}`,
       syncToChatwork: false,
     });
@@ -311,7 +334,7 @@ export async function sendClientConfirm(messageId: number, input: ClientConfirmS
   let staffNotified = false;
   let staffError: string | null = null;
   if (input.notifyStaff) {
-    const text = input.staffReplyText?.trim() || staffReply(client.name, input.channel);
+    const text = input.staffReplyText?.trim() || staffReply(client.name, input.channel, scheduled?.scheduledAt);
     try {
       await sendToConversation(ctx.conversationId, { text, attachmentIds: [], driveFiles: [], createWaitingTask: false, replyToMessageId: messageId }, { learn: false });
       staffNotified = true;
@@ -321,7 +344,17 @@ export async function sendClientConfirm(messageId: number, input: ClientConfirmS
     }
   }
 
-  logger.info({ messageId, clientId: client.id, channel: input.channel, conversationId: conv.id }, '事務局の質問を依頼者に確認しました');
-  return { channel: input.channel, conversationId: conv.id, messageId: r.messageId, note: r.note ?? null, waitingTaskId, staffNotified, staffError, sentAt: formatJaDateTime(new Date()) };
+  logger.info({ messageId, clientId: client.id, channel: input.channel, conversationId: conv.id, scheduledAt: scheduled?.scheduledAt }, scheduled ? '事務局の質問を依頼者に確認する送信を予約しました' : '事務局の質問を依頼者に確認しました');
+  return {
+    channel: input.channel,
+    conversationId: conv.id,
+    messageId: r?.messageId ?? null,
+    note: r?.note ?? null,
+    scheduled: scheduled ? { id: scheduled.id, scheduledAt: scheduled.scheduledAt } : null,
+    waitingTaskId,
+    staffNotified,
+    staffError,
+    sentAt: formatJaDateTime(new Date()),
+  };
 }
 

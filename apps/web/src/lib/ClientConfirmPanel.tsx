@@ -4,8 +4,10 @@ import { Link } from 'react-router-dom';
 import { api } from './api';
 import { useDraft, DraftHint } from './draft';
 import { ClientPicker } from './ClientPicker';
-import { fmtDateTime } from './format';
-import { messageLink, dateOnlyDeadline } from '@lcm/shared';
+import { fmtDateTime, fromLocalInput, todayLocalInput } from './format';
+import { messageLink, dateOnlyDeadline, formatJaDateTime } from '@lcm/shared';
+import { quickSendTimes } from './sendTimes';
+import { Icon } from './icons';
 import { ClientContactSetup } from './ClientContactSetup';
 
 type ConfirmChannel = 'gmail' | 'line' | 'chatwork';
@@ -25,12 +27,20 @@ interface ConfirmCtx {
   defaultChannel: ConfirmChannel | null;
   defaultFollowUpAt: string;
   staffReplyText: string;
-  sent: { channel: ConfirmChannel; conversationId: number; at: string }[];
+  sent: { channel: ConfirmChannel; conversationId: number; at: string; scheduledAt?: string | null }[];
   blocked: string | null;
   needsContact?: boolean;
 }
 
 const LABEL: Record<ConfirmChannel, string> = { gmail: 'Gmail', line: 'LINE', chatwork: 'Chatwork' };
+
+/**
+ * 事務局への返事の文を、送信予約に合わせて言い換える。
+ * 「山田さんにLINEで確認しました」⇔「山田さんに10月13日(月)9時にLINEで確認します」
+ */
+function staffTextFor(t: string, scheduledAtIso: string | null): string {
+  return t.replace(/に(?:[^。]*?に)?(Gmail|LINE|Chatwork)で確認(?:しました|します)/, (_m, ch: string) => (scheduledAtIso ? `に${formatJaDateTime(new Date(scheduledAtIso))}に${ch}で確認します` : `に${ch}で確認しました`));
+}
 
 /**
  * 事務局から Chatwork で来た質問を、弁護士本人が依頼者に確認する文に書き直して、Gmail か LINE で送る。
@@ -71,6 +81,15 @@ export function ClientConfirmPanel({
   const [staffText, setStaffText] = useState('');
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [done, setDone] = useState(false);
+  // 送信予約（受信箱の「時刻を指定」と同じ）。空なら今すぐ送る
+  const [showTimer, setShowTimer] = useState(false);
+  const [sendAt, setSendAt] = useState('');
+  const [sendPreset, setSendPreset] = useState<string | null>(null);
+  const scheduledIso = showTimer && sendAt ? fromLocalInput(sendAt) : null;
+  // 予約の時刻を変えたら、事務局への返事の文も「◯日◯時に確認します」に合わせる
+  useEffect(() => {
+    setStaffText((t) => staffTextFor(t, scheduledIso));
+  }, [scheduledIso]);
   const textDraft = useDraft(`client-confirm:${messageId}`, text, setText, '');
 
   useEffect(() => {
@@ -80,7 +99,8 @@ export function ClientConfirmPanel({
       return def ? keyOf(def) : '';
     })()));
     setFollowUp((prev) => prev || d.defaultFollowUpAt.slice(0, 10));
-    setStaffText(d.staffReplyText);
+    setStaffText(staffTextFor(d.staffReplyText, scheduledIso));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [d]);
   const ch = d?.channels.find((c) => keyOf(c) === sel) ?? null;
   const channel: ConfirmChannel | '' = ch?.channel ?? '';
@@ -116,7 +136,7 @@ export function ClientConfirmPanel({
 
   const send = useMutation({
     mutationFn: () =>
-      api.post<{ channel: ConfirmChannel; conversationId: number; messageId: number; waitingTaskId: number | null; staffNotified: boolean; staffError: string | null; note: string | null }>(`/messages/${messageId}/client-confirm`, {
+      api.post<{ channel: ConfirmChannel; conversationId: number; messageId: number | null; scheduled: { id: number; scheduledAt: string } | null; waitingTaskId: number | null; staffNotified: boolean; staffError: string | null; note: string | null }>(`/messages/${messageId}/client-confirm`, {
         clientId: d!.clientId,
         caseId: d!.caseId,
         channel,
@@ -127,11 +147,13 @@ export function ClientConfirmPanel({
         followUpAt: waiting && followUp ? dateOnlyDeadline(followUp) : null,
         notifyStaff,
         staffReplyText: notifyStaff ? staffText : null,
+        scheduledAt: scheduledIso,
       }),
     onSuccess: (r) => {
       textDraft.clear();
       setDone(true);
-      const parts = [`${ch?.personId && ch.recipient ? ch.recipient : `${d!.clientName}さん`}に ${LABEL[r.channel]} で送りました`];
+      const who = ch?.personId && ch.recipient ? ch.recipient : `${d!.clientName}さん`;
+      const parts = [r.scheduled ? `${who}に ${LABEL[r.channel]} で ${fmtDateTime(r.scheduled.scheduledAt)} に送るよう予約しました（受信箱の会話の「送信予約」から取消・時刻変更・今すぐ送信ができます）` : `${who}に ${LABEL[r.channel]} で送りました`];
       if (r.waitingTaskId) parts.push('回答待ちのタスクを作りました');
       if (r.staffNotified) parts.push('事務局に Chatwork で返事しました');
       if (r.staffError) parts.push(`事務局への返事は失敗しました（${r.staffError}）`);
@@ -163,7 +185,9 @@ export function ClientConfirmPanel({
           </blockquote>
           {d.sent.length > 0 && (
             <div className="rounded-md bg-green-50 px-3 py-1.5 text-xs text-green-800">
-              この質問は{d.sent.map((s) => ` ${fmtDateTime(s.at)} に ${LABEL[s.channel]}`).join('、')} で依頼者に確認済みです。
+              この質問は
+              {d.sent.map((s) => (s.scheduledAt ? ` ${fmtDateTime(s.scheduledAt)} に ${LABEL[s.channel]} で送信予約` : ` ${fmtDateTime(s.at)} に ${LABEL[s.channel]} で確認済み`)).join('、')}
+              です。
             </div>
           )}
 
@@ -271,15 +295,64 @@ export function ClientConfirmPanel({
               <div className="flex flex-wrap items-center gap-2">
                 {done && sentConv ? (
                   <Link className="btn btn-sm" to={messageLink(sentConv, send.data?.messageId)}>
-                    送ったやり取りを開く
+                    {send.data?.scheduled ? '予約した会話を開く' : '送ったやり取りを開く'}
                   </Link>
                 ) : (
                   <span className="text-xs text-slate-500">送る前に本文を確認してください。送った文は依頼者との会話に残ります。</span>
                 )}
-                <button className="btn btn-primary btn-sm ml-auto" onClick={() => send.mutate()} disabled={done || !text.trim() || !channel || send.isPending}>
-                  {send.isPending ? '送信中…' : `${channel ? LABEL[channel] : ''}で${d.clientName ?? '依頼者'}さんに送る`}
-                </button>
+                <div className="ml-auto flex flex-wrap items-center gap-1">
+                  <button className="btn btn-primary btn-sm" onClick={() => send.mutate()} disabled={done || !text.trim() || !channel || send.isPending || (showTimer && !sendAt)}>
+                    {send.isPending
+                      ? showTimer
+                        ? '予約中…'
+                        : '送信中…'
+                      : showTimer
+                        ? sendAt
+                          ? `${fmtDateTime(fromLocalInput(sendAt))} に${channel ? LABEL[channel] : ''}で送信予約`
+                          : '時刻を選んでください'
+                        : `${channel ? LABEL[channel] : ''}で${d.clientName ?? '依頼者'}さんに送る`}
+                  </button>
+                  <button
+                    className={`btn btn-sm ${showTimer ? 'text-[var(--accent)]' : ''}`}
+                    onClick={() => setShowTimer(!showTimer)}
+                    disabled={done || send.isPending}
+                    title="時刻を指定して、その時刻に自動で依頼者に送ります（送信予約）"
+                    aria-expanded={showTimer}
+                  >
+                    <Icon name="clock" className="h-4 w-4" />
+                    {showTimer ? '今すぐ送るに戻す' : '時刻を指定'}
+                  </button>
+                </div>
               </div>
+              {showTimer && !done && (
+                <div className="fade-in flex flex-wrap items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-xs">
+                  <span className="text-slate-500">送信する時刻:</span>
+                  {quickSendTimes().map((q) => (
+                    <button
+                      key={q.key}
+                      className={`btn btn-sm ${sendPreset === q.key ? 'btn-primary' : ''}`}
+                      onClick={() => {
+                        setSendAt(q.value);
+                        setSendPreset(q.key);
+                      }}
+                    >
+                      {q.label}
+                    </button>
+                  ))}
+                  <input
+                    type="datetime-local"
+                    className="input w-auto"
+                    value={sendAt}
+                    min={todayLocalInput(0)}
+                    onChange={(e) => {
+                      setSendAt(e.target.value);
+                      setSendPreset(null);
+                    }}
+                    aria-label="送信する時刻"
+                  />
+                  <span className="text-slate-400">回答待ちのタスクと事務局への返事は、予約した時点で作ります</span>
+                </div>
+              )}
             </>
           )}
           {msg && <div className={`fade-in text-xs ${msg.kind === 'ok' ? 'text-green-700' : 'text-red-600'}`}>{msg.text}</div>}

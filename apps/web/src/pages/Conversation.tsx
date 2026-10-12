@@ -50,7 +50,7 @@ interface Message {
   /** Chatwork: なぜ受信箱に入ったか（取込範囲の確認用） */
   scopeReason?: string | null;
   /** 事務局の質問から依頼者に確認を送った記録 */
-  clientConfirms?: { channel: string; conversationId: number; messageId?: number; at: string }[];
+  clientConfirms?: { channel: string; conversationId: number; messageId?: number | null; at: string; scheduledAt?: string | null }[];
   clientId?: number | null;
   caseId?: number | null;
   clientName?: string | null;
@@ -499,7 +499,7 @@ export default function Conversation() {
                       className="ml-1 rounded bg-green-100 px-1 text-[10px] text-green-800 hover:underline"
                       title="この質問から依頼者に送った確認を開きます"
                     >
-                      ✓ 依頼者に確認済み（{({ gmail: 'Gmail', line: 'LINE', chatwork: 'Chatwork' } as Record<string, string>)[m.clientConfirms!.at(-1)!.channel] ?? m.clientConfirms!.at(-1)!.channel}・{fmtDateTime(m.clientConfirms!.at(-1)!.at)}）
+                      {m.clientConfirms!.at(-1)!.scheduledAt ? '⏰ 依頼者への確認を予約' : '✓ 依頼者に確認済み'}（{({ gmail: 'Gmail', line: 'LINE', chatwork: 'Chatwork' } as Record<string, string>)[m.clientConfirms!.at(-1)!.channel] ?? m.clientConfirms!.at(-1)!.channel}・{fmtDateTime(m.clientConfirms!.at(-1)!.scheduledAt ?? m.clientConfirms!.at(-1)!.at)}）
                     </Link>
                   )}
                 </div>

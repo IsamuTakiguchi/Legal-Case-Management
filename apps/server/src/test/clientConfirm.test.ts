@@ -80,7 +80,7 @@ beforeEach(() => {
   sent.length = 0;
   prompts.length = 0;
   chatworkFails = false;
-  for (const t of [schema.styleSamples, schema.tasks, schema.drafts, schema.attachments, schema.messages, schema.conversations, schema.cases, schema.clients, schema.staffMembers]) db().delete(t).run();
+  for (const t of [schema.styleSamples, schema.tasks, schema.drafts, schema.attachments, schema.scheduledMessages, schema.messages, schema.conversations, schema.cases, schema.clients, schema.staffMembers]) db().delete(t).run();
   db().insert(schema.staffMembers).values({ name: '事務 花子', chatworkAccountId: 5001 }).run();
   const client = db().insert(schema.clients).values({ name: '山田 太郎', emails: ['yamada@example.com'], lineUserId: 'U-yamada', preferredChannel: 'line' }).returning().get();
   clientId = client.id;
@@ -203,6 +203,46 @@ describe('事務局の質問から依頼者に確認する', () => {
     const ctx = clientConfirmContext(questionId);
     expect(ctx.sent).toHaveLength(1);
     expect(ctx.sent[0]).toMatchObject({ channel: 'line', conversationId: r.conversationId });
+  });
+
+  it('送信予約: 依頼者には今は送らず予約だけ入れ、事務局には「◯日◯時に確認します」と返す。時刻が来たら送る', async () => {
+    const { runDueScheduled, listScheduled } = await import('../services/scheduledSend.js');
+    // 明日の 9 時（日本時間）
+    const at = new Date(Date.now() + 86400_000);
+    at.setUTCHours(0, 0, 0, 0);
+    const r = await sendClientConfirm(questionId, {
+      clientId,
+      caseId,
+      channel: 'line',
+      text: '山田様\n源泉徴収票がお手元にあるか、ご確認いただけますでしょうか。',
+      createWaitingTask: true,
+      notifyStaff: true,
+      scheduledAt: at.toISOString(),
+    });
+    // 依頼者にはまだ送らず、事務局への返事だけ送る
+    expect(sent.map((x) => x.channel)).toEqual(['chatwork']);
+    expect(sent[0]!.text).toMatch(/山田さんに\d+月\d+日\(.\)9時にLINEで確認します。/);
+    expect(r.messageId).toBeNull();
+    expect(r.scheduled?.scheduledAt).toBe(at.toISOString());
+    const pending = listScheduled({ conversationId: r.conversationId });
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({ status: 'pending', text: expect.stringContaining('源泉徴収票') });
+    // 質問には「予約」として残る
+    expect(clientConfirmContext(questionId).sent[0]).toMatchObject({ channel: 'line', scheduledAt: at.toISOString(), scheduledId: pending[0]!.id, messageId: null });
+    // 回答待ちタスクの返信期限は、送る日から数える
+    const task = db().select().from(schema.tasks).where(eq(schema.tasks.id, r.waitingTaskId!)).get()!;
+    expect(new Date(task.followUpAt!).getTime()).toBeGreaterThan(at.getTime());
+
+    // 時刻が来たら送る
+    await runDueScheduled(new Date(at.getTime() + 60_000));
+    expect(sent.map((x) => x.channel)).toEqual(['chatwork', 'line']);
+    expect(sent[1]).toMatchObject({ thread: 'U-yamada', text: expect.stringContaining('源泉徴収票') });
+    expect(listScheduled({ conversationId: r.conversationId })).toHaveLength(0);
+  });
+
+  it('送信予約の時刻が過去なら、予約も事務局への返事もしない', async () => {
+    await expect(sendClientConfirm(questionId, { clientId, channel: 'line', text: '確認です', notifyStaff: true, scheduledAt: new Date(Date.now() - 3600_000).toISOString() })).rejects.toThrow('過去');
+    expect(sent).toHaveLength(0);
   });
 
   it('Gmail で新しいメールにするときは件名を付ける。事務局に返さない選択もできる', async () => {
