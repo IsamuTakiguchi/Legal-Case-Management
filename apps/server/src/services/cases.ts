@@ -258,7 +258,7 @@ const phoneMemoSchema = z.object({
 });
 
 /** 走り書きのメモを要旨・決定事項・次のアクションに整理 */
-export async function structureNote(rawText: string, ctx: { caseTitle?: string; clientName?: string; kind: string; counterpart?: string | null; phone?: string | null }) {
+export async function structureNote(rawText: string, ctx: { caseTitle?: string; clientName?: string; kind: string; counterpart?: string | null; phone?: string | null; context?: string | null }) {
   // 年まで渡す（「11/10」を去年と読まないように）
   const today = formatJaDate(new Date());
   const r = await generateStructured({
@@ -270,7 +270,11 @@ export async function structureNote(rawText: string, ctx: { caseTitle?: string; 
       '次のアクションの期限は 2 つに分けます。due（締切）はそのこと自体をいつまでに済ませるか（提出期限・回答期限など）、replyBy（返信期限）は依頼者・相手方などの返事や資料をいつまで待つかです。例: 「答弁書は 10/15 提出。答弁書案を依頼者に送り 10/10 までに返事をもらう」→ due=10/15、replyBy=10/10。メモに無い期限は作らず null にします。',
       '次のアクションは、弁護士がタスクとして追いかける単位で挙げます。細かく分けず、ひとまとまりの仕事は 1 件にします（例: 「依頼者に和解案を説明して意向を確認し、来週金曜までに相手方へ回答する」は 1 件）。多くても 3 件。決定事項の言い換えや、すでに終わったこと、「メモを残す」のような当然の作業は含めません。何も無ければ空にします。',
     ].join('\n'),
-    user: `今日: ${today}\n事件: ${ctx.caseTitle ?? '不明'}\n依頼者: ${ctx.clientName ?? '不明'}\n種別: ${ctx.kind}\n相手: ${ctx.counterpart ?? '（メモから判断）'}\n電話番号: ${ctx.phone ?? '（メモから判断）'}\n\nメモ:\n${rawText}`,
+    user: `今日: ${today}\n事件: ${ctx.caseTitle ?? '不明'}\n依頼者: ${ctx.clientName ?? '不明'}\n種別: ${ctx.kind}\n相手: ${ctx.counterpart ?? '（メモから判断）'}\n電話番号: ${ctx.phone ?? '（メモから判断）'}\n\nメモ:\n${rawText}${
+      ctx.context
+        ? `\n\n（参考）この電話は、次の伝言への折り返しです。伝言は事務局が受けたもので、今回の通話の発言ではありません。相手が言ったこと・こちらが言ったことには、メモにある今回の通話の内容だけを入れてください。要旨には「◯◯の件で折り返し」のように用件を含めて構いません。\n${ctx.context}`
+        : ''
+    }`,
     schema: phoneMemoSchema,
     effort: 'low',
     maxTokens: 2000,

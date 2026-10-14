@@ -9,6 +9,7 @@ import { fmtDate, fmtRelative } from '../lib/format';
 import { TaskDeadlines, NewTaskDeadlines, fmtDeadline } from '../lib/Deadline';
 import { MemoBadge } from '../lib/Memo';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
+import { CallbackPanel } from '../lib/CallbackPanel';
 import { TASK_STATUSES, TASK_STATUS_LABEL, taskDeadline, isWaitingStatus, type TaskStatus } from '@lcm/shared';
 import { useSort, readingKey, type SortOption } from '../lib/sort';
 import { Icon } from '../lib/icons';
@@ -31,6 +32,8 @@ interface Task {
   dueAt: string | null;
   chatworkTaskId: number | null;
   chatworkReplyable?: boolean;
+  /** 電話の伝言らしいタスク（折り返し電話を記録できる） */
+  phoneMessage?: boolean;
   /** Chatwork で振られたタスクの元のメッセージ（取り込み済みなら）。ここから依頼者に確認できる */
   confirmMessageId?: number | null;
   chatworkAssignedByName?: string | null;
@@ -148,6 +151,8 @@ export default function Tasks() {
   const [confirmingId, setConfirmingId] = useState<number | null>(null);
   // 担当事務局に報告・確認するパネルを開いているタスク
   const [staffAskId, setStaffAskId] = useState<number | null>(null);
+  // 電話の伝言を見ながら折り返し電話を記録するパネルを開いているタスク
+  const [callbackId, setCallbackId] = useState<number | null>(null);
   const nudge = useMutation({ mutationFn: (id: number) => api.post(`/tasks/${id}/nudge`), onSuccess: refresh });
   const snooze = useMutation({ mutationFn: (id: number) => api.post(`/tasks/${id}/memo-snooze`, { days: 14 }), onSuccess: refresh });
   const importCw = useMutation({ mutationFn: () => api.post<{ imported: number; completed: number }>('/tasks/import-chatwork'), onSuccess: refresh });
@@ -385,6 +390,15 @@ export default function Tasks() {
                           催促した
                         </button>
                       )}
+                      {t.phoneMessage && (
+                        <button
+                          className="btn btn-sm"
+                          onClick={() => setCallbackId(callbackId === t.id ? null : t.id)}
+                          title="伝言の内容を見ながら折り返し電話をして、そのやり取りを事件の記録（電話）に残します"
+                        >
+                          📞 折り返し電話
+                        </button>
+                      )}
                       {t.status !== 'done' && (
                         <button
                           className="btn btn-sm"
@@ -397,6 +411,21 @@ export default function Tasks() {
                     </div>
                   </td>
                 </tr>
+                {callbackId === t.id && (
+                  <tr className="block md:table-row">
+                    <td colSpan={6} className="block px-3 pb-3 md:table-cell">
+                      <CallbackPanel
+                        taskId={t.id}
+                        onClose={() => setCallbackId(null)}
+                        onSaved={(m) => {
+                          setCallbackId(null);
+                          refresh();
+                          setMsg(m);
+                        }}
+                      />
+                    </td>
+                  </tr>
+                )}
                 {staffAskId === t.id && (
                   <tr className="block md:table-row">
                     <td colSpan={6} className="block px-3 pb-3 md:table-cell">
