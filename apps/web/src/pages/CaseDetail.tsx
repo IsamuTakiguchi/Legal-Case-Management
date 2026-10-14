@@ -1880,7 +1880,8 @@ function FixedEventRow({ noteId, f, clientName, onDone }: { noteId: number; f: F
   const surname = clientName ? clientName.split(/[\s\u3000]/)[0]! : '';
   const [start, setStart] = useState(() => toLocalInput(f.startAt));
   // 件名は「河村亮祐　WEB裁判（損害賠償請求事件）」のように、名前と内容の間を全角の空白にする
-  const [title, setTitle] = useState(`${surname ? `${surname}　` : ''}${f.content}`);
+  const proposedTitle = `${surname ? `${surname}　` : ''}${f.content}`;
+  const [title, setTitle] = useState(proposedTitle);
   const [kind, setKind] = useState<EventKind>(f.kind);
   const [duration, setDuration] = useState(String(Math.max(15, Math.round((new Date(f.endAt).getTime() - new Date(f.startAt).getTime()) / 60_000))));
   const [web, setWeb] = useState(false);
@@ -1899,6 +1900,8 @@ function FixedEventRow({ noteId, f, clientName, onDone }: { noteId: number; f: F
         kind,
         web,
         location: location.trim() || null,
+        // 最初の案。件名・場所を直して登録したら、次からその書き方に合わせる
+        proposed: { title: proposedTitle, location: f.location ?? null },
         slots: [{ startAt: startAt.toISOString(), endAt: new Date(startAt.getTime() + mins() * 60_000).toISOString() }],
       });
     },

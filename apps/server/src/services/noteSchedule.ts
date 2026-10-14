@@ -6,6 +6,8 @@ import { findFreeSlots, type Slot } from './scheduling.js';
 import { businessHours, fmtHm, getSetting, getSettingInt } from './settings.js';
 import { createCalendarEvent, createHoldSet } from './court.js';
 import { issueZoomIfNeeded, webLocation, webMeetingProvider, webMeetingText } from './webMeeting.js';
+import { applyEventStyle, eventStyleHints, recordEventStyle } from './eventStyle.js';
+import { logger } from '../logger.js';
 import { CASE_NOTE_KIND_LABEL, familyName, formatJaDateTime, toJstParts, type CaseNoteKind, type EventKind, type SchedulePreferences } from '@lcm/shared';
 
 /**
@@ -153,7 +155,10 @@ export async function proposeScheduleFromNote(
       '日時がすでに確定していて調整の必要がないもの（「次回期日は 10 月 11 日 13 時 30 分に決まった」など）は found=false にし、代わりに fixed に入れてください。これから決めるもの（「次回の打合せは来週の午後で調整」「改めて日程を相談」など）だけ found=true にします。',
       'fixed には、記録の中で日時がもう決まっている予定だけを入れます。過ぎた日時や、これから調整するものは入れません。',
       '読み取れなければ found=false・fixed=空 にし、ほかは空・null にしてください。',
-    ].join('\n'),
+      eventStyleHints(),
+    ]
+      .filter(Boolean)
+      .join('\n'),
     user: `依頼者: ${client?.name ?? '（不明）'}\n事件: ${kase?.title ?? '（不明）'}\n\n--- 記録 ---\n${noteText(n)}`,
     schema: noteScheduleSchema,
     effort: 'medium',
@@ -215,13 +220,15 @@ export async function proposeScheduleFromNote(
       // AI が web を落としても、場所や根拠の一節に「双方ウェブ」などがあればウェブとみなす
       const web = !!f.web || WEB_WORDS_RE.test(`${location ?? ''} ${f.quote}`);
       const style = kind === 'hearing' && web ? webHearingStyle(content) : null;
+      // 本人が前に直した書き方を覚えていれば、それに合わせる（ウェブの期日の決まりより優先）
+      const learned = applyEventStyle({ kind, content: style?.content ?? content, location: style?.location ?? location });
       return {
         startAt: startAt.toISOString(),
         endAt: new Date(startAt.getTime() + minutes * 60_000).toISOString(),
         timeKnown: f.timeKnown,
-        content: style?.content ?? content,
+        content: learned.content,
         kind,
-        location: style?.location ?? location,
+        location: learned.location,
         web,
         quote: f.quote,
       };
@@ -235,7 +242,7 @@ export async function proposeScheduleFromNote(
     clientId,
     clientName: client?.name ?? null,
     found: r.found,
-    content: r.content.trim() || '打合せ',
+    content: applyEventStyle({ kind: r.kind === 'other' ? 'meeting' : r.kind, content: r.content.trim() || '打合せ', location: null }).content,
     kind: (r.kind === 'other' ? 'meeting' : r.kind) as EventKind,
     web: r.web,
     durationMinutes,
@@ -261,7 +268,7 @@ export interface RegisterNoteScheduleInput {
 }
 
 /** 記録から読み取った（画面で直した）日時を、そのまま予定に登録する */
-export async function registerScheduleFromNote(noteId: number, input: RegisterNoteScheduleInput) {
+export async function registerScheduleFromNote(noteId: number, input: RegisterNoteScheduleInput & { proposed?: { title?: string | null; location?: string | null } | null }) {
   const d = db();
   const n = d.select().from(schema.caseNotes).where(eq(schema.caseNotes.id, noteId)).get();
   if (!n) throw new Error('記録が見つかりません');
@@ -271,6 +278,14 @@ export async function registerScheduleFromNote(noteId: number, input: RegisterNo
   const client = clientId ? (d.select().from(schema.clients).where(eq(schema.clients.id, clientId)).get() ?? null) : null;
   const kind: EventKind = input.kind === 'hold' ? 'meeting' : input.kind;
   const description = [`記録から登録（${CASE_NOTE_KIND_LABEL[n.kind as CaseNoteKind] ?? n.kind}・${formatJaDateTime(new Date(n.occurredAt))}）`, n.gist ?? ''].filter(Boolean).join('\n');
+  // 案を直して登録したなら、その直し方を覚える（次の案に当てる）
+  if (input.proposed) {
+    try {
+      recordEventStyle({ source: 'note', kind, clientId, clientName: client?.name ?? null, proposedTitle: input.proposed.title, finalTitle: input.title, proposedLocation: input.proposed.location, finalLocation: input.location ?? null });
+    } catch (err) {
+      logger.warn({ err }, '予定の書き方の学習に失敗');
+    }
+  }
   const provider = input.web ? webMeetingProvider() : 'none';
   if (input.mode === 'confirmed') {
     const sl = input.slots[0]!;

@@ -429,6 +429,26 @@ export const drafts = sqliteTable('drafts', {
   generatedText: text('generated_text').notNull(),
   finalText: text('final_text'),
   status: text('status').notNull().default('draft'), // draft | sent | discarded
+  /** 何の下書きか（hearing_notice=依頼者への期日連絡）。送った文を、次の同じ種類の下書きの手本にする */
+  kind: text('kind'),
+  createdAt: text('created_at').notNull().default(now()),
+});
+
+/**
+ * 予定の件名・場所の書き方の学習。記録や会話から予定を登録するとき、AI の案を直して登録したら、その直し方を残す。
+ * 次に同じ案が出たら同じように直し、AI にも手本として渡す（例: 「次回期日」「双方ウェブ」→「WEB裁判」「ブース」）
+ */
+export const eventStyleExamples = sqliteTable('event_style_examples', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  /** note=記録から / conversation=会話から */
+  source: text('source').notNull(),
+  kind: text('kind').notNull(),
+  /** 件名のうち依頼者名を除いた内容 */
+  proposedContent: text('proposed_content').notNull(),
+  finalContent: text('final_content').notNull(),
+  proposedLocation: text('proposed_location'),
+  finalLocation: text('final_location'),
+  clientId: integer('client_id'),
   createdAt: text('created_at').notNull().default(now()),
 });
 

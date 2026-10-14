@@ -1580,6 +1580,8 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
         ...(web ? meetingBody(meeting) : {}),
         replaceEventId: replaceId ? Number(replaceId) : null,
         cancelHoldSessionId: mode === 'confirmed' && cancelHoldId ? Number(cancelHoldId) : null,
+        // 読み取ったときの案。件名・場所を直して登録したら、次からその書き方に合わせる
+        proposed: res?.title ? { title: res.title, location: res.location ?? null } : null,
         slots: (mode === 'confirmed' ? slots.slice(0, 1) : slots)
           .filter((s) => s.start)
           .map((s) => {

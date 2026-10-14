@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, gt } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { draftReply } from './style.js';
+import { draftReply, pastDraftExamples } from './style.js';
 import { listCourtDocs } from './court.js';
 import { clientOwnConversations } from './contacts.js';
 import { listTemplates, fillTemplate } from './templates.js';
@@ -232,10 +232,13 @@ export async function prepareHearingNotice(noteId: number, opts: { channel?: Cha
         personName: chosen.personId ? addressee : null,
         thread: thread.map((m) => ({ direction: m.direction as 'in' | 'out', body: m.body, sentAt: m.sentAt, senderName: m.senderName })),
         caseSummary: kase.summary ?? null,
+        // 過去に送った期日連絡を手本にする（本人が直して送ったものほど優先）
+        examples: { label: '期日連絡', texts: pastDraftExamples('hearing_notice', { channel, clientId: client.id }) },
       },
       client.id,
     );
-    draftId = d.insert(schema.drafts).values({ conversationId: conv.id, instruction, generatedText: text }).returning().get().id;
+    // 期日連絡の下書きとして残す（送ったら、次の期日連絡の手本になる）
+    draftId = d.insert(schema.drafts).values({ conversationId: conv.id, instruction, generatedText: text, kind: 'hearing_notice' }).returning().get().id;
   } else {
     text = template ? fillTemplate(template.body, { 姓: surname, 結果: resultText, 次回期日: nextHearingText, アクセス案内: '' }) : `${surname}様\n\n本日の期日の結果をご報告いたします。\n\n${resultText}\n\n次回期日は${nextHearingText}です。`;
   }

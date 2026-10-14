@@ -186,6 +186,33 @@ export interface DraftContext {
   personTitle?: string | null;
   thread: { direction: 'in' | 'out'; body: string; sentAt: string; senderName?: string | null }[];
   caseSummary?: string | null;
+  /** 同じ種類の文の、本人が過去に送った実例（期日連絡など）。構成・言い回しを最優先で踏襲させる */
+  examples?: { label: string; texts: string[] } | null;
+}
+
+/**
+ * 同じ種類の下書き（期日連絡など）から、実際に送った文を手本として取り出す。
+ * 本人が直して送ったもの → そのまま送ったもの の順、同じ依頼者・同じチャネルを優先し、新しいものから
+ */
+export function pastDraftExamples(kind: string, opts: { channel: Channel; clientId?: number | null; limit?: number }): string[] {
+  const limit = opts.limit ?? 3;
+  const rows = db()
+    .select({ finalText: schema.drafts.finalText, generatedText: schema.drafts.generatedText, createdAt: schema.drafts.createdAt, channel: schema.conversations.channel, clientId: schema.conversations.clientId })
+    .from(schema.drafts)
+    .innerJoin(schema.conversations, eq(schema.conversations.id, schema.drafts.conversationId))
+    .where(and(eq(schema.drafts.kind, kind), eq(schema.drafts.status, 'sent')))
+    .orderBy(desc(schema.drafts.createdAt))
+    .limit(200)
+    .all()
+    .filter((r) => (r.finalText ?? '').trim().length >= 20);
+  const rank = (r: (typeof rows)[number]) =>
+    (r.channel === opts.channel ? 0 : 4) + (r.finalText!.trim() !== r.generatedText.trim() ? 0 : 2) + (opts.clientId && r.clientId === opts.clientId ? 0 : 1);
+  // 同じチャネルの実例が無ければ他チャネルも使う（メールの実例を LINE に使うと長すぎるので、同じチャネルを強く優先）
+  return rows
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => rank(a.r) - rank(b.r) || a.i - b.i)
+    .slice(0, limit)
+    .map(({ r }) => r.finalText!.trim());
 }
 
 /**
@@ -250,7 +277,11 @@ ${signature ? `\n【署名（メールの末尾に付ける）】\n${signature}`
 【本人の文体プロファイル（${CHANNEL_LABEL[ctx.channel]}）】
 ${profileNote}${profile || '（未生成。実例から推測してください）'}
 
-【本人の過去の返信例（${CHANNEL_LABEL[ctx.channel]}${samples.some((s) => s.channel !== ctx.channel) ? '、一部は他チャネル' : ''}）】
+${
+  ctx.examples?.texts.length
+    ? `【本人が過去に送った${ctx.examples.label}（この構成・言い回し・書き方を最優先で踏襲する。中身は今回の内容に差し替える）】\n${ctx.examples.texts.map((t, i) => `--- ${ctx.examples!.label}の例${i + 1} ---\n${t.slice(0, 1500)}`).join('\n\n')}\n\n`
+    : ''
+}【本人の過去の返信例（${CHANNEL_LABEL[ctx.channel]}${samples.some((s) => s.channel !== ctx.channel) ? '、一部は他チャネル' : ''}）】
 ${samples.map((s, i) => `--- 例${i + 1} ---\n${s.text.slice(0, 900)}`).join('\n\n') || '（なし）'}`;
 
   const threadText = ctx.thread

@@ -7,6 +7,7 @@ import { createCalendarEvent, editCalendarEvent, createHoldSet, removeCalendarEv
 import { getSetting, businessHours, fmtHm } from './settings.js';
 import { issueZoomIfNeeded, webLocation, webMeetingProvider, webMeetingText, findMeetingInText, externalLocation, externalMeetingText, externalProviderOf, withExternalMeeting, EXTERNAL_PROVIDER_LABEL, type ExternalMeeting } from './webMeeting.js';
 import { logger } from '../logger.js';
+import { applyEventStyle, eventStyleHints, recordEventStyle } from './eventStyle.js';
 
 /**
  * 会話（LINE / Chatwork / Gmail）の日程調整のやり取りを読み取り、
@@ -122,7 +123,10 @@ export async function extractScheduleFromConversation(conversationId: number, op
       '新しく予定を決める話なら isReschedule=false です。変更前の予定が一覧に無い・どれか分からないときは originalIndex=null にします。',
       '「仮押さえ中の候補」は、こちらが相手に出している候補です。相手がそのうちの 1 つを選んで合意した（「2 番目でお願いします」「◯日で大丈夫です」など）なら confirmed とし、その候補の日時を slots に入れます。',
       '本文にない情報は作らないでください。',
-    ].join('\n'),
+      eventStyleHints(),
+    ]
+      .filter(Boolean)
+      .join('\n'),
     user: `相手: ${who}\n自分: ${me}\n\n--- この相手とすでに入っている予定 ---\n${existingText}\n\n--- 仮押さえ中の候補 ---\n${holdsText}\n\n--- やり取り（古い順） ---\n${transcript}`,
     schema: extractSchema,
     effort: 'medium',
@@ -136,12 +140,16 @@ export async function extractScheduleFromConversation(conversationId: number, op
       return { startAt: startAt.toISOString(), endAt: new Date(startAt.getTime() + durationMinutes * 60_000).toISOString(), timeKnown: s.timeKnown, quote: s.quote, by: s.by };
     })
     .filter((s): s is NonNullable<typeof s> => !!s);
-  const content = result.content.trim() || (result.kind === 'hearing' ? '期日' : result.kind === 'consult' ? (result.web ? 'WEB相談' : '相談') : '打合せ');
+  const rawContent = result.content.trim() || (result.kind === 'hearing' ? '期日' : result.kind === 'consult' ? (result.web ? 'WEB相談' : '相談') : '打合せ');
+  // 本人が前に直した件名・場所の書き方を覚えていれば、それに合わせる
+  const learned = applyEventStyle({ kind: result.kind, content: rawContent, location: result.location ?? null });
+  const content = learned.content;
   const counterpartName = client ? familyName(client.name) : familyName(conv.counterpartName ?? who);
   // 番号は 1 始まり。範囲外なら「どれか分からない」として扱う（画面で選べる）
   const original = result.reschedule?.isReschedule && result.reschedule.originalIndex ? (existing[result.reschedule.originalIndex - 1] ?? null) : null;
   return {
     ...result,
+    location: learned.location,
     durationMinutes,
     content,
     slots,
@@ -354,6 +362,8 @@ export interface RegisterScheduleInput {
   replaceEventId?: number | null;
   /** 確定として登録するとき、あわせて取り消す仮押さえ（候補に無い日時で決まったとき） */
   cancelHoldSessionId?: number | null;
+  /** 読み取ったときの案（件名・場所）。直して登録したら、その直し方を覚える */
+  proposed?: { title?: string | null; location?: string | null } | null;
 }
 
 /** 日程変更で取り消す予定を確かめる（別の依頼者の予定や、仮押さえそのものは取り消さない） */
@@ -396,6 +406,13 @@ export async function registerScheduleFromConversation(conversationId: number, i
     caseId = open.sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9))[0]?.id ?? null;
   }
   const baseDescription = [input.description ?? '', `会話から登録（受信箱 #${conversationId}）`].filter(Boolean).join('\n');
+  if (input.proposed) {
+    try {
+      recordEventStyle({ source: 'conversation', kind: input.kind === 'hold' ? 'meeting' : input.kind, clientId: client?.id ?? null, clientName: [client?.name, conv.counterpartName], proposedTitle: input.proposed.title, finalTitle: input.title, proposedLocation: input.proposed.location, finalLocation: input.location ?? null });
+    } catch (err) {
+      logger.warn({ err }, '予定の書き方の学習に失敗');
+    }
+  }
   // 相手が URL を発行するなら、こちらでは会議を作らない
   const theirs = !!input.web && input.meetingBy === 'them';
   const meeting = theirs && input.meeting?.url ? input.meeting : null;
