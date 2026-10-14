@@ -1,9 +1,9 @@
-import { and, eq, desc } from 'drizzle-orm';
+import { and, eq, desc, gt, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/index.js';
 import * as cw from '../channels/chatwork.js';
 import { ingestMessage } from './inbox.js';
-import { createTask, updateTask } from './tasks.js';
+import { createTask, updateTask, chatworkReplyable } from './tasks.js';
 import { getSetting } from './settings.js';
 import { appUrl } from './notify.js';
 import { generateStructured } from '../integrations/anthropic.js';
@@ -37,6 +37,23 @@ export interface StaffAskSubject {
   link: string;
 }
 
+/** Chatwork で返信できるメッセージ（事務局からの返事、Chatwork で振られたタスクなど） */
+export interface StaffAskReplyTarget {
+  /** 「ルームID-メッセージID」 */
+  key: string;
+  roomId: number;
+  chatworkMessageId: string;
+  /** 返信する相手の Chatwork アカウント */
+  accountId: number;
+  senderName: string | null;
+  sentAt: string | null;
+  excerpt: string;
+  /** reply=このタスクから送った報告・確認への返事 / task=Chatwork で振られたタスク / source=タスクのきっかけになったメッセージ / conversation=タスクの会話に届いたもの */
+  reason: 'reply' | 'task' | 'source' | 'conversation';
+  /** アプリの受信箱にあるときのメッセージ */
+  messageId: number | null;
+}
+
 export interface StaffAskContext {
   source: StaffAskSource;
   /** 引用するもの。見つからなければ null */
@@ -49,6 +66,10 @@ export interface StaffAskContext {
   defaultStaffId: number | null;
   rooms: StaffAskRoom[];
   defaultRoomId: number | null;
+  /** 返信として送れるメッセージ（タスクから送るとき） */
+  replyTargets: StaffAskReplyTarget[];
+  /** 既定の返信先（事務局から返事が来ている・Chatwork で振られたタスクなど）。null は新しいメッセージとして送る */
+  defaultReplyKey: string | null;
   /** 送れない理由（Chatwork 未接続、事務局メンバー未登録など） */
   blocked: string | null;
 }
@@ -81,6 +102,100 @@ function taskBody(t: typeof schema.tasks.$inferSelect): string {
   if (when.length) parts.push(when.join(' / '));
   if (t.note?.trim()) parts.push(t.note.trim());
   return excerpt(parts.join('\n'));
+}
+
+const oneLine = (s: string, limit = 80) => {
+  const t = cw.stripChatworkMarkup(s).replace(/\s+/g, ' ').trim();
+  return t.length > limit ? `${t.slice(0, limit)}…` : t;
+};
+
+/**
+ * タスクについて、Chatwork で返信できるメッセージを集める（返信先の候補。優先する順）
+ * 1. このタスクから事務局に送った報告・確認のあとに、そのルームに届いた返事
+ * 2. Chatwork で人から振られたタスクの、元のメッセージ
+ * 3. タスクのきっかけになった Chatwork のメッセージ
+ * 4. タスクの会話（Chatwork）に最近届いたメッセージ
+ */
+function replyTargetsForTask(t: typeof schema.tasks.$inferSelect): StaffAskReplyTarget[] {
+  const d = db();
+  const out: StaffAskReplyTarget[] = [];
+  const roomOf = new Map<number, number | null>();
+  const roomIdOf = (conversationId: number) => {
+    if (!roomOf.has(conversationId)) {
+      const c = d.select().from(schema.conversations).where(eq(schema.conversations.id, conversationId)).get();
+      roomOf.set(conversationId, c?.channel === 'chatwork' && /^\d+$/.test(c.externalThreadId) ? Number(c.externalThreadId) : null);
+    }
+    return roomOf.get(conversationId) ?? null;
+  };
+  const push = (r: StaffAskReplyTarget) => {
+    if (!out.some((x) => x.key === r.key)) out.push(r);
+  };
+  const fromMessage = (m: typeof schema.messages.$inferSelect | undefined, reason: StaffAskReplyTarget['reason']) => {
+    if (!m || m.channel !== 'chatwork' || m.direction !== 'in') return;
+    const accountId = Number(m.senderAddress);
+    const roomId = roomIdOf(m.conversationId);
+    if (!accountId || !roomId || !/^\d+$/.test(m.externalId)) return;
+    push({ key: `${roomId}-${m.externalId}`, roomId, chatworkMessageId: m.externalId, accountId, senderName: m.senderName, sentAt: m.sentAt, excerpt: oneLine(m.body), reason, messageId: m.id });
+  };
+
+  // 1. このタスクから送った報告・確認への返事
+  const asked = d
+    .select()
+    .from(schema.messages)
+    .where(and(eq(schema.messages.channel, 'chatwork'), eq(schema.messages.direction, 'out'), sql`json_extract(${schema.messages.raw}, '$.staffAsk.taskId') = ${t.id}`))
+    .orderBy(desc(schema.messages.sentAt))
+    .limit(5)
+    .all();
+  const seenConv = new Set<number>();
+  for (const a of asked) {
+    if (seenConv.has(a.conversationId)) continue;
+    seenConv.add(a.conversationId);
+    const replies = d
+      .select()
+      .from(schema.messages)
+      .where(and(eq(schema.messages.conversationId, a.conversationId), eq(schema.messages.direction, 'in'), gt(schema.messages.sentAt, a.sentAt)))
+      .orderBy(desc(schema.messages.sentAt))
+      .limit(3)
+      .all();
+    for (const m of replies) fromMessage(m, 'reply');
+  }
+  // 2. Chatwork で振られたタスクの元のメッセージ
+  if (chatworkReplyable(t)) {
+    const roomId = t.chatworkRoomId!;
+    const conv = d
+      .select()
+      .from(schema.conversations)
+      .where(and(eq(schema.conversations.channel, 'chatwork'), eq(schema.conversations.externalThreadId, String(roomId))))
+      .get();
+    const m = conv
+      ? d.select().from(schema.messages).where(and(eq(schema.messages.conversationId, conv.id), eq(schema.messages.externalId, t.chatworkMessageId!))).get()
+      : undefined;
+    push({
+      key: `${roomId}-${t.chatworkMessageId}`,
+      roomId,
+      chatworkMessageId: t.chatworkMessageId!,
+      accountId: t.chatworkAssignedById!,
+      senderName: t.chatworkAssignedByName ?? m?.senderName ?? null,
+      sentAt: m?.sentAt ?? null,
+      excerpt: oneLine(m?.body ?? t.title),
+      reason: 'task',
+      messageId: m?.id ?? null,
+    });
+  }
+  // 3. タスクのきっかけになったメッセージ
+  if (t.sourceMessageId) fromMessage(d.select().from(schema.messages).where(eq(schema.messages.id, t.sourceMessageId)).get(), 'source');
+  // 4. タスクの会話に最近届いたもの
+  if (t.conversationId && roomIdOf(t.conversationId)) {
+    const recent = d
+      .select()
+      .from(schema.messages)
+      .where(and(eq(schema.messages.conversationId, t.conversationId), eq(schema.messages.direction, 'in')))
+      .orderBy(desc(schema.messages.sentAt))
+      .limit(2)
+      .all();
+    for (const m of recent) fromMessage(m, 'conversation');
+  }
+  return out;
 }
 
 /** 元ネタと、それが属する依頼者・事件を引く */
@@ -172,6 +287,11 @@ export async function staffAskContext(source: StaffAskSource): Promise<StaffAskC
       add(r.room_id, r.name, 'other');
     }
   }
+  // 返信先の候補（そのルームも送り先に入れておく）
+  const replyTargets = task ? replyTargetsForTask(task) : [];
+  for (const r of replyTargets) add(r.roomId, `返信先のルーム（${r.senderName ?? 'Chatwork'}）`, 'other');
+  // 事務局から返事が来ている・人から振られたタスク・きっかけのメッセージなら、返信を既定にする
+  const defaultReplyKey = replyTargets.find((r) => r.reason !== 'conversation')?.key ?? null;
   const assigner = task?.chatworkAssignedById ? staff.find((s) => s.chatworkAccountId === task.chatworkAssignedById) : null;
   const defaultStaffId = assigner?.id ?? kase?.staffId ?? (staff.length === 1 ? staff[0]!.id : null);
   const blocked = !isConfigured('chatwork')
@@ -192,6 +312,8 @@ export async function staffAskContext(source: StaffAskSource): Promise<StaffAskC
     defaultStaffId,
     rooms,
     defaultRoomId: rooms[0]?.roomId ?? null,
+    replyTargets,
+    defaultReplyKey,
     blocked,
   };
 }
@@ -260,15 +382,19 @@ export interface StaffAskInput {
   quote?: boolean;
   /** アプリ側にも「事務局の返事待ち」のタスクを作る */
   createWaitingTask?: boolean;
+  /** Chatwork のメッセージへの返信として送る（返信先の key） */
+  replyTo?: string | null;
 }
 
 /** Chatwork に送る本文を組み立てる（宛先のメンション＋確認内容＋元ネタの引用＋アプリへのリンク） */
 export function buildStaffAskBody(
   ctx: StaffAskContext,
-  input: { text: string; quote?: boolean; staff?: { name: string; chatworkAccountId: number | null } | null },
+  input: { text: string; quote?: boolean; staff?: { name: string; chatworkAccountId: number | null } | null; replyTo?: StaffAskReplyTarget | null },
 ): string {
   const lines: string[] = [];
-  if (input.staff?.chatworkAccountId) lines.push(`[To:${input.staff.chatworkAccountId}] ${input.staff.name}さん`);
+  // 返信なら [rp]（相手に通知が届く）。担当が返信の相手と別の人なら、その人にも宛先を付ける
+  if (input.replyTo) lines.push(cw.chatworkReplyPrefix(input.replyTo.roomId, { accountId: input.replyTo.accountId, messageId: input.replyTo.chatworkMessageId }).trimEnd());
+  if (input.staff?.chatworkAccountId && input.staff.chatworkAccountId !== input.replyTo?.accountId) lines.push(`[To:${input.staff.chatworkAccountId}] ${input.staff.name}さん`);
   const who = [ctx.clientName, ctx.caseTitle].filter(Boolean).join(' / ');
   if (who) lines.push(`【${who}】`);
   lines.push(input.text.trim());
@@ -285,11 +411,15 @@ export async function sendStaffAsk(source: StaffAskSource, input: StaffAskInput)
   if (!isConfigured('chatwork')) throw new Error('Chatwork が未設定です');
   if (!input.text.trim()) throw new Error('確認したいことを入力してください');
   const ctx = await staffAskContext(source);
-  const room = ctx.rooms.find((r) => r.roomId === input.roomId);
+  const replyTo = input.replyTo ? (ctx.replyTargets.find((r) => r.key === input.replyTo) ?? null) : null;
+  if (input.replyTo && !replyTo) throw new Error('返信先のメッセージが見つかりません');
+  if (replyTo && input.asTask) throw new Error('Chatwork のタスクとして送るときは、返信にはできません');
+  // 返信なら、送り先は返信先のメッセージがあるルーム
+  const room = ctx.rooms.find((r) => r.roomId === (replyTo?.roomId ?? input.roomId));
   if (!room) throw new Error('送り先のルームが選ばれていません');
   const staff = input.staffId ? (ctx.staff.find((s) => s.id === input.staffId) ?? null) : null;
   if (input.staffId && !staff) throw new Error('担当の事務局メンバーが見つかりません');
-  const body = buildStaffAskBody(ctx, { text: input.text, quote: input.quote, staff });
+  const body = buildStaffAskBody(ctx, { text: input.text, quote: input.quote, staff, replyTo });
 
   let chatworkTaskId: number | null = null;
   let externalId: string;
@@ -321,7 +451,8 @@ export async function sendStaffAsk(source: StaffAskSource, input: StaffAskInput)
       senderName: getSetting('lawyer_name') || '自分',
       body: cw.stripChatworkMarkup(body),
       attachments: [],
-      raw: { staffAsk: from },
+      // 返信なら、アプリの会話でも返信先を表示する
+      raw: { staffAsk: from, ...(replyTo ? { replyToMessageId: replyTo.messageId, replyToExternalId: replyTo.chatworkMessageId } : {}) },
       identity: { channel: 'chatwork', chatworkRoomId: room.roomId },
     },
     { processAttachments: false },
@@ -329,6 +460,12 @@ export async function sendStaffAsk(source: StaffAskSource, input: StaffAskInput)
     logger.warn({ err, roomId: room.roomId }, '事務局への確認の控えを保存できませんでした');
     return null;
   });
+
+  // Chatwork で振られたタスクのメッセージに返信したら、返信済みの印を付ける
+  if (replyTo?.reason === 'task' && source.kind === 'task') {
+    const now = new Date().toISOString();
+    db().update(schema.tasks).set({ chatworkRepliedAt: now, updatedAt: now }).where(eq(schema.tasks.id, source.taskId)).run();
+  }
 
   let waitingTaskId: number | null = null;
   if (input.createWaitingTask && source.kind === 'task') {
@@ -350,6 +487,6 @@ export async function sendStaffAsk(source: StaffAskSource, input: StaffAskInput)
     waitingTaskId = t.id;
   }
 
-  logger.info({ source, roomId: room.roomId, asTask: !!input.asTask, staffId: staff?.id ?? null }, '事務局に確認を送りました');
-  return { roomId: room.roomId, roomName: room.name, staffName: staff?.name ?? null, asTask: !!input.asTask, chatworkTaskId, messageId: saved?.message.id ?? null, waitingTaskId };
+  logger.info({ source, roomId: room.roomId, asTask: !!input.asTask, staffId: staff?.id ?? null, replyTo: replyTo?.key ?? null }, '事務局に確認を送りました');
+  return { roomId: room.roomId, roomName: room.name, staffName: staff?.name ?? null, replyToName: replyTo ? (replyTo.senderName ?? '') : null, asTask: !!input.asTask, chatworkTaskId, messageId: saved?.message.id ?? null, waitingTaskId };
 }
