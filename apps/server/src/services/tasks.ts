@@ -1,4 +1,5 @@
 import { and, eq, desc, inArray, lt, isNotNull } from 'drizzle-orm';
+import { looksLikePhoneMessage } from './phoneMessage.js';
 import { db, schema } from '../db/index.js';
 import { addBusinessDays, dateOnlyDeadline, jstYmd, formatJaDateTime, TASK_STATUS_LABEL, isWaitingStatus, WAITING_TASK_STATUSES, ACTIVE_TASK_STATUSES, type TaskInput, type TaskStatus } from '@lcm/shared';
 import { getSettingInt, holidaySet, getSyncState } from './settings.js';
@@ -216,6 +217,8 @@ export function listTasks(filter: { status?: TaskStatus | 'active' | 'waiting'; 
     clientName: r.clientName ?? null,
     caseTitle: r.caseTitle ?? null,
     chatworkReplyable: chatworkReplyable(r.task, me),
+    // 電話の伝言らしければ「折り返し電話」を出す
+    phoneMessage: r.task.status !== 'done' && looksLikePhoneMessage(r.task),
     confirmMessageId: r.task.chatworkMessageId ? (msgByCw.get(r.task.chatworkMessageId) ?? null) : null,
   }));
 }

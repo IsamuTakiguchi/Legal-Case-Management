@@ -1,10 +1,11 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { taskInputSchema, TASK_STATUSES, WAITING_TASK_STATUSES, staffAskDraftSchema, staffAskSendSchema } from '@lcm/shared';
+import { taskInputSchema, caseNoteInputSchema, TASK_STATUSES, WAITING_TASK_STATUSES, staffAskDraftSchema, staffAskSendSchema } from '@lcm/shared';
 import { staffAskContext, draftStaffAsk, sendStaffAsk, type StaffAskSource } from '../services/staffAsk.js';
 import { createTask, updateTask, nudgeTask, listTasks, importChatworkTasks, syncTaskToChatwork, bulkUpdateTasks, deleteTask } from '../services/tasks.js';
 import { openAlerts, resolveAlert } from '../services/alerts.js';
 import { replyToChatworkTask } from '../services/taskReply.js';
+import { callbackContext, saveCallbackNote } from '../services/taskCallback.js';
 import { createMemo, detectMemos, memoInputSchema, snoozeMemo } from '../services/memos.js';
 import { isConfigured } from '../config.js';
 import { db, schema } from '../db/index.js';
@@ -72,6 +73,18 @@ taskRoutes.post('/tasks/:id/staff-ask/draft', async (c) => {
 });
 
 taskRoutes.post('/tasks/:id/staff-ask', async (c) => c.json(await sendStaffAsk(taskSource(c), staffAskSendSchema.parse(await c.req.json()))));
+
+// ---- 電話の伝言から折り返し電話をして記録に残す ----
+
+taskRoutes.get('/tasks/:id/callback', (c) => c.json(callbackContext(Number(c.req.param('id')))));
+
+taskRoutes.post('/tasks/:id/callback', async (c) => {
+  const raw = await c.req.json();
+  const input = caseNoteInputSchema.omit({ kind: true }).parse(raw);
+  const mode = raw.createTasks === 'single' ? 'single' : raw.createTasks === 'each' || raw.createTasks === true ? 'each' : false;
+  const taskIndexes = Array.isArray(raw.taskIndexes) ? (raw.taskIndexes as unknown[]).map(Number).filter((n) => Number.isInteger(n) && n >= 0) : undefined;
+  return c.json(await saveCallbackNote(Number(c.req.param('id')), input, { completeTask: raw.completeTask === true, createTasks: mode, taskIndexes }));
+});
 
 // ---- 時期未定の備忘 ----
 
