@@ -12,7 +12,27 @@ interface StaffAskCtx {
   defaultStaffId: number | null;
   rooms: { roomId: number; name: string; kind: string }[];
   defaultRoomId: number | null;
+  /** Chatwork で返信できるメッセージ（タスクから送るとき） */
+  replyTargets?: ReplyTarget[];
+  defaultReplyKey?: string | null;
   blocked: string | null;
+}
+
+interface ReplyTarget {
+  key: string;
+  roomId: number;
+  accountId: number;
+  senderName: string | null;
+  sentAt: string | null;
+  excerpt: string;
+  reason: 'reply' | 'task' | 'source' | 'conversation';
+}
+
+const REPLY_REASON_LABEL: Record<ReplyTarget['reason'], string> = { reply: '返事', task: 'Chatwork のタスク', source: 'きっかけ', conversation: '会話' };
+
+function replyLabel(r: ReplyTarget): string {
+  const when = r.sentAt ? new Date(r.sentAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+  return `【${REPLY_REASON_LABEL[r.reason]}】${r.senderName ?? ''}${when ? `（${when}）` : ''}「${r.excerpt.slice(0, 40)}」`;
 }
 
 const ROOM_KIND_LABEL: Record<string, string> = { case: '事件専用', client: '依頼者', my: 'マイチャット', other: '' };
@@ -32,13 +52,23 @@ export function StaffAskPanel({ base, draftKey, onClose, onSent }: { base: strin
   const [asTask, setAsTask] = useState(false);
   const [due, setDue] = useState('');
   const [waiting, setWaiting] = useState(false);
+  // 返信先（'' は返信にしない＝新しいメッセージとして送る）
+  const [replyKey, setReplyKey] = useState('');
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const d = ctx.data;
   useEffect(() => {
     if (!d) return;
     setStaffId(d.defaultStaffId ? String(d.defaultStaffId) : '');
     setRoomId(d.defaultRoomId ? String(d.defaultRoomId) : '');
+    setReplyKey(d.defaultReplyKey ?? '');
   }, [d]);
+  const reply = d?.replyTargets?.find((r) => r.key === replyKey) ?? null;
+  // 返信するときは、送り先は返信先のメッセージがあるルーム。Chatwork のタスクとしては送れない
+  useEffect(() => {
+    if (!reply) return;
+    setRoomId(String(reply.roomId));
+    setAsTask(false);
+  }, [reply]);
   // 書きかけの確認文はこの端末に自動保存する
   const askDraft = useDraft(`${draftKey}:staff-ask`, text, setText, '');
   // ask=確認・依頼の文、report=状況報告の文を AI に書いてもらう
@@ -52,7 +82,7 @@ export function StaffAskPanel({ base, draftKey, onClose, onSent }: { base: strin
   });
   const send = useMutation({
     mutationFn: () =>
-      api.post<{ roomName: string; staffName: string | null; asTask: boolean }>(`${base}/staff-ask`, {
+      api.post<{ roomName: string; staffName: string | null; replyToName: string | null; asTask: boolean }>(`${base}/staff-ask`, {
         staffId: staffId ? Number(staffId) : null,
         roomId: Number(roomId),
         text,
@@ -60,11 +90,18 @@ export function StaffAskPanel({ base, draftKey, onClose, onSent }: { base: strin
         asTask,
         due: due || null,
         createWaitingTask: waiting,
+        replyTo: reply?.key ?? null,
       }),
     onSuccess: (r) => {
       askDraft.clear();
       setText('');
-      setMsg({ kind: 'ok', text: `${r.roomName} に${r.staffName ? `（${r.staffName}さん宛で）` : ''}${r.asTask ? 'タスクとして' : ''}送りました` });
+      setMsg({
+        kind: 'ok',
+        text:
+          r.replyToName !== null
+            ? `${r.roomName} で${r.replyToName ? `${r.replyToName}さんへの` : ''}返信として送りました`
+            : `${r.roomName} に${r.staffName ? `（${r.staffName}さん宛で）` : ''}${r.asTask ? 'タスクとして' : ''}送りました`,
+      });
       onSent();
     },
     onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
@@ -98,7 +135,7 @@ export function StaffAskPanel({ base, draftKey, onClose, onSent }: { base: strin
             </label>
             <label className="flex w-full min-w-0 items-center gap-1 sm:w-auto sm:flex-1">
               <span className="shrink-0 whitespace-nowrap">送り先</span>
-              <select className="input w-full min-w-0" value={roomId} onChange={(e) => setRoomId(e.target.value)}>
+              <select className="input w-full min-w-0" value={roomId} onChange={(e) => setRoomId(e.target.value)} disabled={!!reply} title={reply ? '返信するときは、返信先のメッセージがあるルームに送ります' : undefined}>
                 {d.rooms.map((r) => (
                   <option key={r.roomId} value={r.roomId}>
                     {r.name}
@@ -108,6 +145,19 @@ export function StaffAskPanel({ base, draftKey, onClose, onSent }: { base: strin
               </select>
             </label>
           </div>
+          {!!d.replyTargets?.length && (
+            <label className="flex w-full min-w-0 items-center gap-1">
+              <span className="shrink-0 whitespace-nowrap">返信先</span>
+              <select className="input w-full min-w-0" value={replyKey} onChange={(e) => setReplyKey(e.target.value)}>
+                <option value="">返信にしない（新しいメッセージとして送る）</option>
+                {d.replyTargets.map((r) => (
+                  <option key={r.key} value={r.key}>
+                    {replyLabel(r)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             <input
               className="input min-w-0 flex-1"
@@ -134,7 +184,7 @@ export function StaffAskPanel({ base, draftKey, onClose, onSent }: { base: strin
               <input type="checkbox" checked={quote} onChange={(e) => setQuote(e.target.checked)} /> {QUOTE_LABEL[d.subject?.kind ?? 'message']}を引用する
             </label>
             <label className="flex items-center gap-1">
-              <input type="checkbox" checked={asTask} onChange={(e) => setAsTask(e.target.checked)} /> Chatwork のタスクとして送る
+              <input type="checkbox" checked={asTask} onChange={(e) => setAsTask(e.target.checked)} disabled={!!reply} /> Chatwork のタスクとして送る
             </label>
             {(asTask || waiting) && (
               <label className="flex items-center gap-1">

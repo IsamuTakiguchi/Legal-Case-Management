@@ -257,6 +257,76 @@ describe('タスクから担当事務局に報告・確認する', () => {
     expect((saved.raw as { staffAsk?: { taskId?: number } }).staffAsk?.taskId).toBe(t.id);
   });
 
+  it('このタスクから送った報告に事務局から返事が来たら、その返事への Chatwork の返信として送れる', async () => {
+    const { client, kase, staff } = seed();
+    const t = db().insert(schema.tasks).values({ title: '期日請書の提出', status: 'open', clientId: client.id, caseId: kase.id }).returning().get();
+    // 返事が来る前は、返信先の候補は無い
+    expect((await staffAskContext({ kind: 'task', taskId: t.id })).replyTargets).toEqual([]);
+    const first = await sendStaffAsk({ kind: 'task', taskId: t.id }, { staffId: staff.id, roomId: 200, text: '期日請書の提出をお願いします' });
+    const asked = db().select().from(schema.messages).where(eq(schema.messages.id, first.messageId!)).get()!;
+    // 事務局から返事が届いた
+    const reply = db()
+      .insert(schema.messages)
+      .values({ conversationId: asked.conversationId, channel: 'chatwork', externalId: '1900000001', direction: 'in', senderName: '中村 事務', senderAddress: '12345', body: '[rp aid=1 to=200-1][pname:1]さん\n提出しました。控えは共有フォルダに入れています。', sentAt: new Date(Date.now() + 60_000).toISOString() })
+      .returning()
+      .get();
+    const ctx = await staffAskContext({ kind: 'task', taskId: t.id });
+    expect(ctx.replyTargets).toHaveLength(1);
+    expect(ctx.replyTargets[0]).toMatchObject({ key: '200-1900000001', roomId: 200, accountId: 12345, senderName: '中村 事務', reason: 'reply', messageId: reply.id, excerpt: '提出しました。控えは共有フォルダに入れています。' });
+    expect(ctx.defaultReplyKey).toBe('200-1900000001');
+
+    sent.length = 0;
+    // 送り先に別のルームを選んでいても、返信先のルームに送る
+    const r = await sendStaffAsk({ kind: 'task', taskId: t.id }, { staffId: staff.id, roomId: 500, text: 'ありがとうございます。確認しました', replyTo: '200-1900000001', quote: false });
+    expect(sent[0]).toMatchObject({ kind: 'message', roomId: 200 });
+    expect(sent[0]!.body.startsWith('[rp aid=12345 to=200-1900000001][pname:12345]さん\n')).toBe(true);
+    // 返信の相手が担当なら、[To] を重ねない
+    expect(sent[0]!.body).not.toContain('[To:12345]');
+    expect(sent[0]!.body).toContain('ありがとうございます。確認しました');
+    expect(r.replyToName).toBe('中村 事務');
+    // アプリの会話でも、どのメッセージへの返信かが分かる
+    const saved = db().select().from(schema.messages).where(eq(schema.messages.id, r.messageId!)).get()!;
+    expect(saved.raw).toMatchObject({ replyToMessageId: reply.id, replyToExternalId: '1900000001', staffAsk: { taskId: t.id } });
+    // 返信先に無いものや、タスクとしての送信は断る
+    await expect(sendStaffAsk({ kind: 'task', taskId: t.id }, { roomId: 200, text: 'x', replyTo: '200-999' })).rejects.toThrow('返信先のメッセージが見つかりません');
+    await expect(sendStaffAsk({ kind: 'task', taskId: t.id }, { staffId: staff.id, roomId: 200, text: 'x', replyTo: '200-1900000001', asTask: true })).rejects.toThrow('返信にはできません');
+  });
+
+  it('Chatwork で振られたタスクは、元のメッセージへの返信を既定にし、別の担当には [To] も付ける', async () => {
+    const { client, staff } = seed();
+    db().insert(schema.staffMembers).values({ name: '佐藤 事務', chatworkAccountId: 888 }).run();
+    const t = db()
+      .insert(schema.tasks)
+      .values({ title: '相手方代理人に電話', status: 'open', clientId: client.id, chatworkRoomId: 500, chatworkTaskId: 9001, chatworkMessageId: '1800000001', chatworkAssignedById: 888, chatworkAssignedByName: '佐藤 事務' })
+      .returning()
+      .get();
+    const ctx = await staffAskContext({ kind: 'task', taskId: t.id });
+    expect(ctx.replyTargets[0]).toMatchObject({ key: '500-1800000001', roomId: 500, accountId: 888, senderName: '佐藤 事務', reason: 'task', excerpt: '相手方代理人に電話' });
+    expect(ctx.defaultReplyKey).toBe('500-1800000001');
+    sent.length = 0;
+    await sendStaffAsk({ kind: 'task', taskId: t.id }, { staffId: staff.id, roomId: 500, text: '電話しました。来週回答があります', replyTo: '500-1800000001' });
+    expect(sent[0]!.body.startsWith('[rp aid=888 to=500-1800000001][pname:888]さん\n[To:12345] 中村 事務さん\n')).toBe(true);
+    // 振られたタスクに返信した印が付く
+    expect(db().select().from(schema.tasks).where(eq(schema.tasks.id, t.id)).get()!.chatworkRepliedAt).toBeTruthy();
+  });
+
+  it('タスクのきっかけになった Chatwork のメッセージにも返信できる（Gmail などは対象外）', async () => {
+    const { client, kase, msg } = seed();
+    const conv = db().insert(schema.conversations).values({ channel: 'chatwork', externalThreadId: '600', clientId: client.id, counterpartName: '事務局 全体' }).returning().get();
+    const cwMsg = db()
+      .insert(schema.messages)
+      .values({ conversationId: conv.id, channel: 'chatwork', externalId: '1700000001', direction: 'in', senderName: '中村 事務', senderAddress: '12345', body: '[To:1] 山田さんの戸籍が届きました', sentAt: '2027-09-02T01:00:00.000Z' })
+      .returning()
+      .get();
+    const fromCw = db().insert(schema.tasks).values({ title: '戸籍の確認', status: 'open', clientId: client.id, caseId: kase.id, sourceMessageId: cwMsg.id }).returning().get();
+    const ctx = await staffAskContext({ kind: 'task', taskId: fromCw.id });
+    expect(ctx.replyTargets.map((r) => [r.key, r.reason])).toEqual([['600-1700000001', 'source']]);
+    expect(ctx.replyTargets[0]!.excerpt).toBe('@ 山田さんの戸籍が届きました');
+    expect(ctx.rooms.some((r) => r.roomId === 600)).toBe(true);
+    const fromMail = db().insert(schema.tasks).values({ title: '査定書の確認', status: 'open', clientId: client.id, caseId: kase.id, sourceMessageId: msg.id }).returning().get();
+    expect((await staffAskContext({ kind: 'task', taskId: fromMail.id })).replyTargets).toEqual([]);
+  });
+
   it('AI の下書きは「報告」と「確認・依頼」を選べる', async () => {
     const { client, kase } = seed();
     const t = db().insert(schema.tasks).values({ title: '答弁書案を作成', status: 'open', clientId: client.id, caseId: kase.id }).returning().get();

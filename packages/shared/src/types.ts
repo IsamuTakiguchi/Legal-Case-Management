@@ -535,4 +535,6 @@ export const staffAskSendSchema = z.object({
   quote: z.boolean().optional(),
   /** アプリ側にも「事務局の返事待ち」を作る */
   createWaitingTask: z.boolean().optional(),
+  /** Chatwork のメッセージへの返信として送る（返信先の key。「ルームID-メッセージID」） */
+  replyTo: z.string().max(80).nullable().optional(),
 });
