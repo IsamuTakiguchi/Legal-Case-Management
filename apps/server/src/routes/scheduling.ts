@@ -104,6 +104,8 @@ schedulingRoutes.post('/conversations/:id/schedule/register', async (c) => {
       replaceEventId: z.number().int().nullable().optional(),
       // 候補に無い日時で決まったとき、あわせて取り消す仮押さえ
       cancelHoldSessionId: z.number().int().nullable().optional(),
+      // 読み取ったときの案。直して登録したら、その直し方を覚える
+      proposed: z.object({ title: z.string().max(300).nullable().optional(), location: z.string().max(300).nullable().optional() }).nullable().optional(),
     })
     .parse(await c.req.json());
   return c.json(await registerScheduleFromConversation(Number(c.req.param('id')), body));

@@ -456,6 +456,8 @@ clientRoutes.post('/case-notes/:id/schedule/register', async (c) => {
       slots: z.array(z.object({ startAt: z.string(), endAt: z.string() })).min(1).max(10),
       location: z.string().nullable().optional(),
       web: z.boolean().optional(),
+      // 読み取ったときの案。直して登録したら、その直し方を覚える
+      proposed: z.object({ title: z.string().max(300).nullable().optional(), location: z.string().max(300).nullable().optional() }).nullable().optional(),
     })
     .parse(await c.req.json());
   return c.json(await registerScheduleFromNote(Number(c.req.param('id')), body));
