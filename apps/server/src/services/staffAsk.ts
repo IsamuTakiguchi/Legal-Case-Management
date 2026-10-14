@@ -3,12 +3,12 @@ import { z } from 'zod';
 import { db, schema } from '../db/index.js';
 import * as cw from '../channels/chatwork.js';
 import { ingestMessage } from './inbox.js';
-import { createTask } from './tasks.js';
+import { createTask, updateTask } from './tasks.js';
 import { getSetting } from './settings.js';
 import { appUrl } from './notify.js';
 import { generateStructured } from '../integrations/anthropic.js';
 import { isConfigured } from '../config.js';
-import { formatJaDateTime, CASE_NOTE_KIND_LABEL, CHANNEL_LABEL, type CaseNoteKind, type Channel } from '@lcm/shared';
+import { formatJaDateTime, formatJaDate, isDateOnlyDeadline, isWaitingStatus, CASE_NOTE_KIND_LABEL, CHANNEL_LABEL, TASK_STATUS_LABEL, type CaseNoteKind, type Channel, type TaskStatus } from '@lcm/shared';
 import { logger } from '../logger.js';
 
 /**
@@ -16,8 +16,8 @@ import { logger } from '../logger.js';
  * 「この件、どうなっていますか」を口頭で聞く代わりに、元の文面を引用して投げられるようにする。
  */
 
-/** 何について確認するか */
-export type StaffAskSource = { kind: 'conversation'; conversationId: number; messageId?: number | null } | { kind: 'note'; noteId: number };
+/** 何について確認するか（届いた連絡・事件の記録・タスク） */
+export type StaffAskSource = { kind: 'conversation'; conversationId: number; messageId?: number | null } | { kind: 'note'; noteId: number } | { kind: 'task'; taskId: number };
 
 export interface StaffAskRoom {
   roomId: number;
@@ -28,7 +28,7 @@ export interface StaffAskRoom {
 
 /** 引用する元ネタ（届いた連絡、または事件の記録） */
 export interface StaffAskSubject {
-  kind: 'message' | 'note';
+  kind: 'message' | 'note' | 'task';
   /** 引用の見出し（「Gmail・9月1日(水)10時・山田 花子」など） */
   head: string;
   /** 引用の本文 */
@@ -71,9 +71,31 @@ function noteBody(n: typeof schema.caseNotes.$inferSelect): string {
   return excerpt(parts.join('\n'));
 }
 
+/** 期限の表示（日付だけのものは日付、時刻まで決めたものは時刻も） */
+const deadlineText = (iso: string) => (isDateOnlyDeadline(iso) ? formatJaDate(new Date(iso)) : formatJaDateTime(new Date(iso)));
+
+/** タスクの中身を、引用に載せる形にまとめる */
+function taskBody(t: typeof schema.tasks.$inferSelect): string {
+  const parts = [`${t.title}（${TASK_STATUS_LABEL[t.status as TaskStatus] ?? t.status}）`];
+  const when = [t.dueAt ? `締切 ${deadlineText(t.dueAt)}` : '', isWaitingStatus(t.status) && t.followUpAt ? `返信期限 ${deadlineText(t.followUpAt)}` : '', t.trigger ? `きっかけ: ${t.trigger}` : ''].filter(Boolean);
+  if (when.length) parts.push(when.join(' / '));
+  if (t.note?.trim()) parts.push(t.note.trim());
+  return excerpt(parts.join('\n'));
+}
+
 /** 元ネタと、それが属する依頼者・事件を引く */
 function resolveSubject(source: StaffAskSource): { subject: StaffAskSubject | null; clientId: number | null; caseId: number | null; conversationId: number | null } {
   const d = db();
+  if (source.kind === 'task') {
+    const t = d.select().from(schema.tasks).where(eq(schema.tasks.id, source.taskId)).get();
+    if (!t) throw new Error('タスクが見つかりません');
+    return {
+      subject: { kind: 'task', head: `タスク「${t.title.slice(0, 30)}」`, body: taskBody(t), link: t.caseId ? `/cases/${t.caseId}` : '/tasks' },
+      clientId: t.clientId ?? null,
+      caseId: t.caseId ?? null,
+      conversationId: t.conversationId ?? null,
+    };
+  }
   if (source.kind === 'note') {
     const n = d.select().from(schema.caseNotes).where(eq(schema.caseNotes.id, source.noteId)).get();
     if (!n) throw new Error('記録が見つかりません');
@@ -135,6 +157,9 @@ export async function staffAskContext(source: StaffAskSource): Promise<StaffAskC
     if (!roomId || rooms.some((r) => r.roomId === roomId)) return;
     rooms.push({ roomId, name, kind });
   };
+  // Chatwork で事務局から振られたタスクなら、そのルームと振った人を先に出す
+  const task = source.kind === 'task' ? (d.select().from(schema.tasks).where(eq(schema.tasks.id, source.taskId)).get() ?? null) : null;
+  if (task?.chatworkRoomId) add(task.chatworkRoomId, 'このタスクの Chatwork ルーム', 'other');
   add(kase?.chatworkRoomId, `${kase?.title ?? '事件'}の専用ルーム`, 'case');
   add(client?.chatworkRoomId, `${client?.name ?? '依頼者'}のルーム`, 'client');
   if (isConfigured('chatwork')) {
@@ -147,7 +172,8 @@ export async function staffAskContext(source: StaffAskSource): Promise<StaffAskC
       add(r.room_id, r.name, 'other');
     }
   }
-  const defaultStaffId = kase?.staffId ?? (staff.length === 1 ? staff[0]!.id : null);
+  const assigner = task?.chatworkAssignedById ? staff.find((s) => s.chatworkAccountId === task.chatworkAssignedById) : null;
+  const defaultStaffId = assigner?.id ?? kase?.staffId ?? (staff.length === 1 ? staff[0]!.id : null);
   const blocked = !isConfigured('chatwork')
     ? 'Chatwork が未設定です。初期設定で接続してください'
     : staff.length === 0
@@ -175,19 +201,30 @@ const askDraftSchema = z.object({
   title: z.string().describe('タスクにするときの短い題名。30 字以内'),
 });
 
-/** 元ネタの内容から、事務局に何を確認したいかの下書きを作る */
-export async function draftStaffAsk(source: StaffAskSource, opts: { instruction?: string | null } = {}) {
+const SUBJECT_LABEL: Record<StaffAskSubject['kind'], string> = { message: '届いた連絡', note: '事件の記録', task: 'タスク' };
+
+/**
+ * 元ネタの内容から、事務局に何を確認したいかの下書きを作る。
+ * mode: ask=確認・依頼（既定）／report=状況の報告（タスクの進み具合を事務局に知らせる）
+ */
+export async function draftStaffAsk(source: StaffAskSource, opts: { instruction?: string | null; mode?: 'ask' | 'report' | null } = {}) {
   const ctx = await staffAskContext(source);
   if (!ctx.subject) throw new Error('確認のもとになる内容が見つかりません');
   const staffName = ctx.staff.find((s) => s.id === ctx.defaultStaffId)?.name ?? '事務局';
-  const fromLabel = ctx.subject.kind === 'note' ? '事件の記録' : '届いた連絡';
+  const fromLabel = SUBJECT_LABEL[ctx.subject.kind];
+  const report = opts.mode === 'report';
   return generateStructured({
     purpose: '事務局への確認の下書き',
     system: [
-      '法律事務所の弁護士に代わって、事務局（パラリーガル）に送る短い確認・依頼の文を書きます。',
+      report
+        ? '法律事務所の弁護士に代わって、事務局（パラリーガル）に送る短い状況報告の文を書きます。'
+        : '法律事務所の弁護士に代わって、事務局（パラリーガル）に送る短い確認・依頼の文を書きます。',
       '相手は同じ事務所の職員なので、丁寧だが簡潔に。挨拶や署名は不要。',
-      `${fromLabel}の内容から「事務局に確かめてほしいこと・やってほしいこと」を書きます。書かれていないことは作りません。`,
-      '依頼者への回答そのものではなく、事務局への指示・確認であることに注意します（例: 「◯◯の受領状況を確認してください」「前回の書面の控えを探してください」）。',
+      report
+        ? `${fromLabel}の内容から「いまどこまで進んだか・次に何をするか・事務局に知っておいてほしいこと」を書きます。書かれていないことは作りません。進み具合が分からなければ、弁護士の指示に従い、無ければ〔要記入〕と残します。`
+        : `${fromLabel}の内容から「事務局に確かめてほしいこと・やってほしいこと」を書きます。書かれていないことは作りません。`,
+      report ? '' : '依頼者への回答そのものではなく、事務局への指示・確認であることに注意します（例: 「◯◯の受領状況を確認してください」「前回の書面の控えを探してください」）。',
+      ctx.subject.kind === 'task' ? 'タスクの締切・返信期限があれば、必要に応じて期限を添えます。' : '',
       ctx.subject.kind === 'note'
         ? '記録に「次のアクション」や「決定事項」があれば、そのうち事務局にやってもらうことを優先して書きます。'
         : '',
@@ -236,7 +273,7 @@ export function buildStaffAskBody(
   if (who) lines.push(`【${who}】`);
   lines.push(input.text.trim());
   if (input.quote !== false && ctx.subject) {
-    const label = ctx.subject.kind === 'note' ? '事件の記録' : '届いた連絡';
+    const label = SUBJECT_LABEL[ctx.subject.kind];
     lines.push(`[info][title]${label}（${ctx.subject.head}）[/title]${ctx.subject.body}[/info]`);
   }
   if (ctx.subject) lines.push(appUrl(ctx.subject.link));
@@ -270,7 +307,9 @@ export async function sendStaffAsk(source: StaffAskSource, input: StaffAskInput)
   const from =
     source.kind === 'note'
       ? { noteId: source.noteId, chatworkTaskId }
-      : { fromConversationId: source.conversationId, messageId: source.messageId ?? null, chatworkTaskId };
+      : source.kind === 'task'
+        ? { taskId: source.taskId, chatworkTaskId }
+        : { fromConversationId: source.conversationId, messageId: source.messageId ?? null, chatworkTaskId };
   // 送った控えを、その Chatwork ルームの会話にも残す（あとで取り込む分と重複しないよう ID をそろえる）
   const saved = await ingestMessage(
     {
@@ -292,7 +331,11 @@ export async function sendStaffAsk(source: StaffAskSource, input: StaffAskInput)
   });
 
   let waitingTaskId: number | null = null;
-  if (input.createWaitingTask) {
+  if (input.createWaitingTask && source.kind === 'task') {
+    // タスクから送ったときは、新しく作らずにそのタスクを「事務局の回答・作業待ち」にする
+    updateTask(source.taskId, { status: 'waiting_staff', ...(input.due ? { followUpAt: new Date(`${input.due}T09:00:00+09:00`).toISOString() } : {}) });
+    waitingTaskId = source.taskId;
+  } else if (input.createWaitingTask) {
     const title = `事務局に確認: ${input.text.trim().split('\n')[0]!.slice(0, 40)}`;
     const t = await createTask({
       title,
