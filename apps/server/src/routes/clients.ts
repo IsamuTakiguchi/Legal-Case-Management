@@ -428,7 +428,7 @@ clientRoutes.get('/case-notes/:id/staff-ask', async (c) => c.json(await staffAsk
 
 clientRoutes.post('/case-notes/:id/staff-ask/draft', async (c) => {
   const body = staffAskDraftSchema.parse(await c.req.json().catch(() => ({})));
-  return c.json(await draftStaffAsk(noteSource(c), { instruction: body.instruction }));
+  return c.json(await draftStaffAsk(noteSource(c), { instruction: body.instruction, mode: body.mode }));
 });
 
 clientRoutes.post('/case-notes/:id/staff-ask', async (c) => c.json(await sendStaffAsk(noteSource(c), staffAskSendSchema.parse(await c.req.json()))));

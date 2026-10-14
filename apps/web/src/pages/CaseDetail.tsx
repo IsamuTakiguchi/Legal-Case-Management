@@ -137,6 +137,8 @@ export default function CaseDetail() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<'overview' | 'timeline' | 'creditors'>('overview');
   const [addingMemo, setAddingMemo] = useState(false);
+  // 担当事務局に報告・確認しているタスク
+  const [taskStaffAsk, setTaskStaffAsk] = useState<number | null>(null);
   // 紐付けを直している予定
   const [relinking, setRelinking] = useState<number | null>(null);
   // 中身（タスク名・メモ）を直している未了タスク
@@ -357,6 +359,26 @@ export default function CaseDetail() {
                             qc.invalidateQueries({ queryKey: ['tasks'] });
                           }}
                         />
+                        <button
+                          className="text-xs text-slate-500 hover:text-blue-700 hover:underline"
+                          onClick={() => setTaskStaffAsk(taskStaffAsk === t.id ? null : t.id)}
+                          title="このタスクについて、Chatwork で担当事務局に状況を報告したり、確認・依頼したりします"
+                        >
+                          事務局へ
+                        </button>
+                        {taskStaffAsk === t.id && (
+                          <div className="w-full">
+                            <StaffAskPanel
+                              base={`/tasks/${t.id}`}
+                              draftKey={`task:${t.id}`}
+                              onClose={() => setTaskStaffAsk(null)}
+                              onSent={() => {
+                                qc.invalidateQueries({ queryKey: ['case', id] });
+                                qc.invalidateQueries({ queryKey: ['tasks'] });
+                              }}
+                            />
+                          </div>
+                        )}
                       </li>
                     );
                   })}

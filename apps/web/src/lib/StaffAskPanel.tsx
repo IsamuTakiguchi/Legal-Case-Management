@@ -4,8 +4,8 @@ import { api } from './api';
 import { useDraft, DraftHint } from './draft';
 
 interface StaffAskCtx {
-  /** 引用する元ネタ（届いた連絡、または事件の記録） */
-  subject: { kind: 'message' | 'note'; head: string; body: string; link: string } | null;
+  /** 引用する元ネタ（届いた連絡・事件の記録・タスク） */
+  subject: { kind: 'message' | 'note' | 'task'; head: string; body: string; link: string } | null;
   clientName: string | null;
   caseTitle: string | null;
   staff: { id: number; name: string; chatworkAccountId: number | null }[];
@@ -16,10 +16,11 @@ interface StaffAskCtx {
 }
 
 const ROOM_KIND_LABEL: Record<string, string> = { case: '事件専用', client: '依頼者', my: 'マイチャット', other: '' };
+const QUOTE_LABEL: Record<string, string> = { message: '届いた連絡', note: '記録', task: 'タスクの内容' };
 
 /**
- * 届いた連絡や事件の記録を引用して、Chatwork で担当事務局に確認する。
- * base に `/conversations/12` か `/case-notes/34` を渡して、受信箱と事件ページの両方から使う。
+ * 届いた連絡・事件の記録・タスクを引用して、Chatwork で担当事務局に確認・報告する。
+ * base に `/conversations/12`・`/case-notes/34`・`/tasks/56` を渡して、受信箱・事件ページ・タスク一覧から使う。
  */
 export function StaffAskPanel({ base, draftKey, onClose, onSent }: { base: string; draftKey: string; onClose: () => void; onSent: () => void }) {
   const ctx = useQuery({ queryKey: ['staff-ask', base], queryFn: () => api.get<StaffAskCtx>(`${base}/staff-ask`) });
@@ -40,8 +41,9 @@ export function StaffAskPanel({ base, draftKey, onClose, onSent }: { base: strin
   }, [d]);
   // 書きかけの確認文はこの端末に自動保存する
   const askDraft = useDraft(`${draftKey}:staff-ask`, text, setText, '');
+  // ask=確認・依頼の文、report=状況報告の文を AI に書いてもらう
   const draft = useMutation({
-    mutationFn: () => api.post<{ text: string; title: string }>(`${base}/staff-ask/draft`, { instruction: instruction || null }),
+    mutationFn: (mode: 'ask' | 'report') => api.post<{ text: string; title: string }>(`${base}/staff-ask/draft`, { instruction: instruction || null, mode }),
     onSuccess: (r) => {
       setText(r.text);
       setMsg(null);
@@ -70,7 +72,7 @@ export function StaffAskPanel({ base, draftKey, onClose, onSent }: { base: strin
   return (
     <section className="fade-in card space-y-2 border-blue-200 text-sm">
       <div className="flex flex-wrap items-center gap-2">
-        <h3 className="font-semibold">事務局に確認（Chatwork）</h3>
+        <h3 className="font-semibold">{d?.subject?.kind === 'task' ? '事務局に報告・確認（Chatwork）' : '事務局に確認（Chatwork）'}</h3>
         {d?.subject && <span className="text-xs text-slate-500">{d.subject.head} について</span>}
         <button className="btn btn-sm ml-auto" onClick={onClose}>
           閉じる
@@ -81,9 +83,10 @@ export function StaffAskPanel({ base, draftKey, onClose, onSent }: { base: strin
       {d && !d.blocked && (
         <>
           <div className="flex flex-wrap items-center gap-2">
-            <label className="flex items-center gap-1">
-              担当
-              <select className="input w-auto" value={staffId} onChange={(e) => setStaffId(e.target.value)}>
+            {/* スマホでは担当・送り先を 1 行ずつ幅いっぱいに（長いルーム名で横にはみ出さないように） */}
+            <label className="flex w-full items-center gap-1 sm:w-auto">
+              <span className="shrink-0 whitespace-nowrap">担当</span>
+              <select className="input w-full min-w-0 sm:w-auto" value={staffId} onChange={(e) => setStaffId(e.target.value)}>
                 <option value="">（宛先を付けない）</option>
                 {d.staff.map((s) => (
                   <option key={s.id} value={s.id} disabled={!s.chatworkAccountId}>
@@ -93,9 +96,9 @@ export function StaffAskPanel({ base, draftKey, onClose, onSent }: { base: strin
                 ))}
               </select>
             </label>
-            <label className="flex min-w-0 flex-1 items-center gap-1">
-              送り先
-              <select className="input min-w-0 flex-1" value={roomId} onChange={(e) => setRoomId(e.target.value)}>
+            <label className="flex w-full min-w-0 items-center gap-1 sm:w-auto sm:flex-1">
+              <span className="shrink-0 whitespace-nowrap">送り先</span>
+              <select className="input w-full min-w-0" value={roomId} onChange={(e) => setRoomId(e.target.value)}>
                 {d.rooms.map((r) => (
                   <option key={r.roomId} value={r.roomId}>
                     {r.name}
@@ -106,16 +109,29 @@ export function StaffAskPanel({ base, draftKey, onClose, onSent }: { base: strin
             </label>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <input className="input min-w-0 flex-1" value={instruction} onChange={(e) => setInstruction(e.target.value)} placeholder="AI への指示（例: 査定書が届いているか確認してほしい）" />
-            <button className="btn btn-sm" onClick={() => draft.mutate()} disabled={draft.isPending}>
-              {draft.isPending ? '作成中…' : 'AI で下書き'}
+            <input
+              className="input min-w-0 flex-1"
+              value={instruction}
+              onChange={(e) => setInstruction(e.target.value)}
+              placeholder={d.subject?.kind === 'task' ? 'AI への指示（例: 準備書面の案は今日中に送る予定と伝える）' : 'AI への指示（例: 査定書が届いているか確認してほしい）'}
+            />
+            <button className="btn btn-sm" onClick={() => draft.mutate('ask')} disabled={draft.isPending} title="事務局に確かめてほしいこと・やってほしいことの文を書きます">
+              {draft.isPending && draft.variables === 'ask' ? '作成中…' : 'AI で確認・依頼文'}
+            </button>
+            <button className="btn btn-sm" onClick={() => draft.mutate('report')} disabled={draft.isPending} title="いまどこまで進んだか・次に何をするかを事務局に知らせる文を書きます">
+              {draft.isPending && draft.variables === 'report' ? '作成中…' : 'AI で報告文'}
             </button>
           </div>
-          <textarea className="input min-h-24" value={text} onChange={(e) => setText(e.target.value)} placeholder="確認したいこと（例: 先週お送りした査定書が届いているか、依頼者に確認をお願いします）" />
+          <textarea
+            className="input min-h-24"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder={d.subject?.kind === 'task' ? '報告・確認したいこと（例: 準備書面の案ができたので、明日依頼者に送ります。証拠の写しの準備をお願いします）' : '確認したいこと（例: 先週お送りした査定書が届いているか、依頼者に確認をお願いします）'}
+          />
           <DraftHint handle={askDraft} />
           <div className="flex flex-wrap items-center gap-3 text-xs">
             <label className="flex items-center gap-1">
-              <input type="checkbox" checked={quote} onChange={(e) => setQuote(e.target.checked)} /> {d.subject?.kind === 'note' ? '記録' : '届いた連絡'}を引用する
+              <input type="checkbox" checked={quote} onChange={(e) => setQuote(e.target.checked)} /> {QUOTE_LABEL[d.subject?.kind ?? 'message']}を引用する
             </label>
             <label className="flex items-center gap-1">
               <input type="checkbox" checked={asTask} onChange={(e) => setAsTask(e.target.checked)} /> Chatwork のタスクとして送る
@@ -126,7 +142,8 @@ export function StaffAskPanel({ base, draftKey, onClose, onSent }: { base: strin
               </label>
             )}
             <label className="flex items-center gap-1">
-              <input type="checkbox" checked={waiting} onChange={(e) => setWaiting(e.target.checked)} /> アプリにも「事務局の返事待ち」を作る
+              <input type="checkbox" checked={waiting} onChange={(e) => setWaiting(e.target.checked)} />{' '}
+              {d.subject?.kind === 'task' ? 'このタスクを「事務局の回答・作業待ち」にする' : 'アプリにも「事務局の返事待ち」を作る'}
             </label>
             <button className="btn btn-primary btn-sm ml-auto" onClick={() => send.mutate()} disabled={!text.trim() || !roomId || send.isPending}>
               {send.isPending ? '送信中…' : '事務局に送る'}

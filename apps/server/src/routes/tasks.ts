@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { taskInputSchema, TASK_STATUSES, WAITING_TASK_STATUSES } from '@lcm/shared';
+import { taskInputSchema, TASK_STATUSES, WAITING_TASK_STATUSES, staffAskDraftSchema, staffAskSendSchema } from '@lcm/shared';
+import { staffAskContext, draftStaffAsk, sendStaffAsk, type StaffAskSource } from '../services/staffAsk.js';
 import { createTask, updateTask, nudgeTask, listTasks, importChatworkTasks, syncTaskToChatwork, bulkUpdateTasks, deleteTask } from '../services/tasks.js';
 import { openAlerts, resolveAlert } from '../services/alerts.js';
 import { replyToChatworkTask } from '../services/taskReply.js';
@@ -58,6 +59,19 @@ taskRoutes.post('/tasks/:id/chatwork-reply', async (c) => {
 });
 
 taskRoutes.post('/tasks/import-chatwork', async (c) => c.json(await importChatworkTasks()));
+
+// ---- 担当事務局への報告・確認（Chatwork） ----
+
+const taskSource = (c: { req: { param: (k: string) => string } }): StaffAskSource => ({ kind: 'task', taskId: Number(c.req.param('id')) });
+
+taskRoutes.get('/tasks/:id/staff-ask', async (c) => c.json(await staffAskContext(taskSource(c))));
+
+taskRoutes.post('/tasks/:id/staff-ask/draft', async (c) => {
+  const body = staffAskDraftSchema.parse(await c.req.json().catch(() => ({})));
+  return c.json(await draftStaffAsk(taskSource(c), { instruction: body.instruction, mode: body.mode }));
+});
+
+taskRoutes.post('/tasks/:id/staff-ask', async (c) => c.json(await sendStaffAsk(taskSource(c), staffAskSendSchema.parse(await c.req.json()))));
 
 // ---- 時期未定の備忘 ----
 

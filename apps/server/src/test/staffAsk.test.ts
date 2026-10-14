@@ -9,6 +9,7 @@ process.env.DATA_DIR = tmp;
 process.env.CHATWORK_API_TOKEN = 'cw-token';
 process.env.PUBLIC_BASE_URL = 'https://lex.example.com';
 
+let cwSeq = 0;
 /** Chatwork に送った内容を控える（実際の送信はしない） */
 const sent: { kind: 'message' | 'task'; roomId: number; body: string; toIds?: number[]; limit?: number }[] = [];
 vi.mock('../channels/chatwork.js', async (importActual) => {
@@ -22,7 +23,8 @@ vi.mock('../channels/chatwork.js', async (importActual) => {
     ],
     postMessage: async (roomId: number, body: string) => {
       sent.push({ kind: 'message', roomId, body });
-      return { message_id: 'cw-1' };
+      // 送るたびに別の ID（同じ ID だと、控えが前の送信のものとして扱われる）
+      return { message_id: `cw-${++cwSeq}` };
     },
     createTask: async (roomId: number, body: string, toIds: number[], limit?: number) => {
       sent.push({ kind: 'task', roomId, body, toIds, limit });
@@ -31,8 +33,18 @@ vi.mock('../channels/chatwork.js', async (importActual) => {
   };
 });
 
+/** AI に渡した指示を控える */
+const aiCalls: { system: string; user: string }[] = [];
+vi.mock('../integrations/anthropic.js', async (orig) => ({
+  ...(await orig<typeof import('../integrations/anthropic.js')>()),
+  generateStructured: vi.fn(async (opts: { system: string; user: string }) => {
+    aiCalls.push({ system: opts.system, user: opts.user });
+    return { text: '下書き', title: '題名' };
+  }),
+}));
+
 const { openTestDatabase, closeDatabase, db, schema } = await import('../db/index.js');
-const { staffAskContext, sendStaffAsk, buildStaffAskBody } = await import('../services/staffAsk.js');
+const { staffAskContext, sendStaffAsk, buildStaffAskBody, draftStaffAsk } = await import('../services/staffAsk.js');
 const { eq } = await import('drizzle-orm');
 
 beforeAll(() => openTestDatabase());
@@ -195,5 +207,67 @@ describe('事件の記録を事務局に確認する', () => {
 
   it('無い記録は送れない', async () => {
     await expect(staffAskContext({ kind: 'note', noteId: 999999 })).rejects.toThrow(/記録が見つかりません/);
+  });
+});
+
+describe('タスクから担当事務局に報告・確認する', () => {
+  it('タスクの中身（題名・状態・締切・メモ）を引用し、担当は事件の担当事務局、送り先は事件専用ルームが先頭', async () => {
+    const { client, kase, staff } = seed();
+    const t = db()
+      .insert(schema.tasks)
+      .values({ title: '準備書面（2）を提出', status: 'open', clientId: client.id, caseId: kase.id, dueAt: '2027-10-20T14:59:59.999Z', note: '証拠説明書も一緒に' })
+      .returning()
+      .get();
+    const ctx = await staffAskContext({ kind: 'task', taskId: t.id });
+    expect(ctx.subject).toMatchObject({ kind: 'task', head: 'タスク「準備書面（2）を提出」', link: `/cases/${kase.id}` });
+    expect(ctx.subject!.body).toContain('準備書面（2）を提出（対応中）');
+    expect(ctx.subject!.body).toContain('締切 2027年10月20日(水)');
+    expect(ctx.subject!.body).toContain('証拠説明書も一緒に');
+    expect(ctx.defaultStaffId).toBe(staff.id);
+    expect(ctx.defaultRoomId).toBe(200);
+    const body = buildStaffAskBody(ctx, { text: '明日依頼者に送ります', staff });
+    expect(body).toContain('[info][title]タスク（タスク「準備書面（2）を提出」）[/title]');
+    expect(body).toContain(`https://lex.example.com/cases/${kase.id}`);
+  });
+
+  it('Chatwork で振られたタスクは、そのルームと振った事務局を既定にする', async () => {
+    const { client } = seed();
+    const other = db().insert(schema.staffMembers).values({ name: '佐藤 事務', chatworkAccountId: 777 }).returning().get();
+    const t = db().insert(schema.tasks).values({ title: '書類の確認', status: 'open', clientId: client.id, chatworkRoomId: 500, chatworkAssignedById: 777 }).returning().get();
+    const ctx = await staffAskContext({ kind: 'task', taskId: t.id });
+    expect(ctx.defaultRoomId).toBe(500);
+    expect(ctx.defaultStaffId).toBe(other.id);
+  });
+
+  it('送るときに「事務局の回答・作業待ち」を選ぶと、新しく作らずにそのタスクを待ちにする', async () => {
+    const { client, kase, staff } = seed();
+    const t = db().insert(schema.tasks).values({ title: '証拠の写しを準備', status: 'open', clientId: client.id, caseId: kase.id }).returning().get();
+    const before = db().select().from(schema.tasks).all().length;
+    sent.length = 0;
+    const r = await sendStaffAsk({ kind: 'task', taskId: t.id }, { staffId: staff.id, roomId: 200, text: '証拠の写しの準備をお願いします', createWaitingTask: true, due: '2027-10-18' });
+    expect(sent[0]).toMatchObject({ kind: 'message', roomId: 200 });
+    expect(sent[0]!.body).toContain('[To:12345] 中村 事務さん');
+    expect(r.waitingTaskId).toBe(t.id);
+    expect(db().select().from(schema.tasks).all().length).toBe(before);
+    const after = db().select().from(schema.tasks).where(eq(schema.tasks.id, t.id)).get()!;
+    expect(after.status).toBe('waiting_staff');
+    expect(after.followUpAt).toBe(new Date('2027-10-18T09:00:00+09:00').toISOString());
+    // 控えは Chatwork のルームの会話に、どのタスクから送ったかと一緒に残る
+    const saved = db().select().from(schema.messages).where(eq(schema.messages.id, r.messageId!)).get()!;
+    expect((saved.raw as { staffAsk?: { taskId?: number } }).staffAsk?.taskId).toBe(t.id);
+  });
+
+  it('AI の下書きは「報告」と「確認・依頼」を選べる', async () => {
+    const { client, kase } = seed();
+    const t = db().insert(schema.tasks).values({ title: '答弁書案を作成', status: 'open', clientId: client.id, caseId: kase.id }).returning().get();
+    aiCalls.length = 0;
+    await draftStaffAsk({ kind: 'task', taskId: t.id }, { mode: 'report', instruction: '今日中に案を送る' });
+    await draftStaffAsk({ kind: 'task', taskId: t.id }, { mode: 'ask' });
+    expect(aiCalls[0]!.system).toContain('状況報告');
+    expect(aiCalls[0]!.system).toContain('いまどこまで進んだか');
+    expect(aiCalls[0]!.user).toContain('タスク（タスク「答弁書案を作成」）');
+    expect(aiCalls[0]!.user).toContain('今日中に案を送る');
+    expect(aiCalls[1]!.system).toContain('確認・依頼');
+    expect(aiCalls[1]!.system).not.toContain('状況報告');
   });
 });

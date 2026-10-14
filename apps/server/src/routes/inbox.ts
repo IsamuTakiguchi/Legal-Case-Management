@@ -216,7 +216,7 @@ inboxRoutes.get('/conversations/:id/staff-ask', async (c) =>
 
 inboxRoutes.post('/conversations/:id/staff-ask/draft', async (c) => {
   const body = staffAskDraftSchema.parse(await c.req.json().catch(() => ({})));
-  return c.json(await draftStaffAsk(convSource(c, body.messageId), { instruction: body.instruction }));
+  return c.json(await draftStaffAsk(convSource(c, body.messageId), { instruction: body.instruction, mode: body.mode }));
 });
 
 inboxRoutes.post('/conversations/:id/staff-ask', async (c) => {

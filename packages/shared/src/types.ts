@@ -517,6 +517,8 @@ export const staffAskDraftSchema = z.object({
   messageId: z.number().int().nullable().optional(),
   /** AI への指示 */
   instruction: z.string().nullable().optional(),
+  /** ask=確認・依頼（既定）／report=状況の報告 */
+  mode: z.enum(['ask', 'report']).nullable().optional(),
 });
 
 export const staffAskSendSchema = z.object({

@@ -8,6 +8,7 @@ import { ClientPicker } from '../lib/ClientPicker';
 import { fmtDate, fmtRelative } from '../lib/format';
 import { TaskDeadlines, NewTaskDeadlines, fmtDeadline } from '../lib/Deadline';
 import { MemoBadge } from '../lib/Memo';
+import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { TASK_STATUSES, TASK_STATUS_LABEL, taskDeadline, isWaitingStatus, type TaskStatus } from '@lcm/shared';
 import { useSort, readingKey, type SortOption } from '../lib/sort';
 import { Icon } from '../lib/icons';
@@ -145,6 +146,8 @@ export default function Tasks() {
   const [editingId, setEditingId] = useState<number | null>(null);
   // 事務局から振られた確認事項を、依頼者に確認するパネルを開いているタスク
   const [confirmingId, setConfirmingId] = useState<number | null>(null);
+  // 担当事務局に報告・確認するパネルを開いているタスク
+  const [staffAskId, setStaffAskId] = useState<number | null>(null);
   const nudge = useMutation({ mutationFn: (id: number) => api.post(`/tasks/${id}/nudge`), onSuccess: refresh });
   const snooze = useMutation({ mutationFn: (id: number) => api.post(`/tasks/${id}/memo-snooze`, { days: 14 }), onSuccess: refresh });
   const importCw = useMutation({ mutationFn: () => api.post<{ imported: number; completed: number }>('/tasks/import-chatwork'), onSuccess: refresh });
@@ -382,9 +385,33 @@ export default function Tasks() {
                           催促した
                         </button>
                       )}
+                      {t.status !== 'done' && (
+                        <button
+                          className="btn btn-sm"
+                          onClick={() => setStaffAskId(staffAskId === t.id ? null : t.id)}
+                          title="このタスクについて、Chatwork で担当事務局に状況を報告したり、確認・依頼したりします（タスクの内容を引用して送ります）"
+                        >
+                          💬 事務局に報告・確認
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
+                {staffAskId === t.id && (
+                  <tr className="block md:table-row">
+                    <td colSpan={6} className="block px-3 pb-3 md:table-cell">
+                      <StaffAskPanel
+                        base={`/tasks/${t.id}`}
+                        draftKey={`task:${t.id}`}
+                        onClose={() => setStaffAskId(null)}
+                        onSent={() => {
+                          refresh();
+                          setMsg('担当事務局に送りました');
+                        }}
+                      />
+                    </td>
+                  </tr>
+                )}
                 {confirmingId === t.id && t.confirmMessageId && (
                   <tr className="block md:table-row">
                     <td colSpan={6} className="block px-3 pb-3 md:table-cell">
