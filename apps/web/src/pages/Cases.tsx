@@ -45,6 +45,42 @@ export function CaseStatusBadge({ status }: { status: string }) {
   return <span className={`badge ${STATUS_BADGE[status] ?? 'badge-gray'}`}>{CASE_STATUS_LABEL[status as CaseStatus] ?? status}</span>;
 }
 
+/**
+ * 一覧で区分をその場で変える（見た目は区分のバッジのまま、押すと選べる）。
+ * まとめて変えるときと同じ API を使うので、OneDrive の依頼者フォルダも区分に合わせて移る
+ */
+function CaseStatusSelect({ c, onDone }: { c: { id: number; title: string; clientName: string; status: string }; onDone: (msg: string) => void }) {
+  const qc = useQueryClient();
+  const change = useMutation({
+    mutationFn: (st: CaseStatus) => api.post<{ updated: number }>('/cases/bulk', { ids: [c.id], status: st }).then(() => st),
+    onSuccess: (st) => {
+      qc.invalidateQueries({ queryKey: ['cases'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      onDone(`${c.clientName}「${c.title}」を「${CASE_STATUS_LABEL[st]}」にしました`);
+    },
+    onError: (e) => onDone(`区分を変えられませんでした: ${(e as Error).message}`),
+  });
+  return (
+    <span className="relative inline-flex items-center">
+      <select
+        className={`badge ${STATUS_BADGE[c.status] ?? 'badge-gray'} cursor-pointer appearance-none border-0 pr-4 disabled:opacity-60`}
+        value={c.status}
+        disabled={change.isPending}
+        onChange={(e) => change.mutate(e.target.value as CaseStatus)}
+        aria-label={`${c.title}（${c.clientName}）の区分`}
+        title="区分を変えます（OneDrive の依頼者フォルダも区分に合わせて移ります）"
+      >
+        {CASE_STATUSES.map((s) => (
+          <option key={s} value={s}>
+            {CASE_STATUS_LABEL[s]}
+          </option>
+        ))}
+      </select>
+      <span className="pointer-events-none absolute right-1 text-[9px] opacity-70">▼</span>
+    </span>
+  );
+}
+
 export default function Cases() {
   // ダッシュボードの件数から ?status=consultation などで開ける。選び直したら URL も合わせる（戻るで元の区分に戻れる）
   const [status, setStatusState] = useState<string>(() => {
@@ -64,6 +100,8 @@ export default function Cases() {
   // チェックした事件（まとめて区分・担当事務局・類型を変える）
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkMsg, setBulkMsg] = useState('');
+  // 一覧で 1 件ずつ区分を変えたときの知らせ（その区分の絞り込みから外れて見えなくなるので、何をしたかを残す）
+  const [rowMsg, setRowMsg] = useState('');
   const sort = useSort('cases', CASE_SORTS, 'client');
   // 依頼者名・かな・事件名・事件番号・裁判所・類型をまとめてテキスト検索（カタカナはひらがなに寄せる）
   const hira = (t: string) => t.replace(/[ァ-ヶ]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0x60)).replace(/[\s　]/g, '').toLowerCase();
@@ -126,6 +164,7 @@ export default function Cases() {
         }}
       />
       {bulkMsg && picked.length === 0 && <div className="fade-in text-xs text-green-700">{bulkMsg}</div>}
+      {rowMsg && <div className={`fade-in text-xs ${rowMsg.startsWith('区分を変えられませんでした') ? 'text-red-600' : 'text-green-700'}`}>{rowMsg}</div>}
       <div className="card overflow-x-auto p-0">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-left text-xs text-slate-500">
@@ -164,7 +203,10 @@ export default function Cases() {
                   {c.clientProvisional && <span className="badge badge-orange ml-1">氏名未確認</span>}
                 </td>
                 <td className="px-4 py-2">
-                  <CaseStatusBadge status={c.status} />
+                  <CaseStatusSelect
+                    c={c}
+                    onDone={setRowMsg}
+                  />
                 </td>
                 <td className="px-4 py-2">
                   <span className="badge badge-gray">{c.caseTypeLabel}</span>
