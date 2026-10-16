@@ -375,8 +375,9 @@ export default function Conversation() {
               依頼者ページ
             </Link>
           )}
-          {c.client && !c.contact && (c.client.entityType === 'corporation' || (c.clientPersons?.length ?? 0) > 0) && (
+          {c.client && !c.contact && (c.client.entityType === 'corporation' || (c.clientPersons?.length ?? 0) > 0 || otherThanClient(c.channel, c.counterpartName, c.client.name)) && (
             <ConversationPersonPicker
+              corporate={c.client.entityType === 'corporation'}
               conversationId={c.id}
               current={c.clientPerson ?? null}
               persons={c.clientPersons ?? []}
@@ -2039,10 +2040,21 @@ function MessageTools({ m, onChanged }: { m: Message; onChanged: () => void }) {
 }
 
 /**
- * 法人の依頼者との会話で、相手がどの担当者かを決める。
- * 担当者にすると、このメールアドレス・LINE・ルームは担当者の連絡先として覚え、次からも自動でその担当者になる
+ * メール・LINE の相手の名前が依頼者本人と違うか（ご家族などが連絡してきている見込み。空白・全角半角の違いは無視）。
+ * Chatwork はルーム名が入るので対象外（窓口を登録済みなら、どのチャネルでも選べる）
+ */
+function otherThanClient(channel: string, counterpart: string | null | undefined, clientName: string): boolean {
+  if (channel !== 'gmail' && channel !== 'line') return false;
+  const n = (s: string) => s.normalize('NFKC').replace(/[\s　]+/g, '');
+  return !!counterpart && !!n(counterpart) && !n(counterpart).includes(n(clientName));
+}
+
+/**
+ * 依頼者との会話で、相手がどの担当者（法人）・窓口（個人ならご家族など）かを決める。
+ * 担当者・窓口にすると、このメールアドレス・LINE・ルームはその人の連絡先として覚え、次からも自動でその人になる
  */
 function ConversationPersonPicker({
+  corporate,
   conversationId,
   current,
   persons,
@@ -2050,6 +2062,7 @@ function ConversationPersonPicker({
   onDone,
   onError,
 }: {
+  corporate: boolean;
   conversationId: number;
   current: { id: number; name: string; title: string | null } | null;
   persons: { id: number; name: string; title: string | null }[];
@@ -2064,17 +2077,18 @@ function ConversationPersonPicker({
     mutationFn: (body: { personId?: number | null; newPerson?: { name: string; title: string | null } }) => api.post<{ person: { name: string } | null }>(`/conversations/${conversationId}/person`, body),
     onSuccess: (r) => {
       setAdding(false);
-      onDone(r.person ? `この会話の相手を担当者「${r.person.name}」にしました。この連絡先は担当者のものとして覚えます` : 'この会話を会社・代表とのやり取りにしました');
+      const noun = corporate ? '担当者' : '窓口の方';
+      onDone(r.person ? `この会話の相手を${noun}「${r.person.name}」にしました。この連絡先は${noun}のものとして覚えます` : corporate ? 'この会話を会社・代表とのやり取りにしました' : 'この会話をご本人とのやり取りにしました');
     },
     onError: (e) => onError((e as Error).message),
   });
   if (adding) {
     return (
       <span className="inline-flex flex-wrap items-center gap-1 text-sm">
-        <input className="input w-32 py-0.5 text-sm" value={name} onChange={(e) => setName(e.target.value)} placeholder="担当者の氏名" aria-label="担当者の氏名" autoFocus />
-        <input className="input w-28 py-0.5 text-sm" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="部署・役職" aria-label="部署・役職" />
+        <input className="input w-32 py-0.5 text-sm" value={name} onChange={(e) => setName(e.target.value)} placeholder={corporate ? '担当者の氏名' : '窓口の方の氏名'} aria-label={corporate ? '担当者の氏名' : '窓口の方の氏名'} autoFocus />
+        <input className="input w-28 py-0.5 text-sm" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={corporate ? '部署・役職' : '続柄（例: 長男）'} aria-label={corporate ? '部署・役職' : '続柄'} />
         <button className="btn btn-sm btn-primary" disabled={!name.trim() || set.isPending} onClick={() => set.mutate({ newPerson: { name: name.trim(), title: title.trim() || null } })}>
-          担当者として登録
+          {corporate ? '担当者として登録' : '窓口として登録'}
         </button>
         <button className="btn btn-sm" onClick={() => setAdding(false)}>
           やめる
@@ -2083,7 +2097,7 @@ function ConversationPersonPicker({
     );
   }
   return (
-    <label className="inline-flex items-center gap-1 text-sm text-slate-600" title="法人の依頼者の、どの担当者とのやり取りか">
+    <label className="inline-flex items-center gap-1 text-sm text-slate-600" title={corporate ? '法人の依頼者の、どの担当者とのやり取りか' : 'ご本人とのやり取りか、ご家族など窓口の方とのやり取りか'}>
       相手:
       <select
         className="input w-auto py-0.5 text-sm"
@@ -2094,16 +2108,16 @@ function ConversationPersonPicker({
           if (v === 'new') setAdding(true);
           else set.mutate({ personId: v ? Number(v) : null });
         }}
-        aria-label="会話の相手（担当者）"
+        aria-label={corporate ? '会話の相手（担当者）' : '会話の相手（窓口）'}
       >
-        <option value="">会社・代表</option>
+        <option value="">{corporate ? '会社・代表' : 'ご本人'}</option>
         {persons.map((p) => (
           <option key={p.id} value={p.id}>
-            担当 {p.name}
+            {corporate ? '担当' : '窓口'} {p.name}
             {p.title ? `（${p.title}）` : ''}
           </option>
         ))}
-        <option value="new">＋ 新しい担当者として登録…</option>
+        <option value="new">{corporate ? '＋ 新しい担当者として登録…' : '＋ 窓口の方（ご家族など）として登録…'}</option>
       </select>
     </label>
   );

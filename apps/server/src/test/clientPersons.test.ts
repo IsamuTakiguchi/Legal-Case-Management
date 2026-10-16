@@ -15,7 +15,7 @@ const { setPassword } = await import('../auth/index.js');
 const { setAdapter } = await import('../channels/registry.js');
 const { ingestMessage } = await import('../services/inbox.js');
 const { linkConversationToClient } = await import('../services/identity.js');
-const { setConversationPerson } = await import('../services/clientPersons.js');
+const { setConversationPerson, createClientPerson, updateClientPerson } = await import('../services/clientPersons.js');
 const { availableChannels, ensureClientConversation, prepareHearingNotice } = await import('../services/hearingNotice.js');
 const { deleteClient } = await import('../services/clientImport.js');
 const { eq } = await import('drizzle-orm');
@@ -137,6 +137,36 @@ describe('法人の依頼者の担当者', () => {
     const other = db().select().from(schema.clients).where(eq(schema.clients.name, '別会社')).get()!;
     const otherPerson = db().insert(schema.clientPersons).values({ clientId: other.id, name: '他社 太郎' }).returning().get();
     expect(() => setConversationPerson(r.conversation.id, { personId: otherPerson.id })).toThrow('この依頼者の担当者ではありません');
+  });
+
+  it('個人の依頼者でも、ご家族などを窓口に登録できる。先に届いていた会話もその方とのやり取りになり、期日連絡の既定の宛先になる', async () => {
+    const client = db().insert(schema.clients).values({ name: '山田 花子', entityType: 'individual', emails: ['hanako@example.jp'] }).returning().get();
+    const mk = (addr: string, thread: string) =>
+      db().insert(schema.conversations).values({ channel: 'gmail', externalThreadId: thread, clientId: client.id, counterpartName: addr, counterpartAddress: addr, lastMessageAt: '2026-10-01T01:00:00.000Z' }).returning().get();
+    // 窓口を登録する前に、長女の夫からメールが届いていた
+    const fromFamily = mk('Jiro.Tanaka@example.jp', 'th-fam-1');
+    const fromSelf = mk('hanako@example.jp', 'th-fam-2');
+    const p = createClientPerson(client.id, { name: '田中 次郎', title: '長女の夫', emails: ['jiro.tanaka@example.jp'], phones: [], primary: true });
+    expect(db().select().from(schema.conversations).where(eq(schema.conversations.id, fromFamily.id)).get()!.clientPersonId).toBe(p.id);
+    expect(db().select().from(schema.conversations).where(eq(schema.conversations.id, fromSelf.id)).get()!.clientPersonId).toBeNull();
+    // あとから連絡先を足しても、その相手との会話を紐付ける（別の人に決めてある会話は触らない）
+    const other = createClientPerson(client.id, { name: '山田 一郎', title: '長男', emails: [], phones: [], primary: false });
+    const fromSon = mk('ichiro@example.jp', 'th-fam-3');
+    updateClientPerson(other.id, { emails: ['ichiro@example.jp', 'jiro.tanaka@example.jp'] });
+    expect(db().select().from(schema.conversations).where(eq(schema.conversations.id, fromSon.id)).get()!.clientPersonId).toBe(other.id);
+    expect(db().select().from(schema.conversations).where(eq(schema.conversations.id, fromFamily.id)).get()!.clientPersonId).toBe(p.id);
+    updateClientPerson(other.id, { emails: ['ichiro@example.jp'] });
+    // 期日連絡は主な窓口宛てが既定。宛名は窓口の方の姓
+    const kase = db().insert(schema.cases).values({ clientId: client.id, title: '山田 相続', caseType: 'civil', status: 'active' }).returning().get();
+    const note = db().insert(schema.caseNotes).values({ caseId: kase.id, clientId: client.id, kind: 'court', occurredAt: '2026-10-01T01:00:00.000Z', rawText: '調停期日', gist: '調停期日' }).returning().get();
+    const r = await prepareHearingNotice(note.id);
+    expect(r.recipient).toBe('田中 次郎（長女の夫）');
+    expect(r.to).toBe('jiro.tanaka@example.jp');
+    expect(r.text.startsWith('田中様')).toBe(true);
+    // 本人宛てにも選び直せる
+    const toSelf = await prepareHearingNotice(note.id, { channel: 'gmail', personId: null });
+    expect(toSelf.to).toBe('hanako@example.jp');
+    expect(toSelf.text.startsWith('山田様')).toBe(true);
   });
 
   it('依頼者を削除すると担当者も消え、会話の担当者の紐付けも外れる', () => {

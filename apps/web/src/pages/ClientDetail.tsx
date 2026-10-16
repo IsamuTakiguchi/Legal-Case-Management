@@ -18,7 +18,7 @@ interface Detail extends ClientRow {
   conversations: { id: number; channel: string; subject: string | null; lastMessageAt: string | null; needsReply: boolean; contact?: { name: string; roleLabel: string; caseTitle: string } | null }[];
   tasks: { id: number; title: string; status: string; followUpAt: string | null }[];
   events: { id: number; title: string; startAt: string; kind: string }[];
-  /** 法人の担当者 */
+  /** 法人の担当者・個人の窓口（ご家族など） */
   persons?: ClientPerson[];
 }
 
@@ -106,7 +106,8 @@ export default function ClientDetail() {
       )}
       {c.provisional && <ProvisionalClientPanel clientId={c.id} name={c.name} />}
       <ContactCard c={c} onEdit={() => setEdit(true)} />
-      {(c.entityType === 'corporation' || (c.persons?.length ?? 0) > 0) && <ClientPersonsCard clientId={c.id} persons={c.persons ?? []} />}
+      {/* 法人は担当者、個人は本人に代わって連絡を受けるご家族などの窓口 */}
+      <ClientPersonsCard clientId={c.id} persons={c.persons ?? []} corporate={c.entityType === 'corporation'} />
       <div className="grid gap-4 md:grid-cols-2">
         <section className="card">
           <div className="mb-2 flex items-center">

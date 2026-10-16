@@ -44,11 +44,41 @@ function toForm(p: ClientPerson): FormState {
   return { name: p.name, kana: p.kana ?? '', title: p.title ?? '', emails: p.emails.join('\n'), phones: p.phones.join('\n'), lineUserId: p.lineUserId, chatworkRoomId: p.chatworkRoomId ? String(p.chatworkRoomId) : '', primary: p.primary, note: p.note ?? '' };
 }
 
+/** 法人なら「担当者」、個人なら「窓口」（本人ではなくご家族などが窓口になるとき）の呼び方 */
+function wordsFor(corporate: boolean) {
+  return corporate
+    ? {
+        heading: '担当者',
+        noun: '担当者',
+        add: '＋ 担当者を追加',
+        titleLabel: '部署・役職',
+        titlePlaceholder: '例: 総務部 課長',
+        namePlaceholder: '例: 佐藤 花子',
+        notePlaceholder: '例: 請求関係の窓口。平日 9〜17 時',
+        primary: '主担当',
+        primaryLong: '主担当にする（期日連絡などで、依頼者に連絡するときの既定の宛先になります）',
+        help: '代表者とは別の窓口の方を、連絡先ごとに登録できます。担当者のメール・LINE・Chatwork から届いた連絡はこの依頼者に入り、期日連絡などでは宛先に選べます。',
+      }
+    : {
+        heading: '窓口（ご家族など）',
+        noun: '窓口の方',
+        add: '＋ 窓口の方を追加',
+        titleLabel: '続柄',
+        titlePlaceholder: '例: 長男、妻、成年後見人',
+        namePlaceholder: '例: 山田 太郎',
+        notePlaceholder: '例: 本人は高齢のため、連絡はすべて長男へ。平日夜なら電話可',
+        primary: '主な窓口',
+        primaryLong: '主な窓口にする（期日連絡などで、依頼者に連絡するときの既定の宛先になります）',
+        help: '本人ではなくご家族などが窓口になる場合に登録します。窓口の方のメール・LINE・Chatwork から届いた連絡はこの依頼者に入り、期日連絡などでは宛先に選べます（AI の下書きも、窓口の方宛ての文面になります）。',
+      };
+}
+
 /**
- * 法人の依頼者の担当者（代表者とは別の窓口）。担当者ごとにメール・電話・LINE・Chatwork を登録する。
- * 担当者の連絡先から届いた連絡はこの依頼者に入り、期日連絡などでは担当者を宛先に選べる
+ * 依頼者の担当者・窓口。法人なら代表者とは別の担当者、個人なら本人に代わって連絡を受けるご家族など。
+ * 連絡先ごとにメール・電話・LINE・Chatwork を登録し、そこから届いた連絡はこの依頼者に入る。期日連絡などでは宛先に選べる
  */
-export function ClientPersonsCard({ clientId, persons }: { clientId: number; persons: ClientPerson[] }) {
+export function ClientPersonsCard({ clientId, persons, corporate = true }: { clientId: number; persons: ClientPerson[]; corporate?: boolean }) {
+  const w = wordsFor(corporate);
   const qc = useQueryClient();
   // 'new' は新規登録、数字は編集中の担当者
   const [editing, setEditing] = useState<'new' | number | null>(null);
@@ -106,15 +136,15 @@ export function ClientPersonsCard({ clientId, persons }: { clientId: number; per
       <div className="grid gap-2 md:grid-cols-3">
         <label className="block">
           <span className="label">氏名</span>
-          <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="例: 佐藤 花子" required autoFocus />
+          <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder={w.namePlaceholder} required autoFocus />
         </label>
         <label className="block">
           <span className="label">ふりがな</span>
           <input className="input" value={form.kana} onChange={(e) => setForm({ ...form, kana: e.target.value })} placeholder="さとう はなこ" />
         </label>
         <label className="block">
-          <span className="label">部署・役職</span>
-          <input className="input" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="例: 総務部 課長" />
+          <span className="label">{w.titleLabel}</span>
+          <input className="input" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder={w.titlePlaceholder} />
         </label>
         <label className="block">
           <span className="label">メール（複数は改行）</span>
@@ -127,7 +157,7 @@ export function ClientPersonsCard({ clientId, persons }: { clientId: number; per
         </label>
         <label className="block">
           <span className="label">メモ</span>
-          <textarea className="input min-h-10" rows={2} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder="例: 請求関係の窓口。平日 9〜17 時" />
+          <textarea className="input min-h-10" rows={2} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder={w.notePlaceholder} />
         </label>
         <div>
           <span className="label">LINE</span>
@@ -140,7 +170,7 @@ export function ClientPersonsCard({ clientId, persons }: { clientId: number; per
       </div>
       <label className="flex items-center gap-2">
         <input type="checkbox" checked={form.primary} onChange={(e) => setForm({ ...form, primary: e.target.checked })} />
-        主担当にする（期日連絡などで、依頼者に連絡するときの既定の宛先になります）
+        {w.primaryLong}
       </label>
       <div className="flex gap-2">
         <button className="btn btn-sm btn-primary" disabled={save.isPending || !form.name.trim() || !emailOk}>
@@ -156,7 +186,7 @@ export function ClientPersonsCard({ clientId, persons }: { clientId: number; per
   return (
     <section className="card">
       <div className="mb-1 flex items-center">
-        <h2 className="font-semibold">担当者</h2>
+        <h2 className="font-semibold">{w.heading}</h2>
         {editing !== 'new' && (
           <button
             className="btn btn-sm ml-auto"
@@ -165,11 +195,11 @@ export function ClientPersonsCard({ clientId, persons }: { clientId: number; per
               setEditing('new');
             }}
           >
-            ＋ 担当者を追加
+            {w.add}
           </button>
         )}
       </div>
-      <p className="mb-2 text-xs text-slate-500">代表者とは別の窓口の方を、連絡先ごとに登録できます。担当者のメール・LINE・Chatwork から届いた連絡はこの依頼者に入り、期日連絡などでは宛先に選べます。</p>
+      <p className="mb-2 text-xs text-slate-500">{w.help}</p>
       {err && <div className="mb-2 text-xs text-red-600">{err}</div>}
       {editing === 'new' && formView}
       {persons.length === 0 && editing !== 'new' && <div className="text-sm text-slate-400">登録されていません</div>}
@@ -178,12 +208,12 @@ export function ClientPersonsCard({ clientId, persons }: { clientId: number; per
           <li key={p.id} className="py-2 text-sm">
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-medium">{clientPersonLabel(p)}</span>
-              {p.primary && <span className="badge badge-blue">主担当</span>}
+              {p.primary && <span className="badge badge-blue">{w.primary}</span>}
               {p.kana && <span className="text-xs text-slate-500">{p.kana}</span>}
               <span className="ml-auto flex gap-1">
                 {!p.primary && (
                   <button className="btn btn-sm" disabled={makePrimary.isPending} onClick={() => makePrimary.mutate(p.id)} title="依頼者に連絡するときの既定の宛先にします">
-                    主担当にする
+                    {w.primary}にする
                   </button>
                 )}
                 <button
@@ -198,7 +228,7 @@ export function ClientPersonsCard({ clientId, persons }: { clientId: number; per
                 <button
                   className="btn btn-sm text-red-600"
                   disabled={remove.isPending}
-                  onClick={() => window.confirm(`担当者「${p.name}」を削除しますか？\nこの方とのやり取りは、依頼者の会話として残ります。`) && remove.mutate(p.id)}
+                  onClick={() => window.confirm(`${w.noun}「${p.name}」を削除しますか？\nこの方とのやり取りは、依頼者の会話として残ります。`) && remove.mutate(p.id)}
                 >
                   削除
                 </button>
