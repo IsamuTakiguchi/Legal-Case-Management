@@ -181,7 +181,7 @@ export interface DraftContext {
   contactName?: string | null;
   contactRole?: string | null;
   contactCaseTitle?: string | null;
-  /** 法人の依頼者の担当者（会話の相手が担当者と分かっているとき） */
+  /** 依頼者の担当者・窓口（法人の担当者、個人ならご家族など。会話の相手が分かっているとき） */
   personName?: string | null;
   personTitle?: string | null;
   thread: { direction: 'in' | 'out'; body: string; sentAt: string; senderName?: string | null }[];
@@ -242,6 +242,16 @@ export async function draftReply(req: DraftRequest, ctx: DraftContext, clientId?
   // テンプレートの「{{姓}}様」に入れる宛名。会社の方へのメールで担当者が分かっていれば「会社名\n氏名　」、
   // 会社で担当者が分からなければ空（AI が「相手」の宛名の書き方に沿って書く）
   const person = ctx.contactName ? null : ctx.personName;
+  // 個人の依頼者の窓口（ご家族など）なら続柄も添える（呼び出し側が渡していなければ登録から引く）
+  const personTitle =
+    ctx.personTitle ??
+    (person && client
+      ? (db()
+          .select({ title: schema.clientPersons.title })
+          .from(schema.clientPersons)
+          .where(and(eq(schema.clientPersons.clientId, client.id), eq(schema.clientPersons.name, person)))
+          .get()?.title ?? null)
+      : null);
   const surname = person ? (orgName && ctx.channel === 'gmail' ? `${orgName}\n${person}　` : familyName(person)) : orgName ? '' : familyName(addressee);
 
   let templateNote = '';
@@ -292,8 +302,10 @@ ${samples.map((s, i) => `--- 例${i + 1} ---\n${s.text.slice(0, 900)}`).join('\n
   const counterpartLine = ctx.contactName
     ? `相手: ${ctx.contactName}（${ctx.contactRole ?? '関係者'}。依頼者 ${ctx.clientName ?? '不明'}${ctx.contactCaseTitle ? ` の「${ctx.contactCaseTitle}」` : ''} に関する対外的なやり取り。依頼者向けの砕けた説明や励ましは入れず、簡潔で丁寧な対外文書として書く）${orgName ? `（${orgAddressRule(ctx.channel, orgName, null)}）` : surname ? `（宛名は「${surname}様」${ctx.contactRole === '相手方代理人' ? 'または「先生」' : ''}）` : ''}`
     : person && orgName
-      ? `相手: ${orgName} の担当者 ${ctx.personTitle ? `${ctx.personTitle} ` : ''}${person}（法人の依頼者。${orgAddressRule(ctx.channel, orgName, person)}）`
-      : rep
+      ? `相手: ${orgName} の担当者 ${personTitle ? `${personTitle} ` : ''}${person}（法人の依頼者。${orgAddressRule(ctx.channel, orgName, person)}）`
+      : person && client
+        ? `相手: ${person}（依頼者 ${client.name} ${personTitle ? `の${personTitle}` : 'の窓口の方'}。依頼者本人ではなく、本人に代わって連絡を受けている方。宛名は「${surname}様」。本人のことは「${familyName(client.name)}様」などと書き、相手自身の事件のように書かない）`
+        : rep
         ? `相手: ${ctx.clientName ?? client!.name}（法人の依頼者。代表者は${rep}。宛名は会社名と代表者名で、例えばメールなら「${client!.name}\n${rep}　様」、LINE なら「${familyName(client!.representativeName ?? '')}様」。やり取りの相手が代表者以外の担当者と分かれば（署名など）、会社名の次の行にその人の氏名（フルネーム）を書いて「　様」を付ける）`
         : orgName
           ? `相手: ${addressee}（会社・団体の方。${orgAddressRule(ctx.channel, orgName, null)}）`

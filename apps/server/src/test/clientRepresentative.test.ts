@@ -144,4 +144,20 @@ describe('法人の依頼者と代表者', () => {
     await draftReply(req, { channel: 'line', clientName: c.name, personName: '名児耶和峰', thread: [] }, c.id);
     expect(prompts[3]).toContain('「（名児耶和峰 の姓）様」と姓だけでもよい');
   });
+
+  it('個人の依頼者でご家族などが窓口なら、窓口の方宛ての文面にし、本人のことは本人の姓で書くよう伝える', async () => {
+    const req = { conversationId: 0, instruction: '期日の結果を報告する', templateKey: null, extra: {} };
+    const c = db().insert(schema.clients).values({ name: '佐藤 花子' }).returning().get();
+    db().insert(schema.clientPersons).values({ clientId: c.id, name: '鈴木 美香', title: '長女', primary: true }).run();
+    // 続柄は登録から引く（呼び出し側が渡していなくても）
+    await draftReply(req, { channel: 'line', clientName: c.name, personName: '鈴木 美香', thread: [] }, c.id);
+    expect(prompts[0]).toContain('相手: 鈴木 美香（依頼者 佐藤 花子 の長女。依頼者本人ではなく、本人に代わって連絡を受けている方。宛名は「鈴木様」');
+    expect(prompts[0]).toContain('本人のことは「佐藤様」などと書き');
+    // 続柄が無ければ「窓口の方」
+    await draftReply(req, { channel: 'line', clientName: c.name, personName: '田中 一郎', thread: [] }, c.id);
+    expect(prompts[1]).toContain('相手: 田中 一郎（依頼者 佐藤 花子 の窓口の方。');
+    // 本人宛ては今までどおり
+    await draftReply(req, { channel: 'line', clientName: c.name, thread: [] }, c.id);
+    expect(prompts[2]).toContain('相手: 佐藤 花子（宛名は「佐藤様」）');
+  });
 });

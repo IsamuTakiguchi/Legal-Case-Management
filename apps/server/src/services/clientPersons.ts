@@ -1,4 +1,4 @@
-import { and, eq, inArray, ne } from 'drizzle-orm';
+import { and, eq, inArray, isNull, ne } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import type { ClientPersonInput } from '@lcm/shared';
 import type { IdentityHint } from '../channels/types.js';
@@ -47,6 +47,33 @@ function clearOtherPrimary(clientId: number, keepId: number) {
     .run();
 }
 
+/**
+ * 担当者・窓口の連絡先（メール・LINE・Chatwork ルーム）と同じ相手との、その依頼者の既存の会話を、その人とのやり取りにする。
+ * 先に会話が届いていてあとから登録したときも、受信箱の「相手」や返信の宛名がその人になるように。
+ * 別の人に決めてある会話や、事件の関係者との会話は触らない
+ */
+export function linkPersonConversations(p: ClientPersonRow): number {
+  const emails = new Set(p.emails.map((e) => e.toLowerCase()));
+  const convs = db()
+    .select()
+    .from(schema.conversations)
+    .where(and(eq(schema.conversations.clientId, p.clientId), isNull(schema.conversations.clientPersonId), isNull(schema.conversations.contactId)))
+    .all()
+    .filter(
+      (c) =>
+        (c.channel === 'gmail' && !!c.counterpartAddress && emails.has(c.counterpartAddress.toLowerCase())) ||
+        (c.channel === 'line' && !!p.lineUserId && c.externalThreadId === p.lineUserId) ||
+        (c.channel === 'chatwork' && !!p.chatworkRoomId && c.externalThreadId === String(p.chatworkRoomId)),
+    );
+  if (convs.length)
+    db()
+      .update(schema.conversations)
+      .set({ clientPersonId: p.id })
+      .where(inArray(schema.conversations.id, convs.map((c) => c.id)))
+      .run();
+  return convs.length;
+}
+
 export function createClientPerson(clientId: number, input: ClientPersonInput): ClientPersonRow {
   const client = db().select().from(schema.clients).where(eq(schema.clients.id, clientId)).get();
   if (!client) throw new Error('依頼者が見つかりません');
@@ -58,6 +85,7 @@ export function createClientPerson(clientId: number, input: ClientPersonInput): 
     .returning()
     .get();
   if (row.primary) clearOtherPrimary(clientId, row.id);
+  linkPersonConversations(row);
   return row;
 }
 
@@ -71,6 +99,8 @@ export function updateClientPerson(id: number, input: Partial<ClientPersonInput>
     .returning()
     .get();
   if (row.primary) clearOtherPrimary(row.clientId, row.id);
+  // 連絡先を足したら、その連絡先との会話もこの人とのやり取りにする
+  if (input.emails !== undefined || input.lineUserId !== undefined || input.chatworkRoomId !== undefined) linkPersonConversations(row);
   return row;
 }
 
