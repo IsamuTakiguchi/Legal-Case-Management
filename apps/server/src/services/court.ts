@@ -4,7 +4,7 @@ import * as cal from '../integrations/calendar.js';
 import { classifyEventTitle, titleMentionsClient, isNonClientTitle, formatJaDateTime, familyName, type EventKind, type NextHearingInput, OPEN_CASE_STATUSES } from '@lcm/shared';
 import { upsertAlert, resolveAlert, resolveAlertsByKeyPrefix } from './alerts.js';
 import { storage } from '../integrations/storage.js';
-import { clientFolder } from './attachments.js';
+import { clientFolder, caseFolder, caseOfClient } from './attachments.js';
 import { getSetting } from './settings.js';
 import { joinPath } from '../integrations/onedrive.js';
 import { logger } from '../logger.js';
@@ -140,13 +140,18 @@ export async function resolveNextHearing(input: NextHearingInput): Promise<{ eve
   return { eventId: ev.id };
 }
 
-/** 期日報告用: 依頼者フォルダの提出書面（直近更新順） */
-export async function listCourtDocs(clientId: number, opts: { days?: number } = {}) {
+/**
+ * 期日報告用: 依頼者・事件フォルダの提出書面（直近更新順）。
+ * caseId を渡すとその事件のフォルダ、渡さなければ依頼者の事件のフォルダすべて（事件ごとにフォルダがあるとき）
+ */
+export async function listCourtDocs(clientId: number, opts: { days?: number; caseId?: number | null } = {}) {
   const client = db().select().from(schema.clients).where(eq(schema.clients.id, clientId)).get();
   if (!client) throw new Error('依頼者が見つかりません');
-  const base = clientFolder(client);
+  const kase = caseOfClient(clientId, opts.caseId);
+  const cases = kase ? [kase] : db().select().from(schema.cases).where(eq(schema.cases.clientId, clientId)).all();
+  const bases = [...new Set([...cases.map((k) => caseFolder(client, k)), ...(kase ? [] : [clientFolder(client)])])];
   const sub = getSetting('court_docs_subfolder');
-  const folders = [joinPath(base, sub), base];
+  const folders = bases.flatMap((base) => [joinPath(base, sub), base]);
   const out: { name: string; path: string; itemId?: string; modifiedAt?: string; size?: number; folder: string }[] = [];
   for (const f of folders) {
     try {
@@ -183,13 +188,14 @@ const ATTACHABLE = /\.(pdf|docx?|xlsx?|pptx?|jpe?g|png|gif|txt|csv|zip)$/i;
  * 依頼者（事件）フォルダの中を見る。手でファイルを選ぶときに使う。
  * sub は依頼者フォルダからの相対パス。上の階層へは出られない。
  */
-export async function listClientFolder(clientId: number, sub = ''): Promise<ClientFolderListing> {
+export async function listClientFolder(clientId: number, sub = '', caseId?: number | null): Promise<ClientFolderListing> {
   const client = db().select().from(schema.clients).where(eq(schema.clients.id, clientId)).get();
   if (!client) throw new Error('依頼者が見つかりません');
+  // 事件を指定すれば、その事件のフォルダの中を見る
   // 「..」や先頭の「/」で依頼者フォルダの外に出られないようにする
   const parts = sub.split('/').map((x) => x.trim()).filter((x) => x && x !== '.' && x !== '..');
   const rel = parts.join('/');
-  const base = clientFolder(client);
+  const base = caseFolder(client, caseOfClient(clientId, caseId));
   const here = rel ? joinPath(base, rel) : base;
   const items = await storage().list(here);
   return {

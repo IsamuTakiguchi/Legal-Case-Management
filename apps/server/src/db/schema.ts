@@ -93,6 +93,13 @@ export const cases = sqliteTable('cases', {
   referrer: text('referrer'),
   /** 事故日（交通事故の事件。YYYY-MM-DD） */
   accidentDate: text('accident_date'),
+  /**
+   * この事件の OneDrive フォルダ（依頼者ルートからの相対、「/」始まりは絶対パス）。
+   * 「や 山田花子 離婚」のように事件ごとにフォルダを分ける運用のため。空なら依頼者フォルダを使う
+   */
+  onedriveFolderPath: text('onedrive_folder_path'),
+  /** 事件フォルダの OneDrive 上の ID（名前を変えられたり区分フォルダ間で移されたりしても追えるように控える） */
+  onedriveItemId: text('onedrive_item_id'),
   createdAt: text('created_at').notNull().default(now()),
   updatedAt: text('updated_at').notNull().default(now()),
 });

@@ -8,14 +8,14 @@ import { db, schema } from '../db/index.js';
 import { normalizePhones, clientInputSchema, clientPersonInputSchema, caseInputSchema, caseNoteInputSchema, creditorInputSchema, creditorEventInputSchema, CREDITOR_IMPORT_FIELDS, caseContactInputSchema, staffAskDraftSchema, staffAskSendSchema, TASK_STATUSES, EVENT_KINDS, CASE_STATUSES, looksLikeCorporation, provisionalClientName } from '@lcm/shared';
 import { searchClients } from '../services/identity.js';
 import { storage, FolderNotFoundError } from '../integrations/storage.js';
-import { clientFolder } from '../services/attachments.js';
+import { clientFolder, caseFolder } from '../services/attachments.js';
 import { proposeScheduleFromNote, registerScheduleFromNote } from '../services/noteSchedule.js';
 import { staffAskContext, draftStaffAsk, sendStaffAsk, type StaffAskSource } from '../services/staffAsk.js';
 import { listCaseTypes, upsertCaseType, createCase, updateCase, bulkUpdateCases, listCases, getCase, caseTimeline, addCaseNote, updateCaseNote, deleteCaseNote, generateCaseSummary, structureNote, restructureNote, createTasksFromNote, suggestNoteTasks } from '../services/cases.js';
 import * as creditors from '../services/creditors.js';
 import { onedriveCandidates, chatworkCandidates, applyImport, deleteClient } from '../services/clientImport.js';
 import { findDuplicateClients, mergeClients } from '../services/clientMerge.js';
-import { clientFolderParents, defaultClientFolderRel, syncClientFolderName, syncClientFolderNames, rememberClientFolderId, adoptClientFolderPath, renameClientFolder, folderStatusMismatches, applyFolderStatuses } from '../services/clientFolders.js';
+import { caseFolderRel, setCaseFolder, createCaseFolder, defaultCaseFolderRel, clientFolderParents, defaultClientFolderRel, syncClientFolderName, syncClientFolderNames, rememberClientFolderId, adoptClientFolderPath, renameClientFolder, folderStatusMismatches, applyFolderStatuses } from '../services/clientFolders.js';
 import { logger } from '../logger.js';
 import { listContacts, createContact, updateContact, deleteContact, contactBriefs } from '../services/contacts.js';
 import { readContactMemo, importContactMemo } from '../services/contactMemo.js';
@@ -72,7 +72,8 @@ clientRoutes.get('/clients/:id', (c) => {
   const id = Number(c.req.param('id'));
   const row = db().select().from(schema.clients).where(eq(schema.clients.id, id)).get();
   if (!row) return c.json({ error: 'not found' }, 404);
-  const cases = listCases({ clientId: id });
+  // 事件ごとのフォルダ（無ければ依頼者フォルダ）も添える
+  const cases = listCases({ clientId: id }).map((k) => ({ ...k, folderRel: caseFolderRel(k, row), folderOwn: !!k.onedriveFolderPath?.trim() }));
   const convRows = db().select().from(schema.conversations).where(eq(schema.conversations.clientId, id)).orderBy(desc(schema.conversations.lastMessageAt)).all();
   const briefs = contactBriefs(convRows.map((v) => v.contactId ?? 0));
   const conversations = convRows.map((v) => ({ ...v, contact: v.contactId ? (briefs.get(v.contactId) ?? null) : null }));
@@ -318,7 +319,23 @@ clientRoutes.post('/cases', async (c) => {
 clientRoutes.get('/cases/:id', (c) => {
   const kase = getCase(Number(c.req.param('id')));
   if (!kase) return c.json({ error: 'not found' }, 404);
-  return c.json(kase);
+  // 事件のフォルダ（事件ごとのフォルダが無ければ依頼者フォルダ）
+  const folder = kase.client
+    ? { rel: caseFolderRel(kase, kase.client), path: caseFolder(kase.client, kase), own: !!kase.onedriveFolderPath?.trim(), suggested: defaultCaseFolderRel(kase.client, kase) }
+    : null;
+  return c.json({ ...kase, folder });
+});
+
+/** 事件のフォルダを指定し直す（path を空にすると依頼者フォルダを使う） */
+clientRoutes.put('/cases/:id/folder', async (c) => {
+  const body = z.object({ path: z.string().max(500).nullable() }).parse(await c.req.json());
+  return c.json(await setCaseFolder(Number(c.req.param('id')), body.path));
+});
+
+/** 事件のフォルダを OneDrive に作る */
+clientRoutes.post('/cases/:id/folder', async (c) => {
+  const body = z.object({ name: z.string().max(200).nullable().optional() }).parse(await c.req.json().catch(() => ({})));
+  return c.json(await createCaseFolder(Number(c.req.param('id')), body.name ?? null));
 });
 
 clientRoutes.get('/cases/:id/timeline', (c) => c.json(caseTimeline(Number(c.req.param('id')))));

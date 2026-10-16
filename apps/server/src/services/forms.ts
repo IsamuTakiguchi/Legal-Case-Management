@@ -7,7 +7,7 @@ import { db, schema } from '../db/index.js';
 import { storage } from '../integrations/storage.js';
 import { joinPath } from '../integrations/onedrive.js';
 import { getSetting } from './settings.js';
-import { clientFolder } from './attachments.js';
+import { clientFolder, caseFolder } from './attachments.js';
 import { generateText } from '../integrations/anthropic.js';
 import { inferDocType, type FormDraftRequest } from '@lcm/shared';
 import { ftsQuery } from './inbox.js';
@@ -82,8 +82,15 @@ export async function indexForms(opts: { full?: boolean } = {}): Promise<{ scann
   for (const r of roots) targets.push({ folder: r, source: 'library', clientId: null, caseType: null });
   const clients = db().select().from(schema.clients).where(eq(schema.clients.archived, false)).all();
   for (const c of clients) {
-    const active = db().select().from(schema.cases).where(eq(schema.cases.clientId, c.id)).orderBy(desc(schema.cases.updatedAt)).get();
+    const cases = db().select().from(schema.cases).where(eq(schema.cases.clientId, c.id)).orderBy(desc(schema.cases.updatedAt)).all();
+    const active = cases[0];
     for (const sub of clientSub) targets.push({ folder: joinPath(clientFolder(c), sub), source: 'client_folder', clientId: c.id, caseType: active?.caseType ?? null });
+    // 事件ごとにフォルダがあれば、その事件のフォルダも見る（類型は事件のもの）
+    for (const k of cases) {
+      const base = caseFolder(c, k);
+      if (base === clientFolder(c)) continue;
+      for (const sub of clientSub) targets.push({ folder: joinPath(base, sub), source: 'client_folder', clientId: c.id, caseType: k.caseType });
+    }
   }
   let scanned = 0;
   let indexed = 0;
@@ -264,7 +271,8 @@ ${sources}`;
   let webUrl: string | undefined;
   if (req.saveToClientFolder && client) {
     try {
-      const folder = joinPath(clientFolder(client), getSetting('draft_subfolder'));
+      // 事件を選んでいれば、その事件のフォルダに保存する
+      const folder = joinPath(caseFolder(client, kase && kase.clientId === client.id ? kase : null), getSetting('draft_subfolder'));
       const stored = await storage().put(folder, filename, docx);
       savedPath = stored.path;
       itemId = stored.itemId;

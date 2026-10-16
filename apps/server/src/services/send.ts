@@ -66,7 +66,7 @@ export async function sendToConversation(conversationId: number, input: SendMess
       direct.push(f);
       continue;
     }
-    const link = await tryShareLink(f, input, client ?? null);
+    const link = await tryShareLink(f, input, client ?? null, conv.caseId ?? null);
     if (link) links.push({ name: f.filename, url: link });
     else manualFiles.push(f.filename);
   }
@@ -179,7 +179,7 @@ export async function sendToConversation(conversationId: number, input: SendMess
   return { messageId: message.id, note: result.note, links, manualFiles };
 }
 
-async function tryShareLink(f: OutboundFile, input: SendMessageInput, client: { name: string; onedriveFolderPath: string | null } | null): Promise<string | null> {
+async function tryShareLink(f: OutboundFile, input: SendMessageInput, client: { id: number; name: string; onedriveFolderPath: string | null } | null, caseId: number | null): Promise<string | null> {
   const st = storage();
   if (!st.shareLink) return null;
   const days = getSettingInt('share_link_expiry_days', 30);
@@ -193,8 +193,9 @@ async function tryShareLink(f: OutboundFile, input: SendMessageInput, client: { 
     const df = input.driveFiles.find((x) => x.name === f.filename);
     if (df) return await st.shareLink({ itemId: df.itemId, path: df.path ?? '' }, expires);
     if (client) {
-      const { clientFolder } = await import('./attachments.js');
-      const folder = `${clientFolder(client)}/送付ファイル`;
+      const { caseFolder, caseOfClient } = await import('./attachments.js');
+      // 会話に事件が付いていれば、その事件のフォルダに置く
+      const folder = `${caseFolder(client, caseOfClient(client.id, caseId))}/送付ファイル`;
       const stored = await st.put(folder, f.filename, f.data);
       return await st.shareLink({ itemId: stored.itemId, path: stored.path }, expires);
     }

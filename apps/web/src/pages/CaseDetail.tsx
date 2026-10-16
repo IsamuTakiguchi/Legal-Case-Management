@@ -11,6 +11,7 @@ import { LongText } from '../lib/LongText';
 import { TaskDeadlines, NewTaskDeadlines, TaskDeadlineSelect, FOLLOW_LABEL, DUE_HINT, FOLLOW_HINT } from '../lib/Deadline';
 import { MemoBadge, MemoForm, MEMO_HINT } from '../lib/Memo';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
+import { CaseFolderCard, type CaseFolderInfo } from '../lib/CaseFolderCard';
 import { NoteComposer, ActionDeadlineInputs, dueYmd } from '../lib/NoteComposer';
 import { fmtDateTime, fmtDate, fmtYen, fmtBytes, toLocalInput, fromLocalInput, channelLabel } from '../lib/format';
 import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, messageLink, ACTIVE_TASK_STATUSES, taskStatusForWaiting, formatWareki, parseJaDate, addYearsIso, taskDeadline, jstYmd, actionDeadlinesLabel, isWaitingStatus, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
@@ -54,6 +55,8 @@ interface CaseData {
   chatworkRoomId: number | null;
   accidentDate: string | null;
   referrer: string | null;
+  /** 事件のフォルダ（事件ごとのフォルダが無ければ依頼者フォルダ） */
+  folder?: CaseFolderInfo | null;
   staff: { id: number; name: string } | null;
   notes: Note[];
   tasks: { id: number; title: string; note: string | null; status: string; dueAt: string | null; followUpAt: string | null; chatworkTaskId: number | null; chatworkReplyable?: boolean; chatworkAssignedByName?: string | null; chatworkRepliedAt?: string | null; trigger?: string | null; reviewAt?: string | null }[];
@@ -290,6 +293,7 @@ export default function CaseDetail() {
               {c.summary ? <div className="whitespace-pre-wrap text-slate-700">{c.summary}</div> : <div className="text-slate-500">未生成</div>}
               {c.summaryGeneratedAt && <div className="mt-1 text-xs text-slate-400">生成 {fmtDateTime(c.summaryGeneratedAt)}</div>}
             </section>
+            {c.folder && c.client && <CaseFolderCard caseId={c.id} clientId={c.client.id} folder={c.folder} />}
             <ContactsSection caseId={c.id} traffic={c.caseType?.key === 'traffic'} />
             <section className="card text-sm">
               <h2 className="mb-2 font-semibold">未了タスク</h2>
@@ -1213,6 +1217,7 @@ function ContactForm({ form, setForm, onSave, onCancel, busy }: { form: typeof E
 interface HearingNotice {
   noteId: number;
   clientId: number;
+  caseId?: number;
   clientName: string;
   channel: string;
   channelLabel: string;
@@ -1248,11 +1253,12 @@ interface FolderListing {
 const CHANNEL_JA: Record<string, string> = { gmail: 'Gmail', line: 'LINE公式', chatwork: 'Chatwork' };
 
 /** 依頼者（事件）フォルダの中を見て、添付するファイルを手で選ぶ */
-function FolderBrowser({ clientId, isPicked, onToggle }: { clientId: number; isPicked: (path: string) => boolean; onToggle: (f: DriveDoc) => void }) {
+function FolderBrowser({ clientId, caseId, isPicked, onToggle }: { clientId: number; caseId?: number | null; isPicked: (path: string) => boolean; onToggle: (f: DriveDoc) => void }) {
   const [sub, setSub] = useState('');
+  // 事件ごとにフォルダがあれば、その事件のフォルダを見る
   const q = useQuery({
-    queryKey: ['client-folder', clientId, sub],
-    queryFn: () => api.get<FolderListing>(`/clients/${clientId}/folder?sub=${encodeURIComponent(sub)}`),
+    queryKey: ['client-folder', clientId, caseId ?? 0, sub],
+    queryFn: () => api.get<FolderListing>(`/clients/${clientId}/folder?sub=${encodeURIComponent(sub)}${caseId ? `&caseId=${caseId}` : ''}`),
     retry: false,
   });
   return (
@@ -1423,7 +1429,7 @@ function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClo
             )}
             {browse && (
               <div className="mt-2">
-                <FolderBrowser clientId={n.clientId} isPicked={(path) => picked.has(path)} onToggle={toggleDoc} />
+                <FolderBrowser clientId={n.clientId} caseId={n.caseId ?? null} isPicked={(path) => picked.has(path)} onToggle={toggleDoc} />
               </div>
             )}
             {picked.size > 0 && (

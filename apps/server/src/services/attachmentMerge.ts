@@ -9,7 +9,7 @@ import { joinPath } from '../integrations/onedrive.js';
 import { generateStructuredFromContent } from '../integrations/anthropic.js';
 import { getSetting } from './settings.js';
 import { upsertAlert } from './alerts.js';
-import { attachmentBytes, attachmentPolicy, clientFolder, processAttachment, removeStaged, stageAttachment, storedFilename, unassignedFolder } from './attachments.js';
+import { attachmentBytes, attachmentPolicy, caseFolder, messageCase, processAttachment, removeStaged, stageAttachment, storedFilename, unassignedFolder } from './attachments.js';
 import { sanitizeSuggestedName } from './fileNaming.js';
 import { writePreviewCache } from './previewCache.js';
 import { syncClientFolderName } from './clientFolders.js';
@@ -202,7 +202,7 @@ export async function mergeAttachmentsToPdf(ids: number[], name: string, opts: {
     const title = sanitizeSuggestedName(name) || '受信資料';
     const pdf = await imagesToPdf(images, title);
     const filename = storedFilename(first.channel as Channel, first.sentAt, `${title}.pdf`);
-    const folder = client ? joinPath(clientFolder(client), getSetting('attachment_subfolder')) : unassignedFolder();
+    const folder = client ? joinPath(caseFolder(client, messageCase(first, client.id)), getSetting('attachment_subfolder')) : unassignedFolder();
     const stored = await storage().put(folder, filename, pdf, { dedupe: true });
     atts.forEach((a, i) => {
       const ref = { ...(a.channelRef as Record<string, unknown>) };

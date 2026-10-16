@@ -14,7 +14,7 @@ import { ClientPersonsCard, type ClientPerson } from '../lib/ClientPersons';
 
 interface Detail extends ClientRow {
   folder: string;
-  cases: { id: number; title: string; caseTypeLabel: string; status: string; nextHearingAt: string | null; stage: string | null }[];
+  cases: { id: number; title: string; caseTypeLabel: string; status: string; nextHearingAt: string | null; stage: string | null; folderRel?: string; folderOwn?: boolean }[];
   conversations: { id: number; channel: string; subject: string | null; lastMessageAt: string | null; needsReply: boolean; contact?: { name: string; roleLabel: string; caseTitle: string } | null }[];
   tasks: { id: number; title: string; status: string; followUpAt: string | null }[];
   events: { id: number; title: string; startAt: string; kind: string }[];
@@ -165,7 +165,13 @@ export default function ClientDetail() {
                 <CaseStatusBadge status={k.status} />
                 <span className="badge badge-gray">{k.caseTypeLabel}</span>
                 {k.stage && <span className="text-xs text-slate-500">{k.stage}</span>}
-                {k.nextHearingAt && <span className="ml-auto text-xs text-slate-500">次回 {fmtDateTime(k.nextHearingAt)}</span>}
+                {/* 事件ごとのフォルダ（無ければ依頼者フォルダを使う） */}
+                {k.folderOwn && k.folderRel && (
+                  <span className="min-w-0 truncate text-xs text-slate-500" title={k.folderRel}>
+                    📁 {k.folderRel.split('/').pop()}
+                  </span>
+                )}
+                {k.nextHearingAt && <span className="ml-auto shrink-0 text-xs text-slate-500">次回 {fmtDateTime(k.nextHearingAt)}</span>}
               </li>
             ))}
             {c.cases.length === 0 && <li className="text-slate-500">事件は未登録です</li>}
