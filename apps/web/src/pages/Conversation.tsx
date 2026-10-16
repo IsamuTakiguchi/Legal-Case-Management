@@ -6,6 +6,7 @@ import { api } from '../lib/api';
 import { useDraft, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
 import { ContactLinkForm } from '../lib/ContactLinkForm';
+import { ConversationTaskPanel } from '../lib/ConversationTaskPanel';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { MemoBadge, MemoPanel, MemoSuggestionCard, type MemoSuggestion } from '../lib/Memo';
 import { ClientConfirmPanel } from '../lib/ClientConfirmPanel';
@@ -164,6 +165,8 @@ export default function Conversation() {
   const [showClientConfirm, setShowClientConfirm] = useState(false);
   const [showMemo, setShowMemo] = useState(false);
   const [showExtract, setShowExtract] = useState(false);
+  // 会話からタスクを登録するパネル
+  const [showTasks, setShowTasks] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [linkClientId, setLinkClientId] = useState('');
 
@@ -705,6 +708,9 @@ export default function Conversation() {
             <button className="btn btn-sm" onClick={() => setShowExtract(!showExtract)} title="やり取りから日時を読み取ってカレンダーに登録します。仮押さえ中の候補があれば、その候補で確定できます">
               🗓 会話から予定を登録{(c.pendingHolds ?? 0) > 0 && <span className="badge badge-orange ml-1">仮押さえ {c.pendingHolds}</span>}
             </button>
+            <button className="btn btn-sm" onClick={() => setShowTasks(!showTasks)} title="やり取りから、頼まれたこと・約束したこと・返事を待っていることを読み取ってタスクにします">
+              ✅ 会話からタスクを登録
+            </button>
             <button className="btn btn-sm" onClick={() => setShowStaffAsk(!showStaffAsk)} title="届いた連絡を引用して、Chatwork で担当事務局に確認します">
               💬 事務局に確認
             </button>
@@ -824,6 +830,17 @@ export default function Conversation() {
           )}
           {showStaffAsk && <StaffAskPanel base={`/conversations/${c.id}`} draftKey={`conv:${c.id}`} onClose={() => setShowStaffAsk(false)} onSent={invalidate} />}
           {showSchedule && <SchedulePanel conversationId={c.id} onText={(t) => setText((prev) => (prev ? `${prev}\n\n${t}` : t))} onDone={invalidate} />}
+          {showTasks && (
+            <ConversationTaskPanel
+              conversationId={c.id}
+              onClose={() => setShowTasks(false)}
+              onDone={(text) => {
+                setShowTasks(false);
+                setMsg({ kind: 'ok', text });
+                invalidate();
+              }}
+            />
+          )}
           {showExtract && (
             <ExtractSchedulePanel conversationId={c.id} cases={c.cases} onText={(t) => setText((prev) => (prev ? `${prev}\n\n${t}` : t))} onDone={invalidate} />
           )}

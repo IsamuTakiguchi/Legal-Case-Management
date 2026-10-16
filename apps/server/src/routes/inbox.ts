@@ -20,7 +20,8 @@ import { listTemplates } from '../services/templates.js';
 import { getSetting } from '../services/settings.js';
 import { activeCasesForClient } from '../services/cases.js';
 import { memoSuggestionsFor, openMemos } from '../services/memos.js';
-import { sendMessageSchema, draftRequestSchema, caseContactInputSchema, parseChatworkReactions, staffAskDraftSchema, staffAskSendSchema, type Channel } from '@lcm/shared';
+import { suggestConversationTasks, createConversationTasks } from '../services/conversationTasks.js';
+import { sendMessageSchema, draftRequestSchema, caseContactInputSchema, parseChatworkReactions, staffAskDraftSchema, staffAskSendSchema, TASK_STATUSES, type Channel } from '@lcm/shared';
 
 export const inboxRoutes = new Hono();
 
@@ -131,6 +132,24 @@ inboxRoutes.post('/conversations/:id/link', async (c) => {
 });
 
 /** 会話の相手を法人の担当者に決める（既存の担当者・新しい担当者・会社/代表として） */
+/** 会話のやり取りからタスクの案を作る（画面で直してから登録する） */
+inboxRoutes.post('/conversations/:id/task-suggestions', async (c) => c.json(await suggestConversationTasks(Number(c.req.param('id')))));
+
+/** 会話からタスクを登録する（この会話・依頼者・事件に紐付く） */
+inboxRoutes.post('/conversations/:id/tasks', async (c) => {
+  const body = z
+    .object({
+      tasks: z
+        .array(z.object({ title: z.string().max(200), due: z.string().nullable().optional(), replyBy: z.string().nullable().optional(), status: z.enum(TASK_STATUSES).optional(), note: z.string().max(2000).nullable().optional() }))
+        .min(1)
+        .max(10),
+      caseId: z.number().int().nullable().optional(),
+      syncToChatwork: z.boolean().optional(),
+    })
+    .parse(await c.req.json());
+  return c.json(await createConversationTasks(Number(c.req.param('id')), body));
+});
+
 inboxRoutes.post('/conversations/:id/person', async (c) => {
   const body = z
     .object({ personId: z.number().int().nullable().optional(), newPerson: z.object({ name: z.string().trim().min(1).max(100), title: z.string().trim().max(100).nullable().optional() }).nullable().optional() })

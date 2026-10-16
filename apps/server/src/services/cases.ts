@@ -365,7 +365,7 @@ export async function addCaseNote(input: CaseNoteInput, opts: AddNoteOptions = {
   return row;
 }
 
-const noteTaskSuggestionSchema = z.object({
+export const noteTaskSuggestionSchema = z.object({
   tasks: z
     .array(
       z.object({
