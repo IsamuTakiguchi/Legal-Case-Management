@@ -239,9 +239,13 @@ interface FolderMismatch {
   folderStatus: CaseStatus;
   appStatus: CaseStatus;
   caseCount: number;
+  /** そのフォルダを使っている事件（事件ごとにフォルダがあるとき） */
+  caseTitles?: string[];
 }
 interface FolderRename {
   clientName: string;
+  /** 事件のフォルダだったとき、その事件名 */
+  caseTitle?: string;
   from: string;
   to: string;
   status?: { to: CaseStatus; changed: { title: string; from: CaseStatus; to: CaseStatus }[] };
@@ -269,7 +273,7 @@ function FolderStatusSync() {
       const moved = r.renames.filter((x) => x.status);
       setMsg(
         moved.length
-          ? `OneDrive での移動に合わせて区分を変えました: ${moved.map((x) => `${x.clientName}（${CASE_STATUS_LABEL[x.status!.to]}）`).join('、')}`
+          ? `OneDrive での移動に合わせて区分を変えました: ${moved.map((x) => `${x.clientName}${x.caseTitle ? `「${x.caseTitle}」` : ''}（${CASE_STATUS_LABEL[x.status!.to]}）`).join('、')}`
           : r.renamed
             ? `フォルダ名の変更を ${r.renamed} 件取り込みました（区分の変更はありません）`
             : `OneDrive 側の変更はありませんでした（${r.checked} 件を確認）`,
@@ -308,7 +312,7 @@ function FolderStatusSync() {
           <div className="text-xs text-slate-600">OneDrive の依頼者フォルダが置かれている区分に、事件の区分を合わせます（フォルダは動かしません）。合わせない依頼者はチェックを外してください。</div>
           <ul className="space-y-1">
             {list.map((m) => (
-              <li key={m.clientId} className="flex flex-wrap items-center gap-2">
+              <li key={`${m.clientId}:${m.folder}`} className="flex flex-wrap items-center gap-2">
                 <input
                   type="checkbox"
                   checked={sel.has(m.clientId)}
@@ -323,6 +327,7 @@ function FolderStatusSync() {
                 <Link to={`/clients/${m.clientId}`} className="font-medium hover:underline">
                   {m.clientName}
                 </Link>
+                {m.caseTitles && m.caseTitles.length > 0 && <span className="text-xs text-slate-600">{m.caseTitles.join('、')}</span>}
                 <span className="text-xs text-slate-500">
                   アプリ: <CaseStatusBadge status={m.appStatus} /> → フォルダ: <CaseStatusBadge status={m.folderStatus} />
                 </span>

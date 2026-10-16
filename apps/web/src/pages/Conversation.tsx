@@ -805,7 +805,7 @@ export default function Conversation() {
             </div>
           )}
           {msg && <div className={`fade-in text-sm ${msg.kind === 'ok' ? 'text-green-700' : 'text-red-600'}`}>{msg.text}</div>}
-          {showFiles && c.client && <FilePicker clientId={c.client.id} selectedPaths={driveFiles.map((f) => f.path)} onToggle={(f) => setDriveFiles(driveFiles.some((x) => x.path === f.path) ? driveFiles.filter((x) => x.path !== f.path) : [...driveFiles, f])} />}
+          {showFiles && c.client && <FilePicker clientId={c.client.id} caseId={c.caseId ?? null} selectedPaths={driveFiles.map((f) => f.path)} onToggle={(f) => setDriveFiles(driveFiles.some((x) => x.path === f.path) ? driveFiles.filter((x) => x.path !== f.path) : [...driveFiles, f])} />}
           {storedAtts.length > 0 && showFiles && (
             <div className="text-xs">
               <div className="label">受領済みの添付を送り返す</div>
@@ -995,13 +995,14 @@ function ScheduledList({ items, onChanged }: { items: Scheduled[]; onChanged: ()
   );
 }
 
-function FilePicker({ clientId, selectedPaths, onToggle }: { clientId: number; selectedPaths: string[]; onToggle: (f: DriveFile) => void }) {
-  const docs = useQuery({ queryKey: ['court-docs', clientId], queryFn: () => api.get<DriveFile[]>(`/court/docs/${clientId}`) });
+function FilePicker({ clientId, caseId, selectedPaths, onToggle }: { clientId: number; caseId?: number | null; selectedPaths: string[]; onToggle: (f: DriveFile) => void }) {
+  // 会話に事件が付いていればその事件のフォルダ、無ければ依頼者の事件のフォルダすべて
+  const docs = useQuery({ queryKey: ['court-docs', clientId, caseId ?? 0], queryFn: () => api.get<DriveFile[]>(`/court/docs/${clientId}${caseId ? `?caseId=${caseId}` : ''}`) });
   if (docs.isLoading) return <div className="text-xs text-slate-500">フォルダを読み込み中…</div>;
   if (docs.error) return <div className="text-xs text-red-600">{(docs.error as Error).message}</div>;
   return (
     <div className="max-h-48 overflow-y-auto rounded border border-slate-200 p-2 text-xs">
-      <div className="label">依頼者フォルダのファイル（提出書面・直下）</div>
+      <div className="label">{caseId ? '事件フォルダのファイル（提出書面・直下）' : '依頼者・事件フォルダのファイル（提出書面・直下）'}</div>
       {docs.data?.length === 0 && <div className="text-slate-500">ファイルがありません</div>}
       {docs.data?.map((f) => (
         <label key={f.path} className="flex cursor-pointer items-center gap-2 py-0.5 hover:bg-slate-50">

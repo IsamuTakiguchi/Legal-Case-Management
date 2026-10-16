@@ -189,18 +189,25 @@ export function applyImport(
   let updated = 0;
   let casesCreated = 0;
   const now = new Date().toISOString();
-  for (const r of rows) {
-    if (!r.name.trim()) continue;
+  // 同じ人の別のフォルダ（事件ごとのフォルダ）が同時に来たら、同じ依頼者にまとめる
+  const createdByName = new Map<string, number>();
+  const nameKey = (n: string) => n.normalize('NFKC').replace(/[\s　]+/g, '');
+  for (const r0 of rows) {
+    if (!r0.name.trim()) continue;
+    const r = { ...r0, existingClientId: r0.existingClientId ?? createdByName.get(nameKey(r0.name)) ?? null };
     let clientId: number;
     if (r.existingClientId) {
       const patch: Partial<typeof schema.clients.$inferInsert> = { updatedAt: now };
-      if (r.folderPath) patch.onedriveFolderPath = r.folderPath;
+      // 依頼者フォルダが決まっている人の別のフォルダは、別の事件のフォルダとして扱う（依頼者フォルダは上書きしない）
+      const curFolder = db().select({ path: schema.clients.onedriveFolderPath }).from(schema.clients).where(eq(schema.clients.id, r.existingClientId)).get()?.path?.trim();
+      if (r.folderPath && (!curFolder || !r.caseStatus)) patch.onedriveFolderPath = r.folderPath;
       if (r.chatworkRoomId) patch.chatworkRoomId = r.chatworkRoomId;
       const cur = db().select({ kana: schema.clients.kana }).from(schema.clients).where(eq(schema.clients.id, r.existingClientId)).get();
       if (r.kana && !cur?.kana) patch.kana = r.kana;
       db().update(schema.clients).set(patch).where(eq(schema.clients.id, r.existingClientId)).run();
       clientId = r.existingClientId;
-      updated++;
+      // 同じ回で作った依頼者に別のフォルダを足しただけなら「更新」に数えない
+      if (r0.existingClientId) updated++;
     } else {
       const row = db()
         .insert(schema.clients)
@@ -208,15 +215,35 @@ export function applyImport(
         .returning()
         .get();
       clientId = row.id;
+      createdByName.set(nameKey(r.name), row.id);
       created++;
     }
-    // 区分フォルダから来た候補は、事件がまだ無ければ事件も作る
+    // 区分フォルダから来た候補は、そのフォルダの事件を用意する（フォルダは事件ごと）
     if (r.caseStatus) {
-      const hasCase = db().select({ id: schema.cases.id }).from(schema.cases).where(eq(schema.cases.clientId, clientId)).get();
-      if (!hasCase) {
-        const title = (r.caseTitle ?? '').trim() || `${r.name.trim()} の事件`;
-        db().insert(schema.cases).values({ clientId, title, status: r.caseStatus, caseType: r.caseType ?? guessCaseType(title) }).run();
+      const cases = db().select().from(schema.cases).where(eq(schema.cases.clientId, clientId)).all();
+      const folder = r.folderPath?.trim() || null;
+      const title = (r.caseTitle ?? '').trim() || `${r.name.trim()} の事件`;
+      if (folder && cases.some((k) => k.onedriveFolderPath?.trim() === folder)) {
+        // すでにこのフォルダの事件がある
+      } else if (cases.length === 0) {
+        db().insert(schema.cases).values({ clientId, title, status: r.caseStatus, caseType: r.caseType ?? guessCaseType(title), onedriveFolderPath: folder }).run();
         casesCreated++;
+      } else if (folder) {
+        // フォルダの決まっていない事件で、事件名がフォルダの事件名と合うもの（または事件が 1 件だけでフォルダが依頼者フォルダと同じ）に付ける。無ければ新しい事件にする
+        const want = title.normalize('NFKC').replace(/[\s　]+/g, '');
+        const free = cases.filter((k) => !k.onedriveFolderPath?.trim());
+        const clientFolder = db().select({ path: schema.clients.onedriveFolderPath }).from(schema.clients).where(eq(schema.clients.id, clientId)).get()?.path?.trim();
+        const match =
+          free.find((k) => {
+            const t = k.title.normalize('NFKC').replace(/[\s　]+/g, '');
+            return !!t && (t.includes(want) || want.includes(t));
+          }) ?? (free.length === 1 && cases.length === 1 && clientFolder === folder ? free[0] : undefined);
+        if (match) {
+          db().update(schema.cases).set({ onedriveFolderPath: folder, updatedAt: now }).where(eq(schema.cases.id, match.id)).run();
+        } else {
+          db().insert(schema.cases).values({ clientId, title, status: r.caseStatus, caseType: r.caseType ?? guessCaseType(title), onedriveFolderPath: folder }).run();
+          casesCreated++;
+        }
       }
     }
   }

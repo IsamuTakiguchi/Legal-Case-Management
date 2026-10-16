@@ -190,7 +190,7 @@ export async function prepareHearingNotice(noteId: number, opts: { channel?: Cha
   let docs: HearingNotice['docs'] = [];
   const suggestFrom = new Date(new Date(hearingAt).getTime() - 86400_000).toISOString();
   try {
-    docs = (await listCourtDocs(client.id, { days: 60 })).slice(0, 20).map((x) => ({
+    docs = (await listCourtDocs(client.id, { days: 60, caseId: kase.id })).slice(0, 20).map((x) => ({
       name: x.name,
       path: x.path,
       itemId: x.itemId,

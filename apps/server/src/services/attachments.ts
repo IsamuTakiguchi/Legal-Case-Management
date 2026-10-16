@@ -21,6 +21,27 @@ export function clientFolder(client: { id?: number; name: string; onedriveFolder
   return joinPath(root, rel);
 }
 
+/** 事件のフォルダ（事件ごとにフォルダがあればそれ、無ければ依頼者フォルダ） */
+export function caseFolder(client: { id?: number; name: string; onedriveFolderPath: string | null }, kase?: { onedriveFolderPath: string | null } | null): string {
+  const rel = kase?.onedriveFolderPath?.trim();
+  if (!rel) return clientFolder(client);
+  return rel.startsWith('/') ? rel : joinPath(storage().clientRoot(), rel);
+}
+
+/** その依頼者の事件（別の依頼者の事件なら null） */
+export function caseOfClient(clientId: number | null | undefined, caseId: number | null | undefined): typeof schema.cases.$inferSelect | null {
+  if (!clientId || !caseId) return null;
+  const k = db().select().from(schema.cases).where(eq(schema.cases.id, caseId)).get();
+  return k && k.clientId === clientId ? k : null;
+}
+
+/** 受信したメッセージの事件（メッセージに振り分けた事件 → 会話の事件）。依頼者の事件でなければ null */
+export function messageCase(msg: { caseId: number | null; conversationId: number } | null | undefined, clientId: number | null | undefined): typeof schema.cases.$inferSelect | null {
+  if (!msg || !clientId) return null;
+  const conv = msg.caseId ? null : db().select({ caseId: schema.conversations.caseId }).from(schema.conversations).where(eq(schema.conversations.id, msg.conversationId)).get();
+  return caseOfClient(clientId, msg.caseId ?? conv?.caseId ?? null);
+}
+
 export function unassignedFolder(): string {
   return joinPath(storage().clientRoot(), getSetting('unassigned_folder'));
 }
@@ -170,7 +191,8 @@ export async function processAttachment(attachmentId: number, opts: { force?: bo
       await syncClientFolderName(client.id).catch(() => null);
       client = d.select().from(schema.clients).where(eq(schema.clients.id, client.id)).get() ?? client;
     }
-    const folder = client ? joinPath(clientFolder(client), getSetting('attachment_subfolder')) : unassignedFolder();
+    // 事件ごとにフォルダがあれば、その事件のフォルダに保存する
+    const folder = client ? joinPath(caseFolder(client, messageCase(msg, client.id)), getSetting('attachment_subfolder')) : unassignedFolder();
     // 同じ名前・同じ大きさのファイルが既にあれば使い回す（再取得・再デプロイでの二重保存を防ぐ）
     const stored = await storage().put(folder, filename, data, { dedupe: true });
     d.update(schema.attachments)
@@ -262,7 +284,8 @@ export async function assignAttachment(attachmentId: number, clientId: number): 
   await syncClientFolderName(clientId).catch(() => null);
   const client = d.select().from(schema.clients).where(eq(schema.clients.id, clientId)).get();
   if (!client) throw new Error('依頼者が見つかりません');
-  const target = joinPath(clientFolder(client), getSetting('attachment_subfolder'));
+  const msg = d.select().from(schema.messages).where(eq(schema.messages.id, att.messageId)).get();
+  const target = joinPath(caseFolder(client, messageCase(msg, clientId)), getSetting('attachment_subfolder'));
   if (att.status === 'unassigned' && att.storedPath) {
     const moved = await storage().move({ itemId: att.driveItemId, path: att.storedPath }, target);
     // PDF にまとめた画像は 1 つのファイルを共有しているので、同じ PDF の画像をまとめて付け替える
