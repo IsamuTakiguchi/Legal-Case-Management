@@ -47,6 +47,8 @@ http://www.noboriohji.com/access/`,
   ai_model_light: '',
   share_link_scope: 'anonymous',
   morning_digest_hour: '8',
+  /** 毎朝のダイジェストを Chatwork マイチャットに送るか（'0' で送らない） */
+  morning_digest_enabled: '1',
   web_meeting_provider: 'auto',
   office_location: '登大路総合法律事務所（奈良市登大路町5番地 修徳ビル1階）',
   holidays: '',

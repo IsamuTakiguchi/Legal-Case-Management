@@ -5,6 +5,12 @@ import { todaysEvents } from '../services/court.js';
 import { openAlerts } from '../services/alerts.js';
 import { formatJaDateTime, TASK_STATUS_LABEL, EVENT_KIND_LABEL, WAITING_TASK_STATUSES, type TaskStatus, type EventKind } from '@lcm/shared';
 import { getSetting, getSettingInt } from '../services/settings.js';
+import { isConfigured } from '../config.js';
+
+/** 毎朝のダイジェストを自動で送るか（Chatwork 設定済みで、設定でオフにしていないとき）。「今すぐ送って確認」はオフでも送れる */
+export function morningDigestEnabled(): boolean {
+  return isConfigured('chatwork') && getSetting('morning_digest_enabled') !== '0';
+}
 
 /** 毎朝のダイジェストを Chatwork マイチャットへ */
 export async function morningDigest(): Promise<string> {

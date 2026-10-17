@@ -345,6 +345,18 @@ export default function Settings() {
       qc.invalidateQueries({ queryKey: ['settings'] });
     },
   });
+  // 朝のダイジェストの自動送信のオン・オフ（押したらすぐ保存する）
+  const digestOn = (form.morning_digest_enabled ?? '1') !== '0';
+  const toggleDigest = useMutation({
+    mutationFn: (on: boolean) => api.put('/settings', { morning_digest_enabled: on ? '1' : '0' }),
+    // 押したらすぐ表示を切り替え、保存に失敗したら戻す
+    onMutate: (on) => setForm((f) => ({ ...f, morning_digest_enabled: on ? '1' : '0' })),
+    onError: (_e, on) => setForm((f) => ({ ...f, morning_digest_enabled: on ? '0' : '1' })),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['settings'] });
+      qc.invalidateQueries({ queryKey: ['status'] });
+    },
+  });
   const runJob = useMutation({ mutationFn: (name: string) => api.post<{ ok: boolean; summary?: string; error?: string }>(`/jobs/${name}/run`), onSuccess: () => qc.invalidateQueries({ queryKey: ['status'] }) });
   const disconnect = useMutation({ mutationFn: (p: string) => api.post(`/auth/${p}/disconnect`), onSuccess: () => qc.invalidateQueries({ queryKey: ['status'] }) });
   const [msg, setMsg] = useState('');
@@ -726,6 +738,15 @@ export default function Settings() {
       <section className="card">
         <h2 className="mb-1 font-semibold">通知の文面</h2>
         <p className="mb-3 text-xs text-slate-500">Chatwork マイチャットに届く朝のダイジェストと要確認の通知の文面です。返信の催促文や期日報告は文体エンジンが作るため、ここでは変えません。</p>
+        {/* 朝のダイジェストの自動送信のオン・オフ（押したらすぐ保存） */}
+        <label className="mb-3 flex items-start gap-2 rounded border border-slate-200 bg-slate-50 p-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={digestOn} disabled={toggleDigest.isPending} onChange={(e) => toggleDigest.mutate(e.target.checked)} aria-label="毎朝のダイジェストを送る" />
+          <span>
+            毎朝 {form.morning_digest_hour || '8'} 時に、まとめ（今日の予定・未返信・返信待ち・要確認）を Chatwork マイチャットに送る
+            <span className={`ml-2 badge ${digestOn ? 'badge-line' : 'badge-gray'}`}>{digestOn ? 'オン' : 'オフ'}</span>
+            <span className="block text-xs text-slate-500">オフにしても、下の「ダイジェストを今すぐ送って確認」では送れます。要確認の通知（随時）は止まりません。</span>
+          </span>
+        </label>
         <div className="grid gap-3 md:grid-cols-2">
           {NOTIFY_FIELDS.map((f) => (
             <div key={f.key} className={f.multiline ? 'md:col-span-2' : ''}>
