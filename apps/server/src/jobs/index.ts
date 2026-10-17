@@ -4,7 +4,7 @@ import { logger } from '../logger.js';
 import { env, isConfigured } from '../config.js';
 import { pollGmail } from './gmailPoll.js';
 import { pollChatwork } from './chatworkPoll.js';
-import { morningDigest } from './digest.js';
+import { morningDigest, morningDigestEnabled } from './digest.js';
 import { syncCalendar, checkPostEvents } from '../services/court.js';
 import { checkOverdueWaitingTasks, importChatworkTasks } from '../services/tasks.js';
 import { checkMemoReviews } from '../services/memos.js';
@@ -91,7 +91,7 @@ export const JOBS: JobDef[] = [
   { name: 'notifyAlerts', label: 'アラート通知', cron: '15,45 * * * *', run: async () => ({ notified: await flushAlertNotifications() }), enabled: () => isConfigured('chatwork') },
   // Chatwork のタスクは 10 分ごとに自動で取り込む（画面のボタンを押さなくてよい）
   { name: 'chatworkTasks', label: 'Chatwork タスクの自動取込（10 分ごと）', cron: '*/10 * * * *', run: importChatworkTasks, enabled: () => isConfigured('chatwork'), quiet: true },
-  { name: 'morningDigest', label: '朝のダイジェスト', cron: `0 ${getSettingInt('morning_digest_hour', 8) - 9 < 0 ? getSettingInt('morning_digest_hour', 8) + 15 : getSettingInt('morning_digest_hour', 8) - 9} * * *`, run: morningDigest, enabled: () => isConfigured('chatwork') },
+  { name: 'morningDigest', label: '朝のダイジェスト', cron: `0 ${getSettingInt('morning_digest_hour', 8) - 9 < 0 ? getSettingInt('morning_digest_hour', 8) + 15 : getSettingInt('morning_digest_hour', 8) - 9} * * *`, run: morningDigest, enabled: morningDigestEnabled },
   { name: 'formsIndex', label: '書式の索引化', cron: '30 17 * * *', run: async () => { const r = await resolveAllClientFolders().catch(() => null); const f = await indexForms(); return { folders: r, forms: f }; }, enabled: () => true },
   { name: 'caseSummary', label: '事件サマリーの週次更新', cron: '0 20 * * 0', run: async () => { let n = 0; for (const c of casesNeedingSummary(7)) { await generateCaseSummary(c.id); n++; } return { updated: n }; }, enabled: () => isConfigured('anthropic') },
   { name: 'styleProfiles', label: '文体プロファイルの自動更新（チャネル別）', cron: '30 19 * * *', run: refreshStyleProfiles, enabled: () => isConfigured('anthropic') },
