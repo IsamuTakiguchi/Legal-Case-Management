@@ -21,6 +21,7 @@ import { getSetting } from '../services/settings.js';
 import { activeCasesForClient } from '../services/cases.js';
 import { memoSuggestionsFor, openMemos } from '../services/memos.js';
 import { suggestConversationTasks, createConversationTasks } from '../services/conversationTasks.js';
+import { clientSendTargets, startClientConversation, staffSendTargets, startRoomConversation } from '../services/newMessage.js';
 import { sendMessageSchema, draftRequestSchema, caseContactInputSchema, parseChatworkReactions, staffAskDraftSchema, staffAskSendSchema, TASK_STATUSES, type Channel } from '@lcm/shared';
 
 export const inboxRoutes = new Hono();
@@ -132,6 +133,33 @@ inboxRoutes.post('/conversations/:id/link', async (c) => {
 });
 
 /** 会話の相手を法人の担当者に決める（既存の担当者・新しい担当者・会社/代表として） */
+// ---- こちらから新しく送る（依頼者・事務局） ----
+
+/** 依頼者に送れる宛先（チャネル・担当者や窓口）と、送れない理由 */
+inboxRoutes.get('/clients/:id/send-targets', (c) => c.json(clientSendTargets(Number(c.req.param('id')))));
+
+/** 依頼者との会話を開く（無ければ作る）。メールは件名を付けた新しいメール、または前のメールの続き */
+inboxRoutes.post('/clients/:id/start-conversation', async (c) => {
+  const body = z
+    .object({
+      channel: z.enum(['gmail', 'line', 'chatwork']),
+      personId: z.number().int().nullable().optional(),
+      subject: z.string().max(200).nullable().optional(),
+      threadConversationId: z.number().int().nullable().optional(),
+    })
+    .parse(await c.req.json());
+  return c.json(startClientConversation(Number(c.req.param('id')), body));
+});
+
+/** 事務局に送る宛先（Chatwork のルームと事務局メンバー） */
+inboxRoutes.get('/staff/send-targets', async (c) => c.json(await staffSendTargets()));
+
+/** Chatwork のルームとの会話を開く（無ければ作る） */
+inboxRoutes.post('/chatwork/rooms/:roomId/start-conversation', async (c) => {
+  const body = z.object({ name: z.string().max(200).nullable().optional() }).parse(await c.req.json().catch(() => ({})));
+  return c.json(startRoomConversation(Number(c.req.param('roomId')), body.name ?? null));
+});
+
 /** 会話のやり取りからタスクの案を作る（画面で直してから登録する） */
 inboxRoutes.post('/conversations/:id/task-suggestions', async (c) => c.json(await suggestConversationTasks(Number(c.req.param('id')))));
 
