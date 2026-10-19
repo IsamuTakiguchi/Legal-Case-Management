@@ -4,7 +4,7 @@ import { familyName, OPEN_CASE_STATUSES, type CaseNoteInput } from '@lcm/shared'
 import { addCaseNote } from './cases.js';
 import { updateTask } from './tasks.js';
 import { logger } from '../logger.js';
-import { extractPhones, digitsOf } from './phoneMessage.js';
+import { extractPhones, digitsOf, extractCaller } from './phoneMessage.js';
 
 export { looksLikePhoneMessage, extractPhones } from './phoneMessage.js';
 
@@ -27,6 +27,8 @@ export interface CallbackContext {
   phones: { number: string; who: string | null; clientId: number | null; caseId: number | null }[];
   /** 電話をくれた人の見当（番号の持ち主など） */
   callerName: string | null;
+  /** 折り返し先の番号（電話をくれた人の行の近くに書かれたもの。無ければ最初の番号） */
+  callerPhone: string | null;
   clientId: number | null;
   clientName: string | null;
   /** 記録を付ける事件の候補（見当の付く順） */
@@ -110,7 +112,12 @@ export function callbackContext(taskId: number): CallbackContext {
     .filter((x): x is NonNullable<typeof x> => !!x);
   const clientId = t.clientId ?? clientIds[0] ?? null;
   const client = clientId ? d.select().from(schema.clients).where(eq(schema.clients.id, clientId)).get() : null;
-  const caller = phones.find((p) => p.who)?.who ?? null;
+  // 折り返し先: 伝言に書かれた名前（「東京海上日動　ひめのさん」）を優先し、番号の持ち主として登録済みの名前がそれを含むなら登録の名前
+  // （「山田様」と「山田 花子（依頼者）」なら「山田 花子」）。番号は、その人の行の近くに書かれたもの
+  const written = extractCaller(text);
+  const registered = phones.find((p) => p.who)?.who?.replace(/（[^（）]*）$/, '') ?? null;
+  const squash = (s: string) => s.normalize('NFKC').replace(/[\s　]+/g, '');
+  const callerName = written && registered && squash(registered).includes(squash(written.name)) ? registered : (written?.name ?? registered);
   return {
     taskId: t.id,
     title: t.title,
@@ -118,8 +125,8 @@ export function callbackContext(taskId: number): CallbackContext {
     from: t.chatworkAssignedByName ?? null,
     receivedAt: t.createdAt,
     phones,
-    // 「山田 花子（依頼者）」→「山田 花子」
-    callerName: caller ? caller.replace(/（[^（）]*）$/, '') : null,
+    callerName,
+    callerPhone: written?.phone ?? phones[0]?.number ?? null,
     clientId: client?.id ?? null,
     clientName: client?.name ?? null,
     cases,

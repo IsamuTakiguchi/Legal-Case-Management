@@ -13,6 +13,7 @@ interface CallbackCtx {
   receivedAt: string;
   phones: { number: string; who: string | null }[];
   callerName: string | null;
+  callerPhone?: string | null;
   clientName: string | null;
   cases: { id: number; title: string; clientName: string | null }[];
   defaultCaseId: number | null;
@@ -88,7 +89,7 @@ export function CallbackPanel({ taskId, onClose, onSaved }: { taskId: number; on
           </label>
           <NoteComposer
             caseId={Number(caseId) || 0}
-            callback={{ taskId, context: d.message, counterpart: d.callerName ?? d.clientName, phone: d.phones[0]?.number ?? null }}
+            callback={{ taskId, context: d.message, counterpart: d.callerName ?? d.clientName, phone: d.callerPhone ?? d.phones[0]?.number ?? null }}
             onSaved={(_note, extra) => onSaved(extra?.taskStatus === 'done' ? '折り返しを記録し、タスクを完了にしました' : '折り返しを記録しました')}
           />
         </>

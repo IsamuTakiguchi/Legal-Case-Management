@@ -19,6 +19,7 @@ vi.mock('../integrations/anthropic.js', async (orig) => ({
 
 const { openTestDatabase, closeDatabase, db, schema } = await import('../db/index.js');
 const { looksLikePhoneMessage, extractPhones, callbackContext, saveCallbackNote } = await import('../services/taskCallback.js');
+const { extractCaller } = await import('../services/phoneMessage.js');
 const { structureNote } = await import('../services/cases.js');
 const { listTasks } = await import('../services/tasks.js');
 const { eq } = await import('drizzle-orm');
@@ -41,6 +42,39 @@ describe('電話の伝言を読み取る', () => {
       '03(1234)5678',
       '+81 90 1111 2222',
     ]);
+  });
+});
+
+describe('伝言から折り返し先を読み取る', () => {
+  const memo = 'R8.10.19　9：37\n東京海上日動　ひめのさん\n0742-35-8061\n奥戸正勝さんの件\n進捗状況をお伺いしたいです。\n\n→折り返しお願いします。';
+
+  it('「会社　名前さん」の行と、その下の番号を折り返し先にする（「◯◯さんの件」は用件なので名前にしない）', () => {
+    expect(extractCaller(memo)).toEqual({ name: '東京海上日動　ひめの', phone: '0742-35-8061' });
+  });
+
+  it('いろいろな書き方', () => {
+    expect(extractCaller('山田様よりお電話がありました。\n和解の件で、折り返しをお願いしたいとのことです。\nTEL 090-1234-5678')).toEqual({ name: '山田', phone: '090-1234-5678' });
+    expect(extractCaller('東京海上日動のひめのさんから電話（0742-35-8061）。奥戸さんの件')).toEqual({ name: '東京海上日動のひめの', phone: '0742-35-8061' });
+    expect(extractCaller('相手方代理人 佐藤先生\n06-1111-2222\n山田さんの件で折り返し希望')).toEqual({ name: '相手方代理人 佐藤', phone: '06-1111-2222' });
+    // 番号が 2 つあれば、その人の近くの番号
+    expect(extractCaller('奥戸さんの件\n事務所 03-0000-1111\n\nあいおい　田中さん\n携帯 090-2222-3333')).toEqual({ name: 'あいおい　田中', phone: '090-2222-3333' });
+    expect(extractCaller('書類の確認をお願いします')).toBeNull();
+  });
+
+  it('折り返し電話の画面に、伝言の折り返し先（名前・番号）を最初から入れる。事件は用件の依頼者', () => {
+    const client = db().insert(schema.clients).values({ name: '奥戸 正勝' }).returning().get();
+    const kase = db().insert(schema.cases).values({ clientId: client.id, title: '奥戸 交通事故', status: 'active' }).returning().get();
+    const task = db().insert(schema.tasks).values({ title: 'R8.10.19　9：37', note: memo, status: 'open', chatworkAssignedByName: '中村 事務' }).returning().get();
+    const ctx = callbackContext(task.id);
+    expect(ctx.callerName).toBe('東京海上日動　ひめの');
+    expect(ctx.callerPhone).toBe('0742-35-8061');
+    expect(ctx.clientName).toBe('奥戸 正勝');
+    expect(ctx.defaultCaseId).toBe(kase.id);
+    // 番号が複数あれば、折り返し先の人の近くの番号（最初の番号とは限らない）
+    const t2 = db().insert(schema.tasks).values({ title: '伝言', note: '奥戸正勝さんの件\n事務所 03-0000-1111\n\nあいおい　田中さん\n携帯 090-2222-3333', status: 'open' }).returning().get();
+    const c2 = callbackContext(t2.id);
+    expect(c2.phones.map((p) => p.number)).toEqual(['03-0000-1111', '090-2222-3333']);
+    expect(c2).toMatchObject({ callerName: 'あいおい　田中', callerPhone: '090-2222-3333' });
   });
 });
 
