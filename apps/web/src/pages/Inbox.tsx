@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { StaleUnanswered } from '../lib/StaleUnanswered';
 import { Link, useSearchParams } from 'react-router-dom';
+import { NewMessagePanel } from '../lib/NewMessagePanel';
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { LongText } from '../lib/LongText';
@@ -29,6 +30,8 @@ interface ConversationListItem {
 export default function Inbox() {
   const [params, setParams] = useSearchParams();
   const [q, setQ] = useState(params.get('q') ?? '');
+  // こちらから新しく送る（依頼者・事務局）パネル
+  const [composing, setComposing] = useState(false);
   // 受信箱の既定は「相手からの連絡で終わっている会話」だけ。自分が送って終わったものは出さない
   const filter = {
     channel: params.get('channel') ?? '',
@@ -96,6 +99,9 @@ export default function Inbox() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-xl font-bold">受信箱</h1>
+        <button className="btn btn-primary btn-sm" onClick={() => setComposing(!composing)} title="返信ではなく、こちらから依頼者（LINE・メール・Chatwork）や事務局（Chatwork）に送ります">
+          ✉ 新しく送る
+        </button>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <select className="input w-auto" value={filter.channel} onChange={(e) => set('channel', e.target.value)}>
             <option value="">全チャネル</option>
@@ -128,6 +134,7 @@ export default function Inbox() {
           </form>
         </div>
       </div>
+      {composing && <NewMessagePanel onClose={() => setComposing(false)} />}
       {searching && (
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
           <span>

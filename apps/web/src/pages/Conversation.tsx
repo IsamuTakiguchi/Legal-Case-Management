@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { mergedLabel, type MergeRef } from '../lib/mergedAttachment';
 import { api } from '../lib/api';
 import { useDraft, DraftHint } from '../lib/draft';
@@ -181,6 +181,15 @@ export default function Conversation() {
   });
   // 入力途中の返信本文・指示はこの端末に自動保存し、画面を離れても消えないようにする
   const textDraft = useDraft(id ? `conv:${id}:text` : null, text, setText);
+  // 「新しく送る」で事務局の宛先を選んで来たら、本文の先頭に Chatwork の宛先（To）を入れておく
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    const toId = searchParams.get('to');
+    if (!toId || !/^\d+$/.test(toId)) return;
+    const toName = searchParams.get('toName') ?? '';
+    setText((prev) => (prev.includes(`[To:${toId}]`) ? prev : `[To:${toId}] ${toName}さん\n${prev}`));
+    setSearchParams({}, { replace: true });
+  }, [searchParams, setSearchParams]);
   const instructionDraft = useDraft(id ? `conv:${id}:instruction` : null, instruction, setInstruction);
 
   const invalidate = () => {
@@ -617,12 +626,22 @@ export default function Conversation() {
             )}
             </Fragment>
           ))}
-          {c.messages.length === 0 && <div className="text-sm text-slate-500">メッセージはありません</div>}
+          {c.messages.length === 0 && <div className="text-sm text-slate-500">まだやり取りはありません。下の欄で書いて送ると、ここに残ります。</div>}
         </div>
 
         {c.scheduled.length > 0 && <ScheduledList items={c.scheduled} onChanged={invalidate} />}
 
         <div className="card space-y-3">
+          {/* 送り先を、書く前に分かるように出す（こちらから新しく送るときに特に） */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-600">
+            <span className="font-medium text-slate-700">宛先:</span>
+            <span>
+              {channelLabel(c.channel)}
+              {c.clientPerson ? `　${c.clientPerson.name}${c.clientPerson.title ? `（${c.clientPerson.title}）` : ''}` : `　${name}`}
+            </span>
+            {c.channel === 'gmail' && c.counterpartAddress && <span className="text-slate-500">{c.counterpartAddress}</span>}
+            {c.channel === 'gmail' && <span className="text-slate-500">件名: {c.subject || '（なし）'}</span>}
+          </div>
           {(replyTo || quoteOf) && (
             <div className="fade-in space-y-1 text-xs">
               {replyTo && (

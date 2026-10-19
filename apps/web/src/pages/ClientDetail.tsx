@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams, useNavigate } from 'react-router-dom';
+import { NewMessagePanel } from '../lib/NewMessagePanel';
 import { api } from '../lib/api';
 import { useDraftRecord, clearDraft, DraftHint } from '../lib/draft';
 import { channelBadge, channelLabel, fmtDateTime, fmtBytes } from '../lib/format';
@@ -31,6 +32,8 @@ export default function ClientDetail() {
   const [sub, setSub] = useState('');
   // 依頼者フォルダの指定し直し・名前変更の欄
   const [folderEdit, setFolderEdit] = useState(false);
+  // こちらから新しく送るパネル
+  const [composing, setComposing] = useState(false);
   const d = useQuery({ queryKey: ['client', id], queryFn: () => api.get<Detail>(`/clients/${id}`) });
   const files = useQuery({ queryKey: ['client-files', id, sub], queryFn: () => api.get<{ folder: string; exists?: boolean; items: { name: string; path: string; isFolder: boolean; size?: number; modifiedAt?: string; webUrl?: string }[] }>(`/clients/${id}/files?path=${encodeURIComponent(sub)}`), retry: false });
   const classify = useMutation({
@@ -178,7 +181,17 @@ export default function ClientDetail() {
           </ul>
         </section>
         <section className="card">
-          <h2 className="mb-2 font-semibold">会話</h2>
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <h2 className="font-semibold">会話</h2>
+            <button className="btn btn-primary btn-sm ml-auto" onClick={() => setComposing(!composing)} title="この依頼者に、こちらから LINE・メール・Chatwork で送ります">
+              ✉ この依頼者に送る
+            </button>
+          </div>
+          {composing && (
+            <div className="mb-2">
+              <NewMessagePanel initialClientId={c.id} onClose={() => setComposing(false)} />
+            </div>
+          )}
           <ul className="space-y-1 text-sm">
             {c.conversations.map((v) => (
               <li key={v.id} className="flex items-center gap-2">
