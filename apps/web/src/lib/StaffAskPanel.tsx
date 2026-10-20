@@ -8,7 +8,8 @@ interface StaffAskCtx {
   subject: { kind: 'message' | 'note' | 'task'; head: string; body: string; link: string } | null;
   clientName: string | null;
   caseTitle: string | null;
-  staff: { id: number; name: string; chatworkAccountId: number | null }[];
+  /** roomId はその人に送るルーム（「指示→横井」など。無ければ全員向けの伝言帳） */
+  staff: { id: number; name: string; chatworkAccountId: number | null; roomId?: number | null }[];
   defaultStaffId: number | null;
   rooms: { roomId: number; name: string; kind: string }[];
   defaultRoomId: number | null;
@@ -35,7 +36,7 @@ function replyLabel(r: ReplyTarget): string {
   return `【${REPLY_REASON_LABEL[r.reason]}】${r.senderName ?? ''}${when ? `（${when}）` : ''}「${r.excerpt.slice(0, 40)}」`;
 }
 
-const ROOM_KIND_LABEL: Record<string, string> = { case: '事件専用', client: '依頼者', my: 'マイチャット', other: '' };
+const ROOM_KIND_LABEL: Record<string, string> = { staff: '事務局', case: '事件専用', client: '依頼者', my: 'マイチャット', other: '' };
 const QUOTE_LABEL: Record<string, string> = { message: '届いた連絡', note: '記録', task: 'タスクの内容' };
 
 /**
@@ -123,7 +124,16 @@ export function StaffAskPanel({ base, draftKey, onClose, onSent }: { base: strin
             {/* スマホでは担当・送り先を 1 行ずつ幅いっぱいに（長いルーム名で横にはみ出さないように） */}
             <label className="flex w-full items-center gap-1 sm:w-auto">
               <span className="shrink-0 whitespace-nowrap">担当</span>
-              <select className="input w-full min-w-0 sm:w-auto" value={staffId} onChange={(e) => setStaffId(e.target.value)}>
+              <select
+                className="input w-full min-w-0 sm:w-auto"
+                value={staffId}
+                onChange={(e) => {
+                  setStaffId(e.target.value);
+                  // 担当を変えたら、送り先もその人のルーム（指示ルーム・伝言帳）にする（返信のときはそのまま）
+                  const room = d.staff.find((s) => String(s.id) === e.target.value)?.roomId;
+                  if (room && !reply && d.rooms.some((r) => r.roomId === room)) setRoomId(String(room));
+                }}
+              >
                 <option value="">（宛先を付けない）</option>
                 {d.staff.map((s) => (
                   <option key={s.id} value={s.id} disabled={!s.chatworkAccountId}>

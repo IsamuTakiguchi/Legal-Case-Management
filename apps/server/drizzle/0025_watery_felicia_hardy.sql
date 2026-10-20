@@ -1,0 +1,1 @@
+ALTER TABLE `staff_members` ADD `chatwork_room_id` integer;

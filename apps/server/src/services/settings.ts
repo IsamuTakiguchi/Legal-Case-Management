@@ -47,6 +47,8 @@ http://www.noboriohji.com/access/`,
   ai_model_light: '',
   share_link_scope: 'anonymous',
   morning_digest_hour: '8',
+  /** 事務局に報告・確認を送る既定の Chatwork ルーム（「瀧口弁護士伝言帳」など）。空なら名前に「伝言帳」を含むルーム */
+  staff_room_id: '',
   /** 毎朝のダイジェストを Chatwork マイチャットに送るか（'0' で送らない） */
   morning_digest_enabled: '1',
   web_meeting_provider: 'auto',

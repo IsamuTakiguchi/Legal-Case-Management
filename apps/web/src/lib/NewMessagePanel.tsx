@@ -15,7 +15,8 @@ interface ClientTargets {
 
 interface StaffTargets {
   configured: boolean;
-  staff: { id: number; name: string; chatworkAccountId: number | null }[];
+  /** roomId はその人に送るルーム（指示ルーム、無ければ伝言帳） */
+  staff: { id: number; name: string; chatworkAccountId: number | null; roomId?: number | null }[];
   rooms: { roomId: number; name: string; type: string }[];
   defaultRoomId: number | null;
 }
@@ -161,7 +162,29 @@ export function NewMessagePanel({ initialClientId, onClose }: { initialClientId?
           {staff.data?.configured && (
             <>
               <label className="flex flex-wrap items-center gap-2">
-                <span className="shrink-0 font-medium">① ルーム</span>
+                <span className="shrink-0 font-medium">① 誰に（To）</span>
+                <select
+                  className="input w-full min-w-0 sm:w-auto"
+                  value={staffId}
+                  onChange={(e) => {
+                    setStaffId(e.target.value);
+                    // 宛先を選んだら、ルームもその人の指示ルーム（無ければ伝言帳）にする
+                    const room = staff.data?.staff.find((s) => String(s.id) === e.target.value)?.roomId ?? staff.data?.defaultRoomId;
+                    if (room) setRoomId(String(room));
+                  }}
+                  aria-label="宛先の事務局メンバー"
+                >
+                  <option value="">（付けない）</option>
+                  {staff.data.staff.map((s) => (
+                    <option key={s.id} value={s.id} disabled={!s.chatworkAccountId}>
+                      {s.name}
+                      {s.chatworkAccountId ? '' : '（Chatwork 未登録）'}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-wrap items-center gap-2">
+                <span className="shrink-0 font-medium">② ルーム</span>
                 <select className="input w-full min-w-0 sm:w-auto sm:flex-1" value={roomId} onChange={(e) => setRoomId(e.target.value)} aria-label="送るルーム">
                   <option value="">（選んでください）</option>
                   {staff.data.rooms.map((r) => (
@@ -172,19 +195,7 @@ export function NewMessagePanel({ initialClientId, onClose }: { initialClientId?
                   ))}
                 </select>
               </label>
-              <label className="flex flex-wrap items-center gap-2">
-                <span className="shrink-0 font-medium">② 宛先（To）</span>
-                <select className="input w-full min-w-0 sm:w-auto" value={staffId} onChange={(e) => setStaffId(e.target.value)} aria-label="宛先の事務局メンバー">
-                  <option value="">（付けない）</option>
-                  {staff.data.staff.map((s) => (
-                    <option key={s.id} value={s.id} disabled={!s.chatworkAccountId}>
-                      {s.name}
-                      {s.chatworkAccountId ? '' : '（Chatwork 未登録）'}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="text-xs text-slate-500">宛先を選ぶと、本文の先頭に「To: ◯◯さん」を入れておきます。依頼者や記録・タスクについての確認なら、その画面の「事務局に確認」を使うと内容を引用して送れます。</div>
+              <div className="text-xs text-slate-500">「誰に」で人を選ぶと、ルームはその人の指示ルーム（無ければ伝言帳）になり、本文の先頭に「To: ◯◯さん」を入れておきます。依頼者や記録・タスクについての確認なら、その画面の「事務局に確認」を使うと内容を引用して送れます。</div>
               <button className="btn btn-primary" disabled={!roomId || startStaff.isPending} onClick={() => startStaff.mutate()}>
                 {startStaff.isPending ? '開いています…' : 'このルームで書く →'}
               </button>
