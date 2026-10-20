@@ -176,6 +176,13 @@
       "when": 1792138468160,
       "tag": "0024_serious_speed_demon",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1792461142762,
+      "tag": "0025_watery_felicia_hardy",
+      "breakpoints": true
     }
   ]
 }

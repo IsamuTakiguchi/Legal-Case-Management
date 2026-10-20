@@ -4,7 +4,7 @@ import * as cw from '../channels/chatwork.js';
 import { isConfigured } from '../config.js';
 import { familyName, OPEN_CASE_STATUSES } from '@lcm/shared';
 import { logger } from '../logger.js';
-import { getSyncState, setSyncState } from './settings.js';
+import { getSetting, getSyncState, setSyncState } from './settings.js';
 
 /**
  * 事務局メンバー。Chatwork は依頼者ではなく内部の事務局からの伝言が中心なので、
@@ -17,6 +17,31 @@ export function listStaff(opts: { includeInactive?: boolean } = {}): StaffRow[] 
   return opts.includeInactive ? rows : rows.filter((r) => r.active);
 }
 
+/**
+ * 事務局に報告・確認を送るルーム。
+ * - 既定（全員向け）: 設定 staff_room_id、無ければ名前に「伝言帳」を含むルーム（「瀧口弁護士伝言帳」）
+ * - 人ごと: 事務局メンバーに指定したルーム、無ければ「→ 姓」を名前に含むルーム（「指示→横井」）、それも無ければ既定
+ * guessed は名前から見当を付けたもの（設定画面で確かめられるように）
+ */
+export function staffRooms(rooms: { room_id: number; name: string; type?: string }[], staff: Pick<StaffRow, 'id' | 'name' | 'chatworkRoomId'>[]) {
+  const norm = (s: string) => s.normalize('NFKC').replace(/[\s　]+/g, '');
+  const live = rooms.filter((r) => r.type !== 'my');
+  const setting = Number(getSetting('staff_room_id')) || null;
+  const byName = live.find((r) => norm(r.name).includes('伝言帳'));
+  const general = setting ? { roomId: setting, guessed: false } : byName ? { roomId: byName.room_id, guessed: true } : null;
+  const byStaff = new Map<number, { roomId: number; guessed: boolean; own: boolean } | null>();
+  for (const s of staff) {
+    if (s.chatworkRoomId) {
+      byStaff.set(s.id, { roomId: s.chatworkRoomId, guessed: false, own: true });
+      continue;
+    }
+    const fam = norm(familyName(s.name) || s.name);
+    const hit = fam ? live.find((r) => /[→⇒>＞]/.test(r.name.normalize('NFKC')) && norm(r.name).split(/[→⇒>＞]/).slice(1).join('').includes(fam)) : undefined;
+    byStaff.set(s.id, hit ? { roomId: hit.room_id, guessed: true, own: true } : general ? { ...general, own: false } : null);
+  }
+  return { general, byStaff };
+}
+
 export function createStaff(input: { name: string; kana?: string | null; chatworkAccountId?: number | null; note?: string | null }): StaffRow {
   return db()
     .insert(schema.staffMembers)
@@ -25,11 +50,12 @@ export function createStaff(input: { name: string; kana?: string | null; chatwor
     .get();
 }
 
-export function updateStaff(id: number, patch: { name?: string; kana?: string | null; chatworkAccountId?: number | null; note?: string | null; active?: boolean }): StaffRow {
+export function updateStaff(id: number, patch: { name?: string; kana?: string | null; chatworkAccountId?: number | null; chatworkRoomId?: number | null; note?: string | null; active?: boolean }): StaffRow {
   const set: Partial<typeof schema.staffMembers.$inferInsert> = {};
   if (patch.name !== undefined) set.name = patch.name.trim();
   if (patch.kana !== undefined) set.kana = patch.kana?.trim() || null;
   if (patch.chatworkAccountId !== undefined) set.chatworkAccountId = patch.chatworkAccountId;
+  if (patch.chatworkRoomId !== undefined) set.chatworkRoomId = patch.chatworkRoomId;
   if (patch.note !== undefined) set.note = patch.note?.trim() || null;
   if (patch.active !== undefined) set.active = patch.active;
   db().update(schema.staffMembers).set(set).where(eq(schema.staffMembers.id, id)).run();

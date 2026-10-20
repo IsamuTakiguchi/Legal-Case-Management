@@ -3,6 +3,7 @@ import { StaleUnanswered } from '../lib/StaleUnanswered';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AI_MODELS, aiModelLabel } from '@lcm/shared';
 import { api } from '../lib/api';
+import { RoomPicker } from '../lib/RoomPicker';
 import { useDraft, useDraftRecord, DraftHint } from '../lib/draft';
 import { fmtDateTime } from '../lib/format';
 import { badgeSupported, notificationPermission, requestNotificationPermission } from '../lib/badge';
@@ -339,7 +340,8 @@ export default function Settings() {
   // 保存前の変更はこの端末に自動保存する（画面を離れても消えない）
   const formDraft = useDraftRecord('settings:form', form, setForm, settings.data);
   const save = useMutation({
-    mutationFn: () => api.put('/settings', form),
+    // 事務局の既定ルームは「事務局メンバー」の欄で選んだときにすぐ保存するので、ここでは送らない（古い値で上書きしないため）
+    mutationFn: () => api.put('/settings', Object.fromEntries(Object.entries(form).filter(([k]) => k !== 'staff_room_id'))),
     onSuccess: () => {
       formDraft.clear();
       qc.invalidateQueries({ queryKey: ['settings'] });
@@ -1105,7 +1107,20 @@ function Conn({ ok, label, detail, children }: { ok: boolean; label: string; det
 /** 事務局メンバー（Chatwork で伝言をくれる内部スタッフ） */
 function StaffSection() {
   const qc = useQueryClient();
-  const list = useQuery({ queryKey: ['staff', 'all'], queryFn: () => api.get<{ id: number; name: string; kana: string | null; chatworkAccountId: number | null; note: string | null; active: boolean }[]>('/staff?all=1') });
+  const list = useQuery({ queryKey: ['staff', 'all'], queryFn: () => api.get<{ id: number; name: string; kana: string | null; chatworkAccountId: number | null; chatworkRoomId: number | null; note: string | null; active: boolean }[]>('/staff?all=1') });
+  // 事務局に送るルーム（全員向けの伝言帳と、人ごとの指示ルーム。未指定ならルーム名から見当を付ける）
+  const staffRooms = useQuery({
+    queryKey: ['staff', 'rooms'],
+    queryFn: () => api.get<{ general: { roomId: number; name: string | null; guessed: boolean } | null; staff: { id: number; roomId: number | null; name: string | null; guessed: boolean; own: boolean }[] }>('/staff/rooms'),
+  });
+  const settingsQ = useQuery({ queryKey: ['settings'], queryFn: () => api.get<Record<string, string>>('/settings') });
+  const setGeneralRoom = useMutation({
+    mutationFn: (v: string) => api.put('/settings', { staff_room_id: v }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['settings'] });
+      qc.invalidateQueries({ queryKey: ['staff'] });
+    },
+  });
   const [loadAccounts, setLoadAccounts] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const accountsQ = useQuery({
@@ -1140,12 +1155,22 @@ function StaffSection() {
       <p className="mb-3 text-xs text-slate-500">
         Chatwork で伝言をくれる事務局の方を登録します。登録した人からのメッセージは「事務局」として扱い、依頼者の未紐付け警告を出しません。本文に依頼者名があれば、その依頼者・事件に自動で紐付けます。事件ごとの担当は事件ページの「担当事務局」で設定します。
       </p>
+      <div className="mb-3 rounded border border-slate-200 p-2">
+        <div className="label">事務局への報告・確認を送る既定のルーム（全員向け）</div>
+        <RoomPicker
+          value={settingsQ.data?.staff_room_id ?? ''}
+          onChange={(v) => setGeneralRoom.mutate(v)}
+          emptyLabel={`自動（${staffRooms.data?.general?.guessed && staffRooms.data.general.name ? staffRooms.data.general.name : '名前に「伝言帳」を含むルーム'}）`}
+        />
+        <div className="mt-1 text-xs text-slate-400">「事務局に報告・確認」「新しく送る」で最初に選ばれるルームです（例: 瀧口弁護士伝言帳）。人ごとのルームは下の表の「送るルーム」で指定できます。</div>
+      </div>
       <table className="mb-3 w-full text-sm">
         <thead className="bg-slate-50 text-left text-xs text-slate-500">
           <tr>
             <th className="px-3 py-2">氏名</th>
             <th className="px-3 py-2">かな</th>
             <th className="px-3 py-2">Chatwork アカウント</th>
+            <th className="px-3 py-2" title="この人に報告・確認・指示を送るルーム（例: 指示→横井）。空なら全員向けのルーム">送るルーム</th>
             <th className="px-3 py-2">状態</th>
             <th className="px-3 py-2"></th>
           </tr>
@@ -1164,6 +1189,21 @@ function StaffSection() {
                   <span className="text-xs text-orange-700">未設定（伝言の判定に使えません）</span>
                 )}
               </td>
+              <td className="px-3 py-2">
+                {(() => {
+                  const r = staffRooms.data?.staff.find((x) => x.id === st.id);
+                  // 名前から見当を付けた本人のルーム（「指示→横井」）か、無ければ全員向けのルーム
+                  const auto = r?.own && r.guessed && r.name ? `自動（${r.name}）` : `全員向け（${staffRooms.data?.general?.name ?? '未設定'}）`;
+                  return (
+                    <RoomPicker
+                      value={st.chatworkRoomId ? String(st.chatworkRoomId) : ''}
+                      onChange={(v) => update.mutate({ id: st.id, patch: { chatworkRoomId: v ? Number(v) : null } })}
+                      emptyLabel={auto}
+                      selectClassName="w-44"
+                    />
+                  );
+                })()}
+              </td>
               <td className="px-3 py-2">{st.active ? '有効' : '無効'}</td>
               <td className="whitespace-nowrap px-3 py-2 text-right">
                 <button className="btn btn-sm" onClick={() => update.mutate({ id: st.id, patch: { active: !st.active } })}>
@@ -1177,7 +1217,7 @@ function StaffSection() {
           ))}
           {list.data?.length === 0 && (
             <tr>
-              <td className="px-3 py-3 text-slate-500" colSpan={5}>
+              <td className="px-3 py-3 text-slate-500" colSpan={6}>
                 まだ登録がありません
               </td>
             </tr>

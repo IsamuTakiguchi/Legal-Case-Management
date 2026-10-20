@@ -4,6 +4,7 @@ import { db, schema } from '../db/index.js';
 import * as cw from '../channels/chatwork.js';
 import { ingestMessage } from './inbox.js';
 import { createTask, updateTask, chatworkReplyable } from './tasks.js';
+import { staffRooms } from './staff.js';
 import { getSetting } from './settings.js';
 import { appUrl } from './notify.js';
 import { generateStructured } from '../integrations/anthropic.js';
@@ -22,8 +23,8 @@ export type StaffAskSource = { kind: 'conversation'; conversationId: number; mes
 export interface StaffAskRoom {
   roomId: number;
   name: string;
-  /** case=事件専用ルーム / client=依頼者のルーム / my=マイチャット / other=参加ルーム */
-  kind: 'case' | 'client' | 'my' | 'other';
+  /** staff=事務局のルーム（伝言帳・指示ルーム） / case=事件専用ルーム / client=依頼者のルーム / my=マイチャット / other=参加ルーム */
+  kind: 'staff' | 'case' | 'client' | 'my' | 'other';
 }
 
 /** 引用する元ネタ（届いた連絡、または事件の記録） */
@@ -62,7 +63,8 @@ export interface StaffAskContext {
   clientName: string | null;
   caseId: number | null;
   caseTitle: string | null;
-  staff: { id: number; name: string; chatworkAccountId: number | null }[];
+  /** roomId はその人に送るルーム（指示ルーム、無ければ全員向けのルーム） */
+  staff: { id: number; name: string; chatworkAccountId: number | null; roomId: number | null }[];
   defaultStaffId: number | null;
   rooms: StaffAskRoom[];
   defaultRoomId: number | null;
@@ -260,12 +262,18 @@ export async function staffAskContext(source: StaffAskSource): Promise<StaffAskC
   const { subject, clientId, caseId } = resolveSubject(source);
   const client = clientId ? (d.select().from(schema.clients).where(eq(schema.clients.id, clientId)).get() ?? null) : null;
   const kase = caseId ? (d.select().from(schema.cases).where(eq(schema.cases.id, caseId)).get() ?? null) : null;
-  const staff = d
-    .select()
-    .from(schema.staffMembers)
-    .where(eq(schema.staffMembers.active, true))
-    .all()
-    .map((s) => ({ id: s.id, name: s.name, chatworkAccountId: s.chatworkAccountId }));
+  const staffRows = d.select().from(schema.staffMembers).where(eq(schema.staffMembers.active, true)).all();
+  const staff: StaffAskContext['staff'] = staffRows.map((s) => ({ id: s.id, name: s.name, chatworkAccountId: s.chatworkAccountId, roomId: null }));
+  const task = source.kind === 'task' ? (d.select().from(schema.tasks).where(eq(schema.tasks.id, source.taskId)).get() ?? null) : null;
+  const assigner = task?.chatworkAssignedById ? staff.find((s) => s.chatworkAccountId === task.chatworkAssignedById) : null;
+  const defaultStaffId = assigner?.id ?? kase?.staffId ?? (staff.length === 1 ? staff[0]!.id : null);
+
+  const allRooms = isConfigured('chatwork') ? await cw.listRooms().catch(() => []) : [];
+  const nameOf = (roomId: number) => allRooms.find((r) => r.room_id === roomId)?.name ?? `ルーム ${roomId}`;
+  // 事務局へは、その人の指示ルーム（「指示→横井」）か、全員向けのルーム（「瀧口弁護士伝言帳」）に送るのが基本
+  const sr = staffRooms(allRooms, staffRows);
+  for (const s of staff) s.roomId = sr.byStaff.get(s.id)?.roomId ?? null;
+  const defaultStaffRoom = (defaultStaffId ? sr.byStaff.get(defaultStaffId)?.roomId : null) ?? sr.general?.roomId ?? null;
 
   const rooms: StaffAskRoom[] = [];
   const add = (roomId: number | null | undefined, name: string, kind: StaffAskRoom['kind']) => {
@@ -273,16 +281,18 @@ export async function staffAskContext(source: StaffAskSource): Promise<StaffAskC
     rooms.push({ roomId, name, kind });
   };
   // Chatwork で事務局から振られたタスクなら、そのルームと振った人を先に出す
-  const task = source.kind === 'task' ? (d.select().from(schema.tasks).where(eq(schema.tasks.id, source.taskId)).get() ?? null) : null;
   if (task?.chatworkRoomId) add(task.chatworkRoomId, 'このタスクの Chatwork ルーム', 'other');
+  // 事務局のルーム（その人の指示ルーム → 全員向け → ほかの人の指示ルーム）
+  add(defaultStaffRoom, nameOf(defaultStaffRoom ?? 0), 'staff');
+  add(sr.general?.roomId, nameOf(sr.general?.roomId ?? 0), 'staff');
+  for (const s of staff) if (s.roomId) add(s.roomId, nameOf(s.roomId), 'staff');
   add(kase?.chatworkRoomId, `${kase?.title ?? '事件'}の専用ルーム`, 'case');
   add(client?.chatworkRoomId, `${client?.name ?? '依頼者'}のルーム`, 'client');
   if (isConfigured('chatwork')) {
     const my = await cw.myChatRoomId().catch(() => null);
     add(my, 'マイチャット（自分用）', 'my');
-    // 参加している他のルームも選べるようにする（事務局の全体ルームなど）
-    const all = await cw.listRooms().catch(() => []);
-    for (const r of all) {
+    // 参加している他のルームも選べるようにする
+    for (const r of allRooms) {
       if (r.type === 'my') continue;
       add(r.room_id, r.name, 'other');
     }
@@ -292,8 +302,6 @@ export async function staffAskContext(source: StaffAskSource): Promise<StaffAskC
   for (const r of replyTargets) add(r.roomId, `返信先のルーム（${r.senderName ?? 'Chatwork'}）`, 'other');
   // 事務局から返事が来ている・人から振られたタスク・きっかけのメッセージなら、返信を既定にする
   const defaultReplyKey = replyTargets.find((r) => r.reason !== 'conversation')?.key ?? null;
-  const assigner = task?.chatworkAssignedById ? staff.find((s) => s.chatworkAccountId === task.chatworkAssignedById) : null;
-  const defaultStaffId = assigner?.id ?? kase?.staffId ?? (staff.length === 1 ? staff[0]!.id : null);
   const blocked = !isConfigured('chatwork')
     ? 'Chatwork が未設定です。初期設定で接続してください'
     : staff.length === 0

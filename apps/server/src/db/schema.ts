@@ -134,6 +134,8 @@ export const staffMembers = sqliteTable('staff_members', {
   name: text('name').notNull(),
   kana: text('kana'),
   chatworkAccountId: integer('chatwork_account_id'),
+  /** この人に報告・確認・指示を送る Chatwork ルーム（「指示→横井」など）。空なら事務局の既定のルーム */
+  chatworkRoomId: integer('chatwork_room_id'),
   note: text('note'),
   active: integer('active', { mode: 'boolean' }).notNull().default(true),
   createdAt: text('created_at').notNull().default(now()),

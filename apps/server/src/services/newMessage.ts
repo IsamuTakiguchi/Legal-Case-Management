@@ -6,6 +6,7 @@ import { CHANNEL_LABEL, type Channel } from '@lcm/shared';
 import { availableChannels, ensureClientConversation } from './hearingNotice.js';
 import { clientOwnConversations } from './contacts.js';
 import { getClientPerson, listClientPersons } from './clientPersons.js';
+import { staffRooms } from './staff.js';
 
 /**
  * こちらから新しく送る（返信ではなく、依頼者や事務局へこちらから連絡する）ときの宛先選び。
@@ -81,15 +82,12 @@ export function startClientConversation(clientId: number, input: { channel: Chan
 /** 事務局に送る宛先（Chatwork のルームと、宛先に付ける事務局メンバー） */
 export async function staffSendTargets() {
   if (!isConfigured('chatwork')) return { configured: false, staff: [], rooms: [], defaultRoomId: null as number | null };
-  const staff = db()
-    .select()
-    .from(schema.staffMembers)
-    .where(eq(schema.staffMembers.active, true))
-    .all()
-    .map((s) => ({ id: s.id, name: s.name, chatworkAccountId: s.chatworkAccountId }));
-  const rooms = (await cw.listRooms().catch(() => []))
-    .filter((r) => r.type !== 'my')
-    .map((r) => ({ roomId: r.room_id, name: r.name, type: r.type }));
+  const staffRows = db().select().from(schema.staffMembers).where(eq(schema.staffMembers.active, true)).all();
+  const all = await cw.listRooms().catch(() => []);
+  // 人ごとの送り先（指示ルーム、無ければ全員向けの伝言帳）
+  const sr = staffRooms(all, staffRows);
+  const staff = staffRows.map((s) => ({ id: s.id, name: s.name, chatworkAccountId: s.chatworkAccountId, roomId: sr.byStaff.get(s.id)?.roomId ?? null }));
+  const rooms = all.filter((r) => r.type !== 'my').map((r) => ({ roomId: r.room_id, name: r.name, type: r.type }));
   // 既定のルーム: 前に事務局へ確認・報告を送ったルーム（無ければ最初のグループ）
   const last = db()
     .select({ room: schema.conversations.externalThreadId })
@@ -99,7 +97,8 @@ export async function staffSendTargets() {
     .orderBy(desc(schema.messages.sentAt))
     .get();
   const lastRoom = last ? Number(last.room) : null;
-  const defaultRoomId = (lastRoom && rooms.some((r) => r.roomId === lastRoom) ? lastRoom : null) ?? rooms.find((r) => r.type === 'group')?.roomId ?? rooms[0]?.roomId ?? null;
+  // 既定のルーム: 全員向けのルーム（伝言帳）→ 前に事務局へ確認・報告を送ったルーム → 最初のグループ
+  const defaultRoomId = sr.general?.roomId ?? (lastRoom && rooms.some((r) => r.roomId === lastRoom) ? lastRoom : null) ?? rooms.find((r) => r.type === 'group')?.roomId ?? rooms[0]?.roomId ?? null;
   return { configured: true, staff, rooms, defaultRoomId };
 }
 

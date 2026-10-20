@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { listStaff, createStaff, updateStaff, deleteStaff, listChatworkAccounts } from '../services/staff.js';
+import { listStaff, createStaff, updateStaff, deleteStaff, listChatworkAccounts, staffRooms } from '../services/staff.js';
 import { listRooms } from '../channels/chatwork.js';
 import { isConfigured } from '../config.js';
 import { z } from 'zod';
@@ -374,8 +374,24 @@ clientRoutes.post('/staff', async (c) => {
   return c.json(createStaff(body));
 });
 clientRoutes.put('/staff/:id', async (c) => {
-  const body = z.object({ name: z.string().min(1).optional(), kana: z.string().nullable().optional(), chatworkAccountId: z.number().int().nullable().optional(), note: z.string().nullable().optional(), active: z.boolean().optional() }).parse(await c.req.json());
+  const body = z
+    .object({ name: z.string().min(1).optional(), kana: z.string().nullable().optional(), chatworkAccountId: z.number().int().nullable().optional(), chatworkRoomId: z.number().int().nullable().optional(), note: z.string().nullable().optional(), active: z.boolean().optional() })
+    .parse(await c.req.json());
   return c.json(updateStaff(Number(c.req.param('id')), body));
+});
+/** 事務局に送るルーム（全員向けの既定と、人ごと）。名前から見当を付けたものは guessed */
+clientRoutes.get('/staff/rooms', async (c) => {
+  const rooms = isConfigured('chatwork') ? await listRooms().catch(() => []) : [];
+  const staff = listStaff();
+  const sr = staffRooms(rooms, staff);
+  const nameOf = (id: number | null | undefined) => (id ? (rooms.find((r) => r.room_id === id)?.name ?? `ルーム ${id}`) : null);
+  return c.json({
+    general: sr.general ? { ...sr.general, name: nameOf(sr.general.roomId) } : null,
+    staff: staff.map((s) => {
+      const r = sr.byStaff.get(s.id) ?? null;
+      return { id: s.id, roomId: r?.roomId ?? null, name: nameOf(r?.roomId), guessed: r?.guessed ?? false, own: r?.own ?? false };
+    }),
+  });
 });
 clientRoutes.delete('/staff/:id', (c) => {
   deleteStaff(Number(c.req.param('id')));
