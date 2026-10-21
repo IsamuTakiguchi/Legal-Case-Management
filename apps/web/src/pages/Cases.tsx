@@ -373,8 +373,9 @@ function CaseBulkBar({ ids, onClear, onDone }: { ids: number[]; onClear: () => v
     if (st === 'closed' && !confirm(`${ids.length} 件を「終了事件」にしますか？（区分フォルダで管理していれば、依頼者フォルダも終了事件のフォルダへ移ります）`)) return;
     run.mutate({ patch: { status: st }, label: `「${CASE_STATUS_LABEL[st]}」にしました` });
   };
+  // 下へスクロールしてチェックを付けていっても、まとめて処理するメニューが画面の上に出たままになるように固定する
   return (
-    <div className="fade-in card flex flex-wrap items-center gap-2 border-blue-200 py-2 text-sm">
+    <div className="fade-in card sticky top-2 z-20 flex flex-wrap items-center gap-2 border-blue-200 py-2 text-sm shadow-md" role="toolbar" aria-label="選んだ事件をまとめて処理">
       <span className="font-medium text-slate-700">{ids.length} 件を選択中</span>
       <span className="text-xs text-slate-500">区分:</span>
       {CASE_STATUSES.map((st) => (
