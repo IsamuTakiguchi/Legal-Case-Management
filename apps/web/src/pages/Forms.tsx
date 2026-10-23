@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { InstructionBox } from '../lib/InstructionBox';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { useDraftGroup, DraftHint } from '../lib/draft';
@@ -196,7 +197,7 @@ function DraftPanel({ templateIds, caseId, onClose }: { templateIds: number[]; c
         </select>
         <input className="input" placeholder="書面の題名（例: 答弁書）" value={title} onChange={(e) => setTitle(e.target.value)} />
         <textarea className="input md:col-span-2" rows={4} placeholder="事実関係・書きたい内容（当事者、経緯、主張したい点）" value={facts} onChange={(e) => setFacts(e.target.value)} />
-        <textarea className="input md:col-span-2" rows={2} placeholder="指示（例: 請求棄却を求める答弁書。争点は消滅時効。）" value={instruction} onChange={(e) => setInstruction(e.target.value)} />
+        <InstructionBox className="md:col-span-2" rows={3} ariaLabel="指示" placeholder="指示（例: 請求棄却を求める答弁書。争点は消滅時効。）" value={instruction} onChange={setInstruction} />
         <DraftHint handle={draft} className="md:col-span-2" />
       </div>
       <div className="flex flex-wrap items-center gap-3">

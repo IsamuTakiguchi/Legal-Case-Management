@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { InstructionBox } from './InstructionBox';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { api } from './api';
 import { useDraft, DraftHint } from './draft';
@@ -168,13 +169,12 @@ export function StaffAskPanel({ base, draftKey, onClose, onSent }: { base: strin
               </select>
             </label>
           )}
+          <InstructionBox
+            value={instruction}
+            onChange={setInstruction}
+            placeholder={d.subject?.kind === 'task' ? 'AI への指示（例: 準備書面の案は今日中に送る予定と伝える）' : 'AI への指示（例: 査定書が届いているか確認してほしい）'}
+          />
           <div className="flex flex-wrap items-center gap-2">
-            <input
-              className="input min-w-0 flex-1"
-              value={instruction}
-              onChange={(e) => setInstruction(e.target.value)}
-              placeholder={d.subject?.kind === 'task' ? 'AI への指示（例: 準備書面の案は今日中に送る予定と伝える）' : 'AI への指示（例: 査定書が届いているか確認してほしい）'}
-            />
             <button className="btn btn-sm" onClick={() => draft.mutate('ask')} disabled={draft.isPending} title="事務局に確かめてほしいこと・やってほしいことの文を書きます">
               {draft.isPending && draft.variables === 'ask' ? '作成中…' : 'AI で確認・依頼文'}
             </button>

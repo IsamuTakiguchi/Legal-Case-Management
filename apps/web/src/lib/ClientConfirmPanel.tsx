@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { InstructionBox } from './InstructionBox';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from './api';
@@ -266,8 +267,13 @@ export function ClientConfirmPanel({
                   <input className="input" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="ご確認のお願い" maxLength={200} />
                 </label>
               )}
+              <InstructionBox
+                value={instruction}
+                onChange={setInstruction}
+                onSubmit={() => !draft.isPending && channel && draft.mutate()}
+                placeholder="AI への追加の指示（例: 期限は今週金曜と添える／もっと短く）"
+              />
               <div className="flex flex-wrap items-center gap-2">
-                <input className="input min-w-0 flex-1" value={instruction} onChange={(e) => setInstruction(e.target.value)} placeholder="AI への追加の指示（例: 期限は今週金曜と添える／もっと短く）" />
                 <button className="btn btn-sm" onClick={() => draft.mutate()} disabled={draft.isPending || !channel}>
                   {draft.isPending ? '書き直し中…' : text ? 'AI で書き直す' : 'AI で下書き'}
                 </button>
