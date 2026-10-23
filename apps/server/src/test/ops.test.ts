@@ -19,7 +19,7 @@ const { loginLockedFor, recordLoginFailure, clearLoginFailures } = await import(
 const { createApp } = await import('../index.js');
 const { listCases, activeCasesForClient } = await import('../services/cases.js');
 const { setSetting } = await import('../services/settings.js');
-const { loginAllowedEmails } = await import('../routes/auth.js');
+const { loginAllowedEmails } = await import('../auth/index.js');
 const { findDuplicateClients, mergeClients } = await import('../services/clientMerge.js');
 const { model: aiModel } = await import('../integrations/anthropic.js');
 

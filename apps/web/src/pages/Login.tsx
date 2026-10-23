@@ -3,8 +3,8 @@ import { api } from '../lib/api';
 
 const ERRORS: Record<string, string> = {
   not_allowed: 'この Google アカウントではログインできません。設定 → ログイン で許可したアドレスか、「Google に接続」したアカウントを使ってください。',
-  google_not_configured: 'Google のクライアント ID が未設定です。パスワードでログインし、初期設定で Google を設定してください。',
-  no_allowed_email: 'Google ログインを許可するアドレスが未設定です。パスワードでログインし、初期設定で「Google に接続」するか、設定 → ログイン でアドレスを登録してください。',
+  google_not_configured: 'Google のクライアント ID が未設定です。初めの設定が済むまでは、APP_PASSWORD のパスワードでログインして初期設定で Google を設定してください。',
+  no_allowed_email: 'Google ログインを許可するアドレスが未設定です。初めの設定が済むまでは、APP_PASSWORD のパスワードでログインし、初期設定で「Google に接続」してください。',
   google_failed: 'Google との通信に失敗しました。もう一度お試しください。',
   locked: '試行回数が多すぎます。15 分ほど待ってから再度お試しください。',
 };
@@ -14,28 +14,22 @@ export default function Login() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [googleLogin, setGoogleLogin] = useState<boolean | null>(null);
-  const [showPassword, setShowPassword] = useState(false);
-  // パスワードでのログインを止めているときは、パスワード欄を出さない
-  const [passwordLogin, setPasswordLogin] = useState(true);
+  // ログインは Google アカウントだけ。パスワード欄は、Google ログインの準備前（初めの設定）と非常口のときだけ出る
+  const [passwordLogin, setPasswordLogin] = useState(false);
   useEffect(() => {
     const p = new URLSearchParams(location.search);
     const e = p.get('error');
     if (e) {
       const email = p.get('email');
       setError((ERRORS[e] ?? 'ログインできませんでした。') + (email ? `（${email}）` : ''));
-      setShowPassword(true);
     }
     api
       .get<{ authenticated: boolean; googleLogin: boolean; passwordLogin?: boolean }>('/auth/me')
       .then((r) => {
         setGoogleLogin(r.googleLogin);
-        setPasswordLogin(r.passwordLogin !== false);
-        if (!r.googleLogin) setShowPassword(true);
+        setPasswordLogin(r.passwordLogin === true);
       })
-      .catch(() => {
-        setGoogleLogin(false);
-        setShowPassword(true);
-      });
+      .catch(() => setGoogleLogin(false));
   }, []);
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -76,13 +70,14 @@ export default function Login() {
             Google アカウントでログイン
           </a>
         )}
-        {googleLogin && passwordLogin && !showPassword && (
-          <button type="button" className="w-full text-center text-xs text-slate-500 hover:underline" onClick={() => setShowPassword(true)}>
-            パスワードでログイン
-          </button>
-        )}
-        {showPassword && passwordLogin && (
+        {googleLogin === false && !passwordLogin && <div className="rounded bg-orange-50 p-2 text-sm text-orange-800">サーバーに接続できません。しばらくしてから再読み込みしてください。</div>}
+        {passwordLogin && (
           <form onSubmit={submit} className="space-y-3">
+            <div className="rounded bg-orange-50 p-2 text-xs text-orange-800">
+              {googleLogin
+                ? '非常用のパスワードでのログインが有効です（ALLOW_PASSWORD_LOGIN）。用が済んだら Railway の Variables から消してください。'
+                : 'Google ログインの設定が済むまでの、初めの設定用のパスワードです。設定が済むと、ログインは Google アカウントだけになります。'}
+            </div>
             <div>
               <label className="label">パスワード</label>
               <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus={!googleLogin} autoComplete="current-password" />

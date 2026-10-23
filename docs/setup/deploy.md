@@ -20,7 +20,7 @@ Dockerfile をそのまま使います（`railway.json` がビルド方法とヘ
 1. [Railway](https://railway.com/) にログインし、GitHub を連携
 2. **New Project → Deploy from GitHub repo** → このリポジトリを選択
 3. 作成されたサービスを開き、**Settings → Source → Branch** が `main` になっていることを確認
-4. **Variables** に `APP_PASSWORD` = ログイン用パスワード（自分で決める）を追加。これ以外の変数は不要です（`PORT` `DATA_DIR` `TZ` は Dockerfile で設定済み、`SESSION_SECRET` は初回起動時に自動生成して Volume に保存、公開 URL は Railway の `RAILWAY_PUBLIC_DOMAIN` から自動認識）
+4. **Variables** に `APP_PASSWORD` = 初めの設定用のパスワード（自分で決める）を追加。これ以外の変数は不要です（`PORT` `DATA_DIR` `TZ` は Dockerfile で設定済み、`SESSION_SECRET` は初回起動時に自動生成して Volume に保存、公開 URL は Railway の `RAILWAY_PUBLIC_DOMAIN` から自動認識）
 5. サービスを右クリック → **Add Volume** → Mount Path を `/data` にする
 6. **Settings → Networking → Generate Domain** → ポートを `8787` にする。`https://xxxx.up.railway.app` の URL が付きます
 7. Deploy が緑になったらその URL を開いてログイン → 左メニュー **初期設定** からキーを登録（下の「初回セットアップ」参照）
@@ -29,7 +29,8 @@ Dockerfile をそのまま使います（`railway.json` がビルド方法とヘ
 
 - 変数や Volume を追加すると自動で再デプロイされます。数分待ってから URL を開いてください
 - Generate Domain のポート入力に 8787 以外が表示される場合は、Variables に `PORT` = `8787` を追加してから再度設定してください
-- Google ログインを設定したら、**設定 → ログイン → パスワードでのログイン → 止める** でパスワードでのログインを止められます。Google でログインできなくなったときは、Variables に `ALLOW_PASSWORD_LOGIN` = `true` を追加すると一時的にパスワードで入れます（用が済んだら消してください）
+- ログインは **Google アカウントだけ** です。初期設定で Google のクライアント ID を設定して「Google に接続」すると（または **設定 → ログイン** に許可するアドレスを書くと）、ログイン画面はパスワード欄が消えて「Google アカウントでログイン」だけになります。そのあとは Variables の `APP_PASSWORD` を消して構いません（再起動時に保存していたパスワードも消えます）
+- Google でログインできなくなったときは、Variables に `ALLOW_PASSWORD_LOGIN` = `true` と `APP_PASSWORD` = （パスワード）を追加すると一時的にパスワードで入れます（用が済んだら両方消してください）
 - Volume の内容（`/data/app.db` と `/data/session_secret`）がすべてのデータです。Railway の Volume 画面からバックアップ（スナップショット）を取れます
 - リージョンは Settings → Deploy → Region で **Southeast Asia (Singapore)** を選ぶと日本から最も近くなります
 
@@ -37,7 +38,7 @@ Dockerfile をそのまま使います（`railway.json` がビルド方法とヘ
 
 1. [Render](https://dashboard.render.com/) にアカウントを作成し、GitHub を連携
 2. New → **Blueprint** → このリポジトリを選択 → ブランチ `main` を指定（`render.yaml` を自動で読み込みます）
-3. `APP_PASSWORD`（ログイン用パスワード）だけ入力して Apply
+3. `APP_PASSWORD`（初めの設定用のパスワード。Google ログインの設定が済むと使えなくなります）だけ入力して Apply
 4. 数分でビルドが終わり、`https://legal-case-management-xxxx.onrender.com` の URL が付きます。これが公開 URL で、アプリはこの URL を自動で認識します
 5. その URL を開いてログイン → 「初期設定」からキーを登録
 
@@ -67,7 +68,7 @@ Dockerfile をそのまま使います（`railway.json` がビルド方法とヘ
 
 PC を再起動しても `restart: unless-stopped` で自動起動します。
 
-手動で `.env` を用意する場合は `.env.example` をコピーし、`APP_PASSWORD`（ログイン用）と `PUBLIC_BASE_URL`（公開 URL、末尾スラッシュなし）を設定します。`SESSION_SECRET` は未設定なら自動生成されます。Google / Microsoft のリダイレクト URI と Webhook URL は公開 URL を基に作られます（初期設定画面からも変更可）。
+手動で `.env` を用意する場合は `.env.example` をコピーし、`APP_PASSWORD`（初めの設定用。Google ログインの設定が済むと使えなくなります）と `PUBLIC_BASE_URL`（公開 URL、末尾スラッシュなし）を設定します。`SESSION_SECRET` は未設定なら自動生成されます。Google / Microsoft のリダイレクト URI と Webhook URL は公開 URL を基に作られます（初期設定画面からも変更可）。
 
 ## D. Fly.io
 
