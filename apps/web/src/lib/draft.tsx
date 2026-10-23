@@ -75,6 +75,31 @@ function same(a: unknown, b: unknown): boolean {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
+/**
+ * まだ書き込んでいない入力（保存は入力が止まって少し後）を、画面を離れる・隠れる・閉じるときにすぐ保存する。
+ * 電話番号のような短い欄を打ってすぐ別の画面へ移ったり、電話をかけにアプリを切り替えたりしても消えないように
+ */
+function useFlushOnLeave(pending: { current: (() => void) | null }) {
+  useEffect(() => {
+    const run = () => {
+      const f = pending.current;
+      pending.current = null;
+      f?.();
+    };
+    const onHidden = () => {
+      if (document.visibilityState === 'hidden') run();
+    };
+    window.addEventListener('pagehide', run);
+    document.addEventListener('visibilitychange', onHidden);
+    return () => {
+      window.removeEventListener('pagehide', run);
+      document.removeEventListener('visibilitychange', onHidden);
+      // 画面を離れる（このフォームが消える）とき
+      run();
+    };
+  }, [pending]);
+}
+
 export interface DraftHandle {
   /** この画面を開いたときに、保存されていた入力を復元したか */
   restored: boolean;
@@ -111,11 +136,18 @@ export function useDraft(key: string | null, value: string, setValue: (v: string
     setRestored(true);
   }, [key, base]);
 
+  const pending = useRef<(() => void) | null>(null);
+  useFlushOnLeave(pending);
   useEffect(() => {
     if (!key || !ready.current) return;
-    const t = setTimeout(() => {
+    const persist = () => {
       if (value === base) clearDraft(key);
       else write(key, value, base);
+    };
+    pending.current = persist;
+    const t = setTimeout(() => {
+      pending.current = null;
+      persist();
     }, SAVE_DELAY_MS);
     return () => clearTimeout(t);
   }, [key, value, base]);
@@ -123,6 +155,8 @@ export function useDraft(key: string | null, value: string, setValue: (v: string
   return {
     restored,
     clear: () => {
+      // 送信・保存できたら、まだ書いていない分も捨てる（画面を離れたときに書き戻さない）
+      pending.current = null;
       if (key) clearDraft(key);
       setRestored(false);
     },
@@ -164,18 +198,27 @@ export function useDraftGroup(key: string | null, fields: Record<string, { value
     else clearDraft(key);
   }, [key, baseSig]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const pending = useRef<(() => void) | null>(null);
+  useFlushOnLeave(pending);
   useEffect(() => {
     if (!key || !ready.current) return;
-    const t = setTimeout(() => {
+    // この時点の各欄の値で保存する（画面を離れるときにも、この値で書く）
+    const snapshot = Object.entries(ref.current).map(([k, f]) => [k, f.value, f.base ?? ''] as const);
+    const persist = () => {
       const changed: Record<string, string> = {};
       const baseOf: Record<string, string> = {};
-      for (const [k, f] of Object.entries(ref.current)) {
-        if (f.value === (f.base ?? '')) continue;
-        changed[k] = f.value;
-        baseOf[k] = f.base ?? '';
+      for (const [k, v, b] of snapshot) {
+        if (v === b) continue;
+        changed[k] = v;
+        baseOf[k] = b;
       }
       if (Object.keys(changed).length === 0) clearDraft(key);
       else write(key, changed, baseOf);
+    };
+    pending.current = persist;
+    const t = setTimeout(() => {
+      pending.current = null;
+      persist();
     }, SAVE_DELAY_MS);
     return () => clearTimeout(t);
   }, [key, valueSig, baseSig]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -183,6 +226,7 @@ export function useDraftGroup(key: string | null, fields: Record<string, { value
   return {
     restored,
     clear: () => {
+      pending.current = null;
       if (key) clearDraft(key);
       setRestored(false);
     },
@@ -227,9 +271,11 @@ export function useDraftRecord<T extends Record<string, unknown>>(key: string | 
     // base の中身が変わったら復元をやり直す（保存後・再読み込み後）
   }, [key, baseSig]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const pending = useRef<(() => void) | null>(null);
+  useFlushOnLeave(pending);
   useEffect(() => {
     if (!key || !ready.current || !base) return;
-    const t = setTimeout(() => {
+    const persist = () => {
       const changed: Record<string, unknown> = {};
       const baseOf: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(value)) {
@@ -239,6 +285,11 @@ export function useDraftRecord<T extends Record<string, unknown>>(key: string | 
       }
       if (Object.keys(changed).length === 0) clearDraft(key);
       else write(key, changed, baseOf);
+    };
+    pending.current = persist;
+    const t = setTimeout(() => {
+      pending.current = null;
+      persist();
     }, SAVE_DELAY_MS);
     return () => clearTimeout(t);
   }, [key, value, baseSig]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -246,6 +297,7 @@ export function useDraftRecord<T extends Record<string, unknown>>(key: string | 
   return {
     restored,
     clear: () => {
+      pending.current = null;
       if (key) clearDraft(key);
       setRestored(false);
     },
