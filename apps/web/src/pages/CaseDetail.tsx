@@ -20,6 +20,7 @@ import { CaseStatusBadge } from './Cases';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 import { ChatworkTaskReply } from '../lib/ChatworkTaskReply';
 import { ContactMemoImport } from '../lib/ContactMemoImport';
+import { CopyButton } from '../lib/copy';
 import { CaseContactSummary, type SummaryClient } from '../lib/CaseContactSummary';
 import type { ClientPerson } from '../lib/ClientPersons';
 import { ClientContactSetup, unreachableClientId } from '../lib/ClientContactSetup';
@@ -2206,6 +2207,8 @@ function NoteView({ n, onDeleted, onNotice }: { n: Note; onDeleted: () => void; 
         >
           予定に登録・日程調整
         </button>
+        {/* 入力した文（元メモ）をそのままコピーする。元メモが無い記録は表示している要旨 */}
+        {(n.rawText ?? n.gist) && <CopyButton text={(n.rawText ?? n.gist)!} title="この記録に入力した文をコピーします（AI で整理した記録でも、入力したままの文）" />}
         <button className="whitespace-nowrap text-xs text-blue-700 hover:underline" onClick={() => setEditing(true)}>
           編集
         </button>
