@@ -20,6 +20,8 @@ import { CaseStatusBadge } from './Cases';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 import { ChatworkTaskReply } from '../lib/ChatworkTaskReply';
 import { ContactMemoImport } from '../lib/ContactMemoImport';
+import { CaseContactSummary, type SummaryClient } from '../lib/CaseContactSummary';
+import type { ClientPerson } from '../lib/ClientPersons';
 import { ClientContactSetup, unreachableClientId } from '../lib/ClientContactSetup';
 
 interface Note {
@@ -42,7 +44,11 @@ interface CaseData {
   id: number;
   title: string;
   caseType: { key: string; label: string; hasCreditors: boolean; creditorStages: string[] } | null;
-  client: { id: number; name: string; provisional?: boolean } | null;
+  client: ({ id: number; name: string; provisional?: boolean } & Partial<SummaryClient>) | null;
+  /** 依頼者の窓口（ご家族・法人の担当者） */
+  persons?: ClientPerson[];
+  /** 事件の関係者（保険会社・相手方など） */
+  contacts?: Contact[];
   courtName: string | null;
   caseNumber: string | null;
   status: string;
@@ -196,6 +202,14 @@ export default function CaseDetail() {
       {tab === 'overview' && (
         <div className="grid gap-4 lg:grid-cols-[1fr_380px]">
           <div className="space-y-4">
+            {c.client && (
+              <CaseContactSummary
+                client={{ emails: [], lineUserId: null, chatworkRoomId: null, preferredChannel: null, ...c.client }}
+                persons={c.persons ?? []}
+                contacts={c.contacts ?? []}
+                traffic={c.caseType?.key === 'traffic'}
+              />
+            )}
             <NoteComposer
               caseId={c.id}
               onSaved={(note) => {
@@ -1146,7 +1160,8 @@ function ContactsSection({ caseId, traffic }: { caseId: number; traffic: boolean
                     {x.department && <span className="mr-1 text-xs text-slate-500">{x.department}担当</span>}
                     {x.name}
                   </div>
-                  <div className="text-xs text-slate-500">
+                  {/* 狭い画面では TEL・FAX・メールごとに折り返す */}
+                  <div className="flex flex-wrap items-center gap-y-0.5 text-xs text-slate-500">
                     {x.phone && (
                       <a className="mr-2 whitespace-nowrap hover:underline" href={`tel:${x.phone.replace(/[^\d+]/g, '')}`}>
                         TEL {x.phone}
