@@ -3,19 +3,27 @@ import { eq, lt, ne } from 'drizzle-orm';
 import type { Context, MiddlewareHandler } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { db, schema } from '../db/index.js';
-import { env } from '../config.js';
+import { env, isConfigured } from '../config.js';
 import { randomToken } from '../crypto.js';
 import { getSetting, setSetting } from '../services/settings.js';
+import { googleAccount } from '../integrations/google.js';
 
 const COOKIE = 'lcm_session';
 const SESSION_DAYS = 30;
 
-/** 初回起動時に APP_PASSWORD をハッシュ化して保存。以降は設定画面で変更可 */
-export function ensurePasswordHash() {
-  const existing = getSetting('password_hash');
-  if (existing) return;
+/**
+ * ログインは Google アカウントだけ。パスワード（環境変数 APP_PASSWORD）は、
+ * Google ログインの準備がまだのとき（初めて立ち上げたとき）と、非常口 ALLOW_PASSWORD_LOGIN=true のときだけ使う。
+ * 起動時に APP_PASSWORD に合わせる（消してあれば、保存しているパスワードも消す）
+ */
+export function syncPasswordFromEnv() {
   const pw = env().APP_PASSWORD;
-  if (!pw) return;
+  const existing = getSetting('password_hash');
+  if (!pw) {
+    if (existing) setSetting('password_hash', '');
+    return;
+  }
+  if (existing && bcrypt.compareSync(pw, existing)) return;
   setSetting('password_hash', bcrypt.hashSync(pw, 10));
 }
 
@@ -25,16 +33,35 @@ export async function verifyPassword(pw: string): Promise<boolean> {
   return bcrypt.compare(pw, hash);
 }
 
-/** パスワード変更。変更したセッション以外はすべて失効させる */
+/** パスワードを入れ替える（テスト・起動時用。画面からは変えられない）。指定したセッション以外はすべて失効させる */
 export function setPassword(pw: string, keepSessionId?: string | null) {
   setSetting('password_hash', bcrypt.hashSync(pw, 10));
   if (keepSessionId) db().delete(schema.sessions).where(ne(schema.sessions.id, keepSessionId)).run();
   else db().delete(schema.sessions).run();
 }
 
-/** パスワードでのログインを受け付けるか。設定で止めていても、環境変数 ALLOW_PASSWORD_LOGIN=true なら受け付ける（締め出されたとき用） */
+/** Google でログインできるメールアドレス一覧（設定が空なら「Google に接続」したアカウント） */
+export function loginAllowedEmails(): string[] {
+  const configured = getSetting('login_google_emails')
+    .split(/[\s,、]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  if (configured.length) return configured;
+  const connected = googleAccount();
+  return connected ? [connected.toLowerCase()] : [];
+}
+
+/** Google でログインできる状態か（クライアント ID と、許可するアドレスがある） */
+export function googleLoginReady(): boolean {
+  return isConfigured('google') && loginAllowedEmails().length > 0;
+}
+
+/**
+ * パスワードでのログインを受け付けるか。
+ * Google ログインの準備ができていれば受け付けない。非常口: 環境変数 ALLOW_PASSWORD_LOGIN=true なら受け付ける（Google で入れなくなったとき用）
+ */
 export function passwordLoginEnabled(): boolean {
-  return env().ALLOW_PASSWORD_LOGIN || getSetting('password_login_disabled') !== 'true';
+  return env().ALLOW_PASSWORD_LOGIN || !googleLoginReady();
 }
 
 /** Cookie の Secure 属性。本番は常に付ける（公開 URL の設定値に依存させない） */

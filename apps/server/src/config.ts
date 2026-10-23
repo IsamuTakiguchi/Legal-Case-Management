@@ -42,7 +42,7 @@ const envSchema = z.object({
   ONEDRIVE_CLIENT_ROOT: z.string().default('/依頼者'),
   LOCAL_CLIENT_ROOT: z.string().default('./data/clients'),
 
-  /** 非常口: true にすると「パスワードでのログインを止める」設定を無視してパスワードで入れる（Google ログインが使えなくなったとき用） */
+  /** 非常口: true にすると、Google ログインの準備ができていても APP_PASSWORD のパスワードで入れる（Google でログインできなくなったとき用） */
   ALLOW_PASSWORD_LOGIN: z
     .string()
     .default('')

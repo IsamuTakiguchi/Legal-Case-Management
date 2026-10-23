@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { createSession, destroySession, isAuthenticated, verifyPassword, passwordLoginEnabled, setPassword, requireAuth, cookieSecure, currentSessionId, clientIp, loginLockedFor, recordLoginFailure, clearLoginFailures } from '../auth/index.js';
-import { googleAuthUrl, handleGoogleCallback, disconnectGoogle, googleLoginUrl, verifyGoogleLogin, googleAccount } from '../integrations/google.js';
+import { createSession, destroySession, isAuthenticated, verifyPassword, passwordLoginEnabled, googleLoginReady, loginAllowedEmails, requireAuth, cookieSecure, clientIp, loginLockedFor, recordLoginFailure, clearLoginFailures } from '../auth/index.js';
+import { googleAuthUrl, handleGoogleCallback, disconnectGoogle, googleLoginUrl, verifyGoogleLogin } from '../integrations/google.js';
 import { env, isConfigured } from '../config.js';
 import { getSetting, setSetting } from '../services/settings.js';
 import { msAuthUrl, handleMsCallback, disconnectMs, startDeviceCodeFlow, deviceCodeStatus } from '../integrations/onedrive.js';
@@ -14,34 +14,13 @@ import { runOnboardingAfterGoogle, runOnboardingAfterMicrosoft } from '../servic
 
 export const authRoutes = new Hono();
 
-authRoutes.get('/me', (c) => c.json({ authenticated: isAuthenticated(c), googleLogin: isConfigured('google'), passwordLogin: passwordLoginEnabled() }));
+/** ログイン画面用。ログインは Google アカウントだけ（パスワードは準備前と非常口のときだけ） */
+authRoutes.get('/me', (c) => c.json({ authenticated: isAuthenticated(c), googleLogin: googleLoginReady(), passwordLogin: passwordLoginEnabled() }));
 
-/** パスワードでのログインを止める・戻す（止めると Google ログインだけになる） */
-authRoutes.get('/password-login', requireAuth, (c) =>
-  c.json({ disabled: getSetting('password_login_disabled') === 'true', emergencyOverride: env().ALLOW_PASSWORD_LOGIN, googleLogin: isConfigured('google'), allowedEmails: loginAllowedEmails() }),
+/** 設定画面用: ログインの状態 */
+authRoutes.get('/login-status', requireAuth, (c) =>
+  c.json({ googleLogin: googleLoginReady(), googleConfigured: isConfigured('google'), allowedEmails: loginAllowedEmails(), passwordLogin: passwordLoginEnabled(), emergencyOverride: env().ALLOW_PASSWORD_LOGIN }),
 );
-authRoutes.post('/password-login', requireAuth, async (c) => {
-  const body = z.object({ disabled: z.boolean() }).parse(await c.req.json());
-  if (body.disabled) {
-    // 締め出し防止: Google でログインできる状態になっていなければ止めさせない
-    if (!isConfigured('google')) return c.json({ error: 'Google のクライアント ID が未設定のため、止められません。先に初期設定で Google を設定してください' }, 400);
-    if (loginAllowedEmails().length === 0) return c.json({ error: 'Google ログインを許可するメールアドレスがありません。先に登録するか、Google に接続してください' }, 400);
-  }
-  setSetting('password_login_disabled', body.disabled ? 'true' : '');
-  logger.info({ disabled: body.disabled }, body.disabled ? 'パスワードでのログインを止めました' : 'パスワードでのログインを再開しました');
-  return c.json({ disabled: body.disabled });
-});
-
-/** Google でログインできるメールアドレス一覧（設定が空なら「Google に接続」したアカウント） */
-export function loginAllowedEmails(): string[] {
-  const configured = getSetting('login_google_emails')
-    .split(/[\s,、]+/)
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
-  if (configured.length) return configured;
-  const connected = googleAccount();
-  return connected ? [connected.toLowerCase()] : [];
-}
 
 authRoutes.get('/google/login/start', (c) => {
   if (!isConfigured('google')) return c.redirect('/login?error=google_not_configured');
@@ -50,8 +29,9 @@ authRoutes.get('/google/login/start', (c) => {
   return c.redirect(googleLoginUrl(state));
 });
 
+/** パスワードでのログイン（Google ログインの準備前と、非常口 ALLOW_PASSWORD_LOGIN=true のときだけ） */
 authRoutes.post('/login', async (c) => {
-  if (!passwordLoginEnabled()) return c.json({ error: 'パスワードでのログインは止めています。Google アカウントでログインしてください' }, 403);
+  if (!passwordLoginEnabled()) return c.json({ error: 'ログインは Google アカウントだけです。「Google アカウントでログイン」を押してください' }, 403);
   const ip = clientIp(c);
   const locked = loginLockedFor(ip);
   if (locked > 0) return c.json({ error: `試行回数が多すぎます。${Math.ceil(locked / 60)} 分後に再度お試しください` }, 429);
@@ -68,13 +48,6 @@ authRoutes.post('/login', async (c) => {
 
 authRoutes.post('/logout', (c) => {
   destroySession(c);
-  return c.json({ ok: true });
-});
-
-authRoutes.post('/password', requireAuth, async (c) => {
-  const body = z.object({ current: z.string().max(256), next: z.string().min(8).max(256) }).parse(await c.req.json());
-  if (!(await verifyPassword(body.current))) return c.json({ error: '現在のパスワードが違います' }, 400);
-  setPassword(body.next, currentSessionId(c));
   return c.json({ ok: true });
 });
 
@@ -107,6 +80,8 @@ authRoutes.get('/google/callback', async (c) => {
         return c.redirect(`/login?error=not_allowed&email=${encodeURIComponent(email ?? '')}`);
       }
       clearLoginFailures(ip);
+      // 許可するアドレスを書き留めておく（あとで Gmail の接続を外しても、パスワードでのログインに戻らないように）
+      if (!getSetting('login_google_emails').trim()) setSetting('login_google_emails', email);
       createSession(c);
       logger.info({ email }, 'Google ログイン');
       return c.redirect('/');

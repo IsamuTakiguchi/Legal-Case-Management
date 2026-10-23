@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { env, ensureDataDirSafe } from './config.js';
 import { openDatabase } from './db/index.js';
 import { logger } from './logger.js';
-import { ensurePasswordHash, requireAuth } from './auth/index.js';
+import { syncPasswordFromEnv, requireAuth } from './auth/index.js';
 import { authRoutes } from './routes/auth.js';
 import { webhookRoutes } from './routes/webhooks.js';
 import { inboxRoutes } from './routes/inbox.js';
@@ -121,7 +121,7 @@ async function main() {
   if (upgraded.length) logger.info({ upgraded }, 'AI モデルの設定を後継モデルに切り替えました');
   const corporations = backfillClientEntityTypes();
   if (corporations) logger.info({ corporations }, '名前が法人らしい依頼者を「法人」にしました');
-  ensurePasswordHash();
+  syncPasswordFromEnv();
   const app = createApp();
   const server = serve({ fetch: app.fetch, port: e.PORT, hostname: '0.0.0.0' }, (info) => {
     logger.info({ port: info.port, publicBaseUrl: e.PUBLIC_BASE_URL }, 'サーバーを起動しました');

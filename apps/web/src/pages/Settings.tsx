@@ -345,6 +345,8 @@ export default function Settings() {
     onSuccess: () => {
       formDraft.clear();
       qc.invalidateQueries({ queryKey: ['settings'] });
+      // ログインを許可するアドレスを変えたら、ログインの状態も読み直す
+      qc.invalidateQueries({ queryKey: ['login-status'] });
     },
   });
   // 朝のダイジェストの自動送信のオン・オフ（押したらすぐ保存する）
@@ -432,8 +434,6 @@ export default function Settings() {
   const [importText, setImportText] = useState('');
   const importDraft = useDraft('settings:style-import', importText, setImportText);
   const [importChannel, setImportChannel] = useState('line');
-  const [pw, setPw] = useState({ current: '', next: '' });
-  const changePw = useMutation({ mutationFn: () => api.post('/auth/password', pw), onSuccess: () => { setMsg('パスワードを変更しました'); setPw({ current: '', next: '' }); }, onError: (e) => setMsg((e as Error).message) });
   const backup = useQuery({ queryKey: ['backup'], queryFn: () => api.get<BackupInfo>('/backup') });
   const [backupMsg, setBackupMsg] = useState('');
   const runBackup = useMutation({
@@ -917,7 +917,7 @@ export default function Settings() {
       <section className="card">
         <h2 className="mb-1 font-semibold">ログイン</h2>
         <p className="mb-3 text-xs text-slate-500">
-          Google のクライアント ID を設定すると、ログイン画面に「Google アカウントでログイン」が出ます。許可するアドレスが空のときは「Google に接続」したアカウント
+          ログインは Google アカウントだけです（ID・パスワードでのログインはありません）。ここに書いたアドレスの Google アカウントでログインできます。空のときは「Google に接続」したアカウント
           {s?.google.account ? `（${s.google.account}）` : ''}だけがログインできます。
         </p>
         <label className="label">Google ログインを許可するメールアドレス（複数は改行）</label>
@@ -925,24 +925,7 @@ export default function Settings() {
         <button className="btn btn-primary mt-3" onClick={() => save.mutate()} disabled={save.isPending}>
           保存
         </button>
-        <PasswordLoginSwitch />
-      </section>
-
-      <section className="card">
-        <h2 className="mb-3 font-semibold">パスワード変更</h2>
-        <div className="flex flex-wrap items-end gap-2">
-          <div>
-            <label className="label">現在</label>
-            <input type="password" className="input" value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} />
-          </div>
-          <div>
-            <label className="label">新しいパスワード（8文字以上）</label>
-            <input type="password" className="input" value={pw.next} onChange={(e) => setPw({ ...pw, next: e.target.value })} />
-          </div>
-          <button className="btn" onClick={() => changePw.mutate()} disabled={!pw.current || pw.next.length < 8}>
-            変更
-          </button>
-        </div>
+        <LoginStatus />
       </section>
     </div>
   );
@@ -1349,48 +1332,25 @@ function ChatworkIntake({ cw }: { cw: Status['chatwork'] }) {
   );
 }
 
-/** パスワードでのログインを止める・戻す。止めると Google アカウントでのログインだけになる */
-function PasswordLoginSwitch() {
-  const qc = useQueryClient();
-  const q = useQuery({ queryKey: ['password-login'], queryFn: () => api.get<{ disabled: boolean; emergencyOverride: boolean; googleLogin: boolean; allowedEmails: string[] }>('/auth/password-login') });
-  const [err, setErr] = useState('');
-  const set = useMutation({
-    mutationFn: (disabled: boolean) => api.post<{ disabled: boolean }>('/auth/password-login', { disabled }),
-    onSuccess: () => {
-      setErr('');
-      qc.invalidateQueries({ queryKey: ['password-login'] });
-    },
-    onError: (e) => setErr((e as Error).message),
-  });
+/** ログインの状態（Google アカウントだけ。パスワードは初めの設定と非常口のときだけ） */
+function LoginStatus() {
+  const q = useQuery({ queryKey: ['login-status'], queryFn: () => api.get<{ googleLogin: boolean; googleConfigured: boolean; allowedEmails: string[]; passwordLogin: boolean; emergencyOverride: boolean }>('/auth/login-status') });
   const d = q.data;
   if (!d) return null;
   return (
-    <div className="mt-4 border-t border-slate-100 pt-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="font-medium">パスワードでのログイン</span>
-        <span className={`badge ${d.disabled ? 'badge-blue' : 'badge-orange'}`}>{d.disabled ? '止めています（Google ログインだけ）' : '使えます'}</span>
-        {d.disabled ? (
-          <button className="btn btn-sm" disabled={set.isPending} onClick={() => window.confirm('パスワードでのログインを再開しますか？') && set.mutate(false)}>
-            再開する
-          </button>
-        ) : (
-          <button
-            className="btn btn-sm btn-primary"
-            disabled={set.isPending || !d.googleLogin || d.allowedEmails.length === 0}
-            onClick={() => window.confirm(`パスワードでのログインを止めますか？\n以後は次の Google アカウントでだけログインできます:\n${d.allowedEmails.join('\n')}`) && set.mutate(true)}
-          >
-            止める
-          </button>
-        )}
-      </div>
-      <p className="mt-1 text-xs text-slate-500">
-        止めると、ログイン画面からパスワード欄が消え、パスワードを知っていても入れなくなります。
-        {!d.disabled && (!d.googleLogin || d.allowedEmails.length === 0) && ' Google ログインの設定（クライアント ID と許可するアドレス）が済むと止められます。'}
-        {d.disabled && ` ログインできるのは ${d.allowedEmails.join('、')} です。`}
-        Google でログインできなくなったときは、Railway の Variables に ALLOW_PASSWORD_LOGIN = true を追加すると、一時的にパスワードで入れます（入れたら消してください）。
-      </p>
-      {d.emergencyOverride && <div className="mt-1 text-xs text-orange-700">いま ALLOW_PASSWORD_LOGIN が設定されているため、止めていてもパスワードで入れる状態です。用が済んだら Railway の Variables から消してください。</div>}
-      {err && <div className="mt-1 text-xs text-red-600">{err}</div>}
+    <div className="mt-4 space-y-1 border-t border-slate-100 pt-3 text-xs">
+      {d.googleLogin ? (
+        <div className="text-slate-600">
+          <span className="badge badge-blue mr-1">Google ログインだけ</span>
+          ログインできるのは {d.allowedEmails.join('、')} です。
+        </div>
+      ) : (
+        <div className="rounded bg-orange-50 p-2 text-orange-800">
+          Google ログインの準備ができていません（{d.googleConfigured ? '許可するアドレスがありません。上に書くか、初期設定で「Google に接続」してください' : '初期設定で Google のクライアント ID を設定してください'}）。準備ができるまでは APP_PASSWORD のパスワードで入れます。準備ができると、パスワードでは入れなくなります。
+        </div>
+      )}
+      {d.emergencyOverride && <div className="rounded bg-orange-50 p-2 text-orange-800">いま ALLOW_PASSWORD_LOGIN が設定されているため、パスワードでも入れる状態です。用が済んだら Railway の Variables から消してください。</div>}
+      <p className="text-slate-500">Google でログインできなくなったときの非常口: Railway の Variables に ALLOW_PASSWORD_LOGIN = true と APP_PASSWORD = （パスワード）を追加すると、一時的にパスワードで入れます。入れたら両方消してください。</p>
     </div>
   );
 }
