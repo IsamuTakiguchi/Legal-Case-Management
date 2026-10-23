@@ -22,7 +22,7 @@ vi.mock('../integrations/anthropic.js', async (importActual) => {
 });
 
 const { openTestDatabase, closeDatabase, db, schema } = await import('../db/index.js');
-const { parseContactMemo, parseJaDate, formatWareki, addYearsIso } = await import('@lcm/shared');
+const { parseContactMemo, parseJaDate, formatWareki, addYearsIso, insurerSides, splitNumbers } = await import('@lcm/shared');
 const { createApp } = await import('../index.js');
 const { setPassword } = await import('../auth/index.js');
 const { eq } = await import('drizzle-orm');
@@ -78,9 +78,9 @@ describe('連絡先メモの読み取り', () => {
       accidentDate: '2023-09-10',
       accidentDateText: 'R5.9.10',
       contacts: [
-        { role: 'client_insurer', organization: '東京海上日動', department: null, name: '岡田', phone: '06-6910-6265', fax: '050-3385-7581', emails: [] },
-        { role: 'opponent_insurer', organization: 'JA共済', department: '物損', name: '青木', phone: '0742-27-4435', fax: '0742-27-5234', emails: [] },
-        { role: 'opponent_insurer', organization: 'JA共済', department: '人損', name: '森西', phone: '0742-27-4148', fax: '0742-27-5234', emails: [] },
+        { role: 'client_insurer', organization: '東京海上日動', department: null, name: '岡田', phone: '06-6910-6265', fax: '050-3385-7581', emails: [], note: null },
+        { role: 'opponent_insurer', organization: 'JA共済', department: '物損', name: '青木', phone: '0742-27-4435', fax: '0742-27-5234', emails: [], note: null },
+        { role: 'opponent_insurer', organization: 'JA共済', department: '人損', name: '森西', phone: '0742-27-4148', fax: '0742-27-5234', emails: [], note: null },
       ],
     });
   });
@@ -88,10 +88,92 @@ describe('連絡先メモの読み取り', () => {
   it('メール・担当者のいない代表番号・区分の見出しが無い保険会社も読む', () => {
     const r = parseContactMemo('相手方保険\nあいおいニッセイ同和損保 佐藤\nTEL：03-1111-2222\nmail: sato@example.com\n\n三井住友海上\nTEL 0120-000-000');
     expect(r.contacts).toEqual([
-      { role: 'opponent_insurer', organization: 'あいおいニッセイ同和損保', department: null, name: '佐藤', phone: '03-1111-2222', fax: null, emails: ['sato@example.com'] },
-      { role: 'opponent_insurer', organization: '三井住友海上', department: null, name: '三井住友海上', phone: '0120-000-000', fax: null, emails: [] },
+      { role: 'opponent_insurer', organization: 'あいおいニッセイ同和損保', department: null, name: '佐藤', phone: '03-1111-2222', fax: null, emails: ['sato@example.com'], note: null },
+      { role: 'opponent_insurer', organization: '三井住友海上', department: null, name: '三井住友海上', phone: '0120-000-000', fax: null, emails: [], note: null },
     ]);
     expect(parseContactMemo('三井住友海上 鈴木\nTEL:03-0000-0000').contacts[0]!.role).toBe('insurer');
+  });
+});
+
+describe('担当者が続けて書かれたメモ（物損・人損の担当、共通の TEL・FAX、受付番号）', () => {
+  const USER_MEMO = [
+    '依頼者側保険会社',
+    '東京海上日動　桧垣⇒岡田（物損）',
+    'あさおか（人損）',
+    'TEL:06-6910-6265',
+    'FAX:050-3385-7581',
+    '受付番号:23-631-86252',
+    '',
+    '相手方側保険会社',
+    'JA共済',
+    '物損担当　青木様⇒かわきた',
+    'TEL:0742-27-4435',
+    'FAX:0742-27-5234',
+    '通院医療担当   森西様',
+    'TEL:0742-27-4148',
+    'FAX:0742-27-5234',
+  ].join('\n');
+
+  it('「名前（物損）」は担当の区分に分け、次の行の担当者も同じ会社。共通の TEL・FAX・受付番号は両方に付ける', () => {
+    expect(parseContactMemo(USER_MEMO).contacts).toEqual([
+      { role: 'client_insurer', organization: '東京海上日動', department: '物損', name: '桧垣⇒岡田', phone: '06-6910-6265', fax: '050-3385-7581', emails: [], note: '受付番号: 23-631-86252' },
+      { role: 'client_insurer', organization: '東京海上日動', department: '人損', name: 'あさおか', phone: '06-6910-6265', fax: '050-3385-7581', emails: [], note: '受付番号: 23-631-86252' },
+      { role: 'opponent_insurer', organization: 'JA共済', department: '物損', name: '青木様⇒かわきた', phone: '0742-27-4435', fax: '0742-27-5234', emails: [], note: null },
+      { role: 'opponent_insurer', organization: 'JA共済', department: '通院医療', name: '森西様', phone: '0742-27-4148', fax: '0742-27-5234', emails: [], note: null },
+    ]);
+  });
+
+  it('番号のあとに書かれた担当者には、前の担当者の番号を付けない。会社名だけの行は新しい会社', () => {
+    const r = parseContactMemo('相手方保険\nソニー損保 山本（物損）\nTEL:03-1111-1111\n川口（人損）\nTEL:03-2222-2222\n\n三井住友海上\n田中様\nTEL:03-3333-3333');
+    expect(r.contacts.map((c) => [c.organization, c.department, c.name, c.phone])).toEqual([
+      ['ソニー損保', '物損', '山本', '03-1111-1111'],
+      ['ソニー損保', '人損', '川口', '03-2222-2222'],
+      ['三井住友海上', null, '田中様', '03-3333-3333'],
+    ]);
+  });
+
+  it('概要の表示用に、依頼者側・相手方・どちらか分からない保険会社の順で、会社ごとに登録した順でまとめる（名前順で渡されても）', () => {
+    const base = { phone: null, fax: null, emails: [], note: null, department: null };
+    const rows = [
+      { ...base, id: 4, role: 'opponent_insurer', organization: 'JA共済', name: '森西' },
+      { ...base, id: 1, role: 'opponent_insurer', organization: 'JA共済', name: '青木' },
+      { ...base, id: 2, role: 'opponent_counsel', organization: '甲法律事務所', name: '佐藤' },
+      { ...base, id: 3, role: 'client_insurer', organization: '東京海上日動', name: '岡田' },
+      { ...base, id: 5, role: 'insurer', organization: null, name: '三井住友海上' },
+    ];
+    expect(insurerSides(rows).map((s) => [s.role, s.companies.map((c) => [c.organization, c.people.map((p) => p.id)])])).toEqual([
+      ['client_insurer', [['東京海上日動', [3]]]],
+      ['opponent_insurer', [['JA共済', [1, 4]]]],
+      ['insurer', [['三井住友海上', [5]]]],
+    ]);
+    expect(splitNumbers('06-1111-2222 / 090-3333-4444')).toEqual(['06-1111-2222', '090-3333-4444']);
+    expect(splitNumbers(null)).toEqual([]);
+  });
+
+  it('受付番号もメモとして登録し、2 回目は重ねない。事件の画面には依頼者の窓口も付く', async () => {
+    const client = db().insert(schema.clients).values({ name: '奥戸 正勝', phones: ['090-0000-1111'] }).returning().get();
+    db().insert(schema.clientPersons).values({ clientId: client.id, name: '奥戸 花子', title: '妻', phones: ['090-2222-3333'], primary: true }).run();
+    const kase = db().insert(schema.cases).values({ clientId: client.id, caseType: 'traffic', title: '奥戸 交通事故' }).returning().get();
+    const { importContactMemo } = await import('../services/contactMemo.js');
+    const contacts = parseContactMemo(USER_MEMO).contacts;
+    expect(importContactMemo(kase.id, { contacts })).toMatchObject({ created: 4 });
+    const okada = () => db().select().from(schema.caseContacts).where(eq(schema.caseContacts.caseId, kase.id)).all().find((x) => x.name === '桧垣⇒岡田')!;
+    expect(okada()).toMatchObject({ department: '物損', note: '受付番号: 23-631-86252' });
+    importContactMemo(kase.id, { contacts });
+    expect(okada().note).toBe('受付番号: 23-631-86252');
+    // 手で書いたメモがあれば、受付番号は後ろに足す
+    db().update(schema.caseContacts).set({ note: '平日 9-17 時' }).where(eq(schema.caseContacts.id, okada().id)).run();
+    importContactMemo(kase.id, { contacts });
+    expect(okada().note).toBe('平日 9-17 時\n受付番号: 23-631-86252');
+
+    const app = createApp();
+    setPassword('memo-test2');
+    const login = await app.request('/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'memo-test2' }) });
+    const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+    const detail = await (await app.request(`/api/cases/${kase.id}`, { headers: { cookie } })).json();
+    expect(detail.client.phones).toEqual(['090-0000-1111']);
+    expect(detail.persons.map((p: { name: string; phones: string[] }) => [p.name, p.phones])).toEqual([['奥戸 花子', ['090-2222-3333']]]);
+    expect(detail.contacts).toHaveLength(4);
   });
 });
 

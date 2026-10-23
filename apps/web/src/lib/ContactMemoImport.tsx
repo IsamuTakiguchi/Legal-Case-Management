@@ -127,7 +127,8 @@ export function ContactMemoImport({ caseId, onDone, onClose }: { caseId: number;
                 <div className="mt-0.5 pl-5 text-slate-600">
                   {r.phone && <span className="mr-3 whitespace-nowrap">TEL {r.phone}</span>}
                   {r.fax && <span className="mr-3 whitespace-nowrap">FAX {r.fax}</span>}
-                  {r.emails.length > 0 && <span>{r.emails.join(', ')}</span>}
+                  {r.emails.length > 0 && <span className="mr-3">{r.emails.join(', ')}</span>}
+                  {r.note && <span className="inline-block whitespace-pre-wrap">{r.note}</span>}
                 </div>
               </li>
             ))}

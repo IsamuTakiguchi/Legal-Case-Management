@@ -19,6 +19,7 @@ const aiSchema = z.object({
       phone: z.string().nullable(),
       fax: z.string().nullable(),
       emails: z.array(z.string()),
+      note: z.string().nullable().describe('受付番号・証券番号など（例: 受付番号: 23-631-86252）。無ければ null'),
     }),
   ),
 });
@@ -42,7 +43,7 @@ export async function readContactMemo(text: string): Promise<ContactMemo & { by:
   return {
     accidentDate: parseJaDate(r.accidentDateText) ?? parseJaDate(r.accidentDate),
     accidentDateText: r.accidentDateText,
-    contacts: r.contacts.filter((c) => c.name.trim()).map((c) => ({ ...c, emails: c.emails.filter((e) => e.includes('@')) })),
+    contacts: r.contacts.filter((c) => c.name.trim()).map((c) => ({ ...c, emails: c.emails.filter((e) => e.includes('@')), note: c.note ?? null })),
     by: 'ai',
   };
 }
@@ -53,7 +54,7 @@ const norm = (s: string | null | undefined) => (s ?? '').normalize('NFKC').repla
  * 読み取った内容を事件に登録する。
  * 同じ会社・同じ担当者（区分も同じ）が登録済みなら新しく作らず、空いている電話・FAX・メールだけ補う
  */
-export function importContactMemo(caseId: number, input: { accidentDate?: string | null; contacts: MemoContact[] }) {
+export function importContactMemo(caseId: number, input: { accidentDate?: string | null; contacts: (Omit<MemoContact, 'note'> & { note?: string | null })[] }) {
   const kase = db().select().from(schema.cases).where(eq(schema.cases.id, caseId)).get();
   if (!kase) throw new Error('事件が見つかりません');
   if (input.accidentDate) {
@@ -73,6 +74,7 @@ export function importContactMemo(caseId: number, input: { accidentDate?: string
       if (!same.fax && c.fax) patch.fax = c.fax;
       const emails = [...new Set([...same.emails, ...c.emails.map((e) => e.trim().toLowerCase())])];
       if (emails.length !== same.emails.length) patch.emails = emails;
+      if (c.note && !norm(same.note).includes(norm(c.note))) patch.note = same.note ? `${same.note}\n${c.note}` : c.note;
       if ((same.role === 'insurer' || same.role === 'other') && c.role !== same.role && c.role !== 'other') patch.role = c.role;
       if (Object.keys(patch).length) {
         updateContact(same.id, patch);
@@ -80,7 +82,7 @@ export function importContactMemo(caseId: number, input: { accidentDate?: string
       }
       continue;
     }
-    existing.push(createContact(caseId, { ...c, kana: null, lineUserId: null, chatworkAccountId: null, note: null }));
+    existing.push(createContact(caseId, { ...c, kana: null, lineUserId: null, chatworkAccountId: null, note: c.note ?? null }));
     created++;
   }
   return { created, updated, accidentDate: db().select().from(schema.cases).where(eq(schema.cases.id, caseId)).get()!.accidentDate };

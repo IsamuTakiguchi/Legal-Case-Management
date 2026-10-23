@@ -323,7 +323,9 @@ clientRoutes.get('/cases/:id', (c) => {
   const folder = kase.client
     ? { rel: caseFolderRel(kase, kase.client), path: caseFolder(kase.client, kase), own: !!kase.onedriveFolderPath?.trim(), suggested: defaultCaseFolderRel(kase.client, kase) }
     : null;
-  return c.json({ ...kase, folder });
+  // 概要に出す依頼者の窓口（ご家族・法人の担当者）
+  const persons = kase.client ? listClientPersons(kase.client.id) : [];
+  return c.json({ ...kase, folder, persons });
 });
 
 /** 事件のフォルダを指定し直す（path を空にすると依頼者フォルダを使う） */
@@ -355,9 +357,9 @@ clientRoutes.post('/cases/:id/contacts/parse', async (c) => {
 
 /** 読み取った内容（画面で確かめたもの）を登録する */
 clientRoutes.post('/cases/:id/contacts/import', async (c) => {
-  const contact = caseContactInputSchema.pick({ role: true, name: true, organization: true, department: true, phone: true, fax: true, emails: true });
+  const contact = caseContactInputSchema.pick({ role: true, name: true, organization: true, department: true, phone: true, fax: true, emails: true, note: true });
   const body = z.object({ accidentDate: z.string().max(40).nullable().optional(), contacts: z.array(contact).max(100) }).parse(await c.req.json());
-  const contacts = body.contacts.map((x) => ({ ...x, organization: x.organization ?? null, department: x.department ?? null, phone: x.phone ?? null, fax: x.fax ?? null }));
+  const contacts = body.contacts.map((x) => ({ ...x, organization: x.organization ?? null, department: x.department ?? null, phone: x.phone ?? null, fax: x.fax ?? null, note: x.note ?? null }));
   return c.json(importContactMemo(Number(c.req.param('id')), { accidentDate: body.accidentDate, contacts }));
 });
 
