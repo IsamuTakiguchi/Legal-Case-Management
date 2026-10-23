@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { InstructionBox } from '../lib/InstructionBox';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { mergedLabel, type MergeRef } from '../lib/mergedAttachment';
@@ -666,9 +667,14 @@ export default function Conversation() {
               )}
             </div>
           )}
+          <InstructionBox
+            value={instruction}
+            onChange={setInstruction}
+            onSubmit={() => !draft.isPending && draft.mutate()}
+            placeholder={'AI への指示（例: 来週火曜14時で確定と返す／資料の受領を伝えて次回期日を案内）\n長い指示や箇条書きも書けます。Ctrl（⌘）+ Enter で下書きを作成'}
+          />
+          <DraftHint handle={instructionDraft} className="w-full" />
           <div className="flex flex-wrap items-center gap-2">
-            <input className="input flex-1" placeholder="AI への指示（例: 来週火曜14時で確定と返す／資料の受領を伝えて次回期日を案内）" value={instruction} onChange={(e) => setInstruction(e.target.value)} />
-            <DraftHint handle={instructionDraft} className="w-full" />
             <select className="input w-auto" value={templateKey} onChange={(e) => setTemplateKey(e.target.value)}>
               <option value="">テンプレートなし</option>
               {templates.data?.map((t) => (

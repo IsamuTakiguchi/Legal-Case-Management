@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { InstructionBox } from '../lib/InstructionBox';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
@@ -672,8 +673,14 @@ function HoldProposalPanel({ sessionId, onClose, onSent }: { sessionId: number; 
           </label>
           <textarea className="input min-h-28 text-sm" value={text} onChange={(e) => setText(e.target.value)} />
           <DraftHint handle={draft} />
+          <InstructionBox
+            value={instruction}
+            onChange={setInstruction}
+            onSubmit={() => !restyle.isPending && restyle.mutate()}
+            className="text-sm"
+            placeholder="AI への指示（例: 事務所での面談であることも書く）"
+          />
           <div className="flex flex-wrap items-center gap-2">
-            <input className="input min-w-0 flex-1 py-0.5 text-xs" value={instruction} onChange={(e) => setInstruction(e.target.value)} placeholder="AI への指示（例: 事務所での面談であることも書く）" />
             <button className="btn btn-sm" onClick={() => restyle.mutate()} disabled={restyle.isPending} title="いつもの言い回しに書き直します（候補の日時はそのまま）">
               {restyle.isPending ? '整えています…' : '自分の文体で整える'}
             </button>
