@@ -4,6 +4,7 @@ import { api } from './api';
 import { useDraftGroup, DraftHint } from './draft';
 import { DUE_HINT, FOLLOW_HINT } from './Deadline';
 import { toLocalInput, fromLocalInput } from './format';
+import { ContactSuggestions } from './ContactSuggestions';
 import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR_LABEL, jstYmd, type CaseNoteKind, type WaitingFor } from '@lcm/shared';
 
 export function dueYmd(due?: string | null): string | null {
@@ -135,6 +136,15 @@ export function NoteComposer({
         {kind === 'phone' && <input type="tel" className="input w-40" placeholder="電話番号" value={phone} onChange={(e) => setPhone(e.target.value)} />}
         <input type="datetime-local" className="input w-auto" value={occurredAt} onChange={(e) => setOccurredAt(e.target.value)} />
       </div>
+      <ContactSuggestions
+        caseId={caseId || null}
+        name={counterpart}
+        phone={kind === 'phone' ? phone : ''}
+        onPick={(s) => {
+          if (s.name) setCounterpart(s.name);
+          if (s.phone && kind === 'phone') setPhone(s.phone);
+        }}
+      />
       <textarea
         className="input min-h-28"
         placeholder={

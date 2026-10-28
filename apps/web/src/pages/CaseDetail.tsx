@@ -25,9 +25,11 @@ import { CaseContactSummary, type SummaryClient } from '../lib/CaseContactSummar
 import type { ClientPerson } from '../lib/ClientPersons';
 import { ClientContactSetup, unreachableClientId } from '../lib/ClientContactSetup';
 import { useLocalUploads, LocalFileButton, LocalFileBadges, fileDropProps } from '../lib/LocalFileAttach';
+import { ContactSuggestions } from '../lib/ContactSuggestions';
 
 interface Note {
   id: number;
+  caseId?: number;
   kind: string;
   occurredAt: string;
   counterpart: string | null;
@@ -1613,6 +1615,15 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
           ))}
         </select>
       </div>
+      <ContactSuggestions
+        caseId={n.caseId ?? null}
+        name={counterpart}
+        phone={kind === 'phone' ? phone : ''}
+        onPick={(s) => {
+          if (s.name) setCounterpart(s.name);
+          if (s.phone && kind === 'phone') setPhone(s.phone);
+        }}
+      />
       <div>
         <label className="label">要旨</label>
         <textarea className="input min-h-16 text-sm" value={gist} onChange={(e) => setGist(e.target.value)} placeholder="空なら元メモがそのまま表示されます" />

@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { noteContactSuggestions } from '../services/noteContacts.js';
 import { listStaff, createStaff, updateStaff, deleteStaff, listChatworkAccounts, staffRooms } from '../services/staff.js';
 import { listRooms } from '../channels/chatwork.js';
 import { isConfigured } from '../config.js';
@@ -431,6 +432,12 @@ clientRoutes.put('/cases/:id', async (c) => {
 clientRoutes.post('/cases/:id/summary', async (c) => {
   const md = await generateCaseSummary(Number(c.req.param('id')));
   return c.json({ summary: md });
+});
+
+/** 記録の「相手」「電話番号」の候補（過去の記録と、登録してある連絡先から。事件が無ければ記録の履歴だけ） */
+clientRoutes.get('/note-contact-suggestions', (c) => {
+  const caseId = Number(c.req.query('caseId')) || null;
+  return c.json(noteContactSuggestions(caseId));
 });
 
 /** 電話メモなどの整理（保存前プレビュー） */
