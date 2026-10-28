@@ -503,6 +503,8 @@ export function getConversation(id: number) {
       replyTo: replyTargetOf(m, messages),
       /** アプリの外（LINE アプリなど）で送ったものを手で記録したもの */
       manual: !!(m.raw as { manual?: boolean } | null)?.manual,
+      // 自分の送信に添付したファイルの名前
+      sentFiles: (m.raw as { sentFiles?: string[] } | null)?.sentFiles ?? [],
       attachments: atts.filter((a) => a.messageId === m.id),
       clientName: m.clientId ? (msgClients.find((c) => c.id === m.clientId)?.name ?? null) : null,
       caseTitle: m.caseId ? (msgCases.find((c) => c.id === m.caseId)?.title ?? null) : null,

@@ -46,7 +46,7 @@ function assertFuture(iso: string) {
 }
 
 /** 送信内容を保存し、時刻が来るまで待つ */
-export function scheduleMessage(conversationId: number, input: SendMessageInput, scheduledAt: string): ScheduledMessageRow {
+export function scheduleMessage(conversationId: number, input: Omit<SendMessageInput, 'uploadIds'> & { uploadIds?: string[] }, scheduledAt: string): ScheduledMessageRow {
   const d = db();
   const conv = d.select().from(schema.conversations).where(eq(schema.conversations.id, conversationId)).get();
   if (!conv) throw new Error('会話が見つかりません');

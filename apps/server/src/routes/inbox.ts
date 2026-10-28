@@ -9,6 +9,7 @@ import { linkConversationToClient, suggestClients } from '../services/identity.j
 import { linkConversationToContact, unlinkConversation, createContact, getContact } from '../services/contacts.js';
 import { assignConversationAttachments } from '../services/attachments.js';
 import { sendToConversation } from '../services/send.js';
+import { saveOutboundUpload, removeOutboundUploads } from '../services/outboundUploads.js';
 import { staffAskContext, draftStaffAsk, sendStaffAsk, type StaffAskSource } from '../services/staffAsk.js';
 import { clientConfirmContext, draftClientConfirm, sendClientConfirm, CONFIRM_CHANNELS } from '../services/clientConfirm.js';
 import { pendingHoldsFor } from '../services/court.js';
@@ -329,6 +330,20 @@ inboxRoutes.post('/conversations/:id/messages/:messageId/reaction', async (c) =>
   if (!reaction) return c.json({ error: 'そのリアクションは設定にありません' }, 400);
   const r = await sendToConversation(id, { ...sendMessageSchema.parse({ text: reaction.text }), replyToMessageId: messageId }, { learn: false });
   return c.json({ ok: true, messageId: r.messageId, text: reaction.text });
+});
+
+/** 送信に添付する、パソコンから選んだファイルを一時置き場に上げる（送信のときに uploadIds で指定する） */
+inboxRoutes.post('/outbound-uploads', async (c) => {
+  const form = await c.req.parseBody();
+  const file = form.file;
+  if (!(file instanceof File)) return c.json({ error: 'ファイルを指定してください' }, 400);
+  return c.json(saveOutboundUpload(file.name, file.type || null, Buffer.from(await file.arrayBuffer())));
+});
+
+/** 選んだファイルを外したとき（送らずに消す） */
+inboxRoutes.delete('/outbound-uploads/:id', (c) => {
+  removeOutboundUploads([c.req.param('id')]);
+  return c.json({ ok: true });
 });
 
 /** 送信（scheduledAt があれば今は送らず予約する） */

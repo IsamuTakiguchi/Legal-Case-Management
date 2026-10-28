@@ -19,6 +19,7 @@ import { TaskDeadlines, NewTaskDeadlines, WaitDeadlineSelect, fmtDeadline } from
 import { dateOnlyDeadline, SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply, messageLink, type EventKind } from '@lcm/shared';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 import { AttachmentImage, canPreviewImage } from '../lib/AttachmentImage';
+import { useLocalUploads, LocalFileButton, LocalFileBadges, fileDropProps } from '../lib/LocalFileAttach';
 
 /** Chatwork の取込理由の表示名（設定画面の診断と同じ） */
 const SCOPE_REASON_LABEL: Record<string, string> = {
@@ -59,6 +60,8 @@ interface Message {
   caseTitle?: string | null;
   /** LINE アプリなど、アプリの外で送ったものを手で記録したもの */
   manual?: boolean;
+  /** 自分の送信に添付したファイルの名前 */
+  sentFiles?: string[];
 }
 interface Conv {
   id: number;
@@ -159,6 +162,8 @@ export default function Conversation() {
   const [sendPreset, setSendPreset] = useState<string | null>(null);
   const [selectedAtt, setSelectedAtt] = useState<number[]>([]);
   const [driveFiles, setDriveFiles] = useState<DriveFile[]>([]);
+  // パソコンから選んだファイル
+  const uploads = useLocalUploads();
   const [showFiles, setShowFiles] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
   const [showStaffAsk, setShowStaffAsk] = useState(false);
@@ -239,6 +244,7 @@ export default function Conversation() {
         text,
         attachmentIds: selectedAtt,
         driveFiles: driveFiles.map((f) => ({ itemId: f.itemId, name: f.name, path: f.path })),
+        uploadIds: uploads.ids,
         draftId,
         createWaitingTask: createWaiting,
         waitingFollowUpAt: createWaiting ? waitUntil : null,
@@ -252,6 +258,7 @@ export default function Conversation() {
       setDraftId(null);
       setSelectedAtt([]);
       setDriveFiles([]);
+      uploads.clear();
       setCreateWaiting(false);
       setWaitUntil(null);
       setReplyTo(null);
@@ -580,6 +587,15 @@ export default function Conversation() {
                 )}
                 {c.cases.length >= 2 && !c.contact && <CaseTag m={m} cases={c.cases} out={m.direction === 'out'} onChanged={invalidate} />}
                 {c.channel === 'chatwork' && m.direction === 'in' && <MessageTools m={m} onChanged={invalidate} />}
+                {m.direction === 'out' && (m.sentFiles?.length ?? 0) > 0 && (
+                  <ul className="mt-1 space-y-0.5">
+                    {m.sentFiles!.map((name, i) => (
+                      <li key={`${name}-${i}`} className="text-xs">
+                        📎 {name} <span className="text-blue-100">（添付して送信）</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 {m.attachments.some(canPreviewImage) && (
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
                     {m.attachments.filter(canPreviewImage).map((a) => (
@@ -697,7 +713,7 @@ export default function Conversation() {
               この相手は LINE公式アカウントをブロック（または友だち解除・退会）しています。LINE で送っても届きません。Gmail や電話など別の方法で連絡してください。
             </div>
           )}
-          <textarea className="input min-h-40 font-mono text-sm" value={text} onChange={(e) => setText(e.target.value)} placeholder="返信本文（AI 下書きを編集して送信）" />
+          <textarea className="input min-h-40 font-mono text-sm" value={text} onChange={(e) => setText(e.target.value)} placeholder="返信本文（AI 下書きを編集して送信。ファイルをここにドラッグ＆ドロップすると添付できます）" {...fileDropProps(uploads)} />
           <DraftHint handle={textDraft} />
           {(selectedAtt.length > 0 || driveFiles.length > 0) && (
             <div className="flex flex-wrap gap-1 text-xs">
@@ -722,11 +738,13 @@ export default function Conversation() {
               ))}
             </div>
           )}
-          {c.channel === 'line' && (selectedAtt.length > 0 || driveFiles.length > 0) && <div className="text-xs text-orange-700">LINE はファイルを直接送れないため、OneDrive の共有リンクとして送ります（発行できない場合は手動送付の案内文になります）。</div>}
+          <LocalFileBadges uploads={uploads} />
+          {c.channel === 'line' && (selectedAtt.length > 0 || driveFiles.length > 0 || uploads.items.length > 0) && <div className="text-xs text-orange-700">LINE はファイルを直接送れないため、OneDrive の共有リンクとして送ります（発行できない場合は手動送付の案内文になります）。</div>}
           <div className="flex flex-wrap items-center gap-2">
             <button className="btn btn-sm" onClick={() => setShowFiles(!showFiles)} disabled={!c.client}>
               📄 フォルダのファイルを添付
             </button>
+            <LocalFileButton uploads={uploads} />
             <button className="btn btn-sm" onClick={() => setShowSchedule(!showSchedule)}>
               📅 日程調整
             </button>
@@ -759,7 +777,7 @@ export default function Conversation() {
             </label>
             {createWaiting && <WaitDeadlineSelect value={waitUntil} onChange={setWaitUntil} />}
             <div className="ml-auto flex items-center gap-1">
-              <button className="btn btn-primary" onClick={() => send.mutate(undefined)} disabled={!text.trim() || send.isPending}>
+              <button className="btn btn-primary" onClick={() => send.mutate(undefined)} disabled={!text.trim() || send.isPending || uploads.uploading.length > 0}>
                 {send.isPending ? '送信中…' : c.lineGroup ? 'LINE グループに送信' : `${channelLabel(c.channel)} で送信`}
               </button>
               <button className={`btn ${showTimer ? 'text-[var(--accent)]' : ''}`} onClick={() => setShowTimer(!showTimer)} disabled={send.isPending} title="時刻を指定して、その時刻に自動で送ります" aria-expanded={showTimer}>
@@ -823,7 +841,7 @@ export default function Conversation() {
                   setSendPreset(null);
                 }}
               />
-              <button className="btn btn-primary" onClick={() => send.mutate(fromLocalInput(sendAt))} disabled={!text.trim() || !sendAt || send.isPending}>
+              <button className="btn btn-primary" onClick={() => send.mutate(fromLocalInput(sendAt))} disabled={!text.trim() || !sendAt || send.isPending || uploads.uploading.length > 0}>
                 {sendAt ? `${fmtDateTime(fromLocalInput(sendAt))} に送信予約` : '時刻を選んでください'}
               </button>
               <span className="text-xs text-slate-400">予約後も、この画面の「送信予約」から取消・時刻変更・今すぐ送信ができます</span>
