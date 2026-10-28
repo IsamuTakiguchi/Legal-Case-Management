@@ -205,8 +205,12 @@ export function guessClientFromText(text: string): { clientId: number; caseId: n
     if (bySurname.length === 1) hit = bySurname[0];
   }
   if (!hit) return null;
+  return { clientId: hit.id, caseId: primaryOpenCase(hit.id)?.id ?? null };
+}
+
+/** 依頼者の終了していない事件のうち、いちばん主な 1 件（進行事件 → 残務処理 → 相談、同じなら最近更新したもの） */
+export function primaryOpenCase(clientId: number) {
   const rank: Record<string, number> = { active: 0, wrapup: 1, consultation: 2 };
-  const open = db().select().from(schema.cases).where(and(eq(schema.cases.clientId, hit.id), inArray(schema.cases.status, OPEN_CASE_STATUSES))).all();
-  const kase = open.sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || b.updatedAt.localeCompare(a.updatedAt))[0];
-  return { clientId: hit.id, caseId: kase?.id ?? null };
+  const open = db().select().from(schema.cases).where(and(eq(schema.cases.clientId, clientId), inArray(schema.cases.status, OPEN_CASE_STATUSES))).all();
+  return open.sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || b.updatedAt.localeCompare(a.updatedAt))[0] ?? null;
 }
