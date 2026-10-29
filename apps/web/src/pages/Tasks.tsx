@@ -10,7 +10,7 @@ import { TaskDeadlines, NewTaskDeadlines, fmtDeadline } from '../lib/Deadline';
 import { MemoBadge } from '../lib/Memo';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { CallbackPanel } from '../lib/CallbackPanel';
-import { TASK_STATUSES, TASK_STATUS_LABEL, taskDeadline, isWaitingStatus, type TaskStatus } from '@lcm/shared';
+import { TASK_STATUSES, TASK_STATUS_LABEL, taskDeadline, isWaitingStatus, type TaskStatus, NEW_TASK_STATUSES } from '@lcm/shared';
 import { useSort, readingKey, type SortOption } from '../lib/sort';
 import { Icon } from '../lib/icons';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
@@ -54,10 +54,11 @@ const TASK_SORTS: SortOption<Task>[] = [
   { key: 'updated', label: '更新が新しい順', value: (t) => t.updatedAt ?? null, desc: true },
 ];
 
-type BulkAction = 'done' | 'open' | 'waiting_client' | 'waiting_other' | 'waiting_staff' | 'nudge' | 'delete';
+type BulkAction = 'done' | 'open' | 'drafted' | 'waiting_client' | 'waiting_other' | 'waiting_staff' | 'nudge' | 'delete';
 const BULK_LABEL: Record<BulkAction, string> = {
   done: '完了にしました',
   open: '対応中に戻しました',
+  drafted: '起案・検討完了にしました',
   waiting_client: '依頼者の返信待ちにしました',
   waiting_other: '相手方・裁判所待ちにしました',
   waiting_staff: '事務局の回答・作業待ちにしました',
@@ -234,7 +235,7 @@ export default function Tasks() {
         />
         {clientId && <CaseSelect clientId={Number(clientId)} value={caseId} onChange={setCaseId} />}
         <select className="input w-auto" value={newStatus} onChange={(e) => setNewStatus(e.target.value as TaskStatus)}>
-          {TASK_STATUSES.filter((s) => s !== 'done' && s !== 'memo').map((s) => (
+          {NEW_TASK_STATUSES.map((s) => (
             <option key={s} value={s}>
               {TASK_STATUS_LABEL[s]}
             </option>
@@ -261,6 +262,9 @@ export default function Tasks() {
             </button>
             <button className="btn btn-sm" onClick={() => bulk.mutate('open')} disabled={bulk.isPending}>
               対応中に戻す
+            </button>
+            <button className="btn btn-sm" onClick={() => bulk.mutate('drafted')} disabled={bulk.isPending} title="起案・検討は済み、提出・送付などが残っているもの">
+              起案・検討完了に
             </button>
             <button className="btn btn-sm" onClick={() => bulk.mutate('waiting_client')} disabled={bulk.isPending}>
               依頼者待ちに
@@ -301,7 +305,7 @@ export default function Tasks() {
           </thead>
           <tbody className="block md:table-row-group">
             {rows.map((t) => {
-              const over = t.followUpAt && new Date(t.followUpAt).getTime() < now && t.status !== 'done' && t.status !== 'open';
+              const over = t.followUpAt && new Date(t.followUpAt).getTime() < now && isWaitingStatus(t.status);
               return (
                 <Fragment key={t.id}>
                 <tr className={`flex flex-wrap items-center border-t border-slate-100 py-1 first:border-t-0 md:table-row md:py-0 md:first:border-t ${selected.has(t.id) ? 'bg-blue-50' : over ? 'bg-orange-50' : ''}`}>
