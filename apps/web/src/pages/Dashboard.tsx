@@ -93,7 +93,7 @@ export default function Dashboard() {
       <div className="stagger grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
         <Stat label="未返信の会話" value={d.needsReply} to="/inbox?needsReply=1" icon="mail" tone={d.needsReply ? 'blue' : 'gray'} />
         <Stat label="要確認" value={d.alerts.length} to="/alerts" icon="alert" tone={d.alerts.length ? 'orange' : 'gray'} />
-        <TaskSplit counts={d.taskCounts ?? { open: d.openTasks, waiting: d.waiting.length, waitingClient: d.waiting.filter((t) => t.status === 'waiting_client').length, waitingOther: d.waiting.filter((t) => t.status === 'waiting_other').length, waitingStaff: d.waiting.filter((t) => t.status === 'waiting_staff').length, openOverdue: 0, waitingOverdue: 0 }} />
+        <TaskSplit counts={d.taskCounts ?? { open: d.openTasks, drafted: 0, waiting: d.waiting.length, waitingClient: d.waiting.filter((t) => t.status === 'waiting_client').length, waitingOther: d.waiting.filter((t) => t.status === 'waiting_other').length, waitingStaff: d.waiting.filter((t) => t.status === 'waiting_staff').length, openOverdue: 0, waitingOverdue: 0 }} />
         {d.caseCounts && <CaseSplit counts={d.caseCounts} />}
       </div>
       <div className="stagger grid gap-4 md:grid-cols-2">
@@ -282,14 +282,14 @@ function TaskSplit({ counts }: { counts: TaskCounts }) {
             <span className={`text-[30px] font-semibold leading-none tabular-nums tracking-[-0.03em] ${t.value}`}>{opts.value}</span>
             {opts.overdue > 0 && <span className="badge badge-orange whitespace-nowrap">期限切れ {opts.overdue}</span>}
           </div>
-          {opts.sub && <div className="mt-1 truncate text-xs text-[var(--text-3)]">{opts.sub}</div>}
+          {opts.sub && <div className="mt-1 text-xs leading-snug text-[var(--text-3)]">{opts.sub}</div>}
         </div>
       </Link>
     );
   };
   return (
     <section className="card col-span-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3" aria-label="タスクの件数">
-      {half({ label: 'タスク（対応中）', value: counts.open, to: '/tasks?status=open', icon: 'check', tone: 'green', overdue: counts.openOverdue })}
+      {half({ label: 'タスク（対応中）', value: counts.open, to: '/tasks?status=open', icon: 'check', tone: 'green', overdue: counts.openOverdue, sub: counts.drafted ? `起案・検討完了 ${counts.drafted}` : undefined })}
       <span className="hidden h-12 w-px shrink-0 bg-[var(--hairline-strong)] sm:block" aria-hidden />
       <span className="h-px w-full bg-[var(--hairline-strong)] sm:hidden" aria-hidden />
       {half({

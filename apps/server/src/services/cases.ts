@@ -2,7 +2,7 @@ import { and, eq, desc, gt, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/index.js';
 import { generateStructured, generateText } from '../integrations/anthropic.js';
-import { formatJaDateTime, formatJaDate, fixDueYear, dateOnlyDeadline, actionDeadlinesLabel, isWaitingStatus, WAITING_FOR, CASE_NOTE_KIND_LABEL, OPEN_CASE_STATUSES, CASE_CONTACT_ROLE_LABEL, taskStatusForWaiting, ACTIVE_TASK_STATUSES, parseJaDate, formatWareki, CASE_STATUSES, type CaseStatus, type CaseInput, type CaseNoteInput, type CaseNoteKind, type CaseContactRole, type TaskStatus, formatJaEventTime } from '@lcm/shared';
+import { formatJaDateTime, formatJaDate, fixDueYear, dateOnlyDeadline, actionDeadlinesLabel, isWaitingStatus, WAITING_FOR, CASE_NOTE_KIND_LABEL, OPEN_CASE_STATUSES, CASE_CONTACT_ROLE_LABEL, taskStatusForWaiting, ACTIVE_TASK_STATUSES, NEW_TASK_STATUSES, parseJaDate, formatWareki, CASE_STATUSES, type CaseStatus, type CaseInput, type CaseNoteInput, type CaseNoteKind, type CaseContactRole, type TaskStatus, formatJaEventTime } from '@lcm/shared';
 import { createTask, chatworkReplyable } from './tasks.js';
 import { syncClientFolderWithStatus } from './clientFolders.js';
 import { logger } from '../logger.js';
@@ -372,7 +372,7 @@ export const noteTaskSuggestionSchema = z.object({
         title: z.string().describe('タスク名。弁護士が見て何をするか分かる言い方で、40 字以内'),
         due: z.string().nullable().describe('締切 YYYY-MM-DD: そのタスク自体をいつまでに済ませるか（例: 答弁書の提出期限）。記録から読み取れなければ null'),
         replyBy: z.string().nullable().describe('返信期限 YYYY-MM-DD: 返信待ちのタスクで、依頼者・相手方などの返事をいつまで待つか（例: 答弁書案への依頼者の返事）。返信待ちでない・読み取れなければ null'),
-        status: z.enum(ACTIVE_TASK_STATUSES).describe('こちらが動くなら open、依頼者の返事待ちなら waiting_client、相手方・裁判所・保険会社などの待ちなら waiting_other、事務局（事務所の職員）の回答や作業を待つなら waiting_staff'),
+        status: z.enum(NEW_TASK_STATUSES).describe('こちらが動くなら open、依頼者の返事待ちなら waiting_client、相手方・裁判所・保険会社などの待ちなら waiting_other、事務局（事務所の職員）の回答や作業を待つなら waiting_staff'),
         note: z.string().describe('そのタスクのメモ（背景・決まったこと）。1〜2 文'),
       }),
     )

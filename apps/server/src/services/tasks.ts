@@ -117,18 +117,18 @@ export function updateTask(id: number, patch: Partial<TaskInput> & { status?: Ta
         cw.setTaskStatus(cur.chatworkRoomId, cur.chatworkTaskId, 'done').catch((err) => logger.warn({ err }, 'Chatwork タスク完了に失敗'));
       }
     }
-    if (patch.status === 'open') {
-      resolveAlertsByKeyPrefix(`waiting_overdue:${id}:`);
-      if (cur.status === 'done' && cur.chatworkTaskId && cur.chatworkRoomId && isConfigured('chatwork')) {
-        cw.setTaskStatus(cur.chatworkRoomId, cur.chatworkTaskId, 'open').catch((err) => logger.warn({ err }, 'Chatwork タスク再開に失敗'));
-      }
+    // 対応中・起案・検討完了（自分の手元にある状態）に戻したら、待ちの期限切れのお知らせは閉じる
+    if (patch.status === 'open' || patch.status === 'drafted') resolveAlertsByKeyPrefix(`waiting_overdue:${id}:`);
+    // 完了から未完了に戻したら、Chatwork のタスクも未完了に戻す
+    if (cur.status === 'done' && patch.status !== 'memo' && cur.chatworkTaskId && cur.chatworkRoomId && isConfigured('chatwork')) {
+      cw.setTaskStatus(cur.chatworkRoomId, cur.chatworkTaskId, 'open').catch((err) => logger.warn({ err }, 'Chatwork タスク再開に失敗'));
     }
   }
   db().update(schema.tasks).set(set).where(eq(schema.tasks.id, id)).run();
   return db().select().from(schema.tasks).where(eq(schema.tasks.id, id)).get()!;
 }
 
-export type TaskBulkAction = 'done' | 'open' | 'waiting_client' | 'waiting_other' | 'waiting_staff' | 'nudge' | 'delete';
+export type TaskBulkAction = 'done' | 'open' | 'drafted' | 'waiting_client' | 'waiting_other' | 'waiting_staff' | 'nudge' | 'delete';
 
 /** 一覧でチェックしたタスクをまとめて処理する（状態変更・催促した・削除） */
 export function bulkUpdateTasks(ids: number[], action: TaskBulkAction): { updated: number } {

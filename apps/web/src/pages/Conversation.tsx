@@ -16,7 +16,7 @@ import { Icon } from '../lib/icons';
 import { useSpotlight } from '../lib/spotlight';
 import { quickSendTimes } from '../lib/sendTimes';
 import { TaskDeadlines, NewTaskDeadlines, WaitDeadlineSelect, fmtDeadline } from '../lib/Deadline';
-import { dateOnlyDeadline, SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply, messageLink, type EventKind, isAllDayRange } from '@lcm/shared';
+import { dateOnlyDeadline, SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply, messageLink, type EventKind, isAllDayRange, isWaitingStatus } from '@lcm/shared';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 import { AttachmentImage, canPreviewImage } from '../lib/AttachmentImage';
 import { WindowConfirm, isHoldWindow } from '../lib/HoldForm';
@@ -1326,7 +1326,7 @@ function SessionCard({ s, onText, onDone, spotlight }: { s: Session; onText: (t:
 }
 
 /** 狭い欄に出す短い状態名 */
-const SHORT_TASK_STATUS: Record<string, string> = { open: '対応中', waiting_client: '依頼者待ち', waiting_other: '相手方待ち', waiting_staff: '事務局待ち' };
+const SHORT_TASK_STATUS: Record<string, string> = { open: '対応中', drafted: '起案・検討完了', waiting_client: '依頼者待ち', waiting_other: '相手方待ち', waiting_staff: '事務局待ち' };
 
 function TaskMini({ conversationId, clientId }: { conversationId: number; clientId: number | null }) {
   const qc = useQueryClient();
@@ -1338,7 +1338,7 @@ function TaskMini({ conversationId, clientId }: { conversationId: number; client
   // 返信期限（返信待ちのとき。null は設定の営業日数）と締切（null はなし）
   const [newFollowUp, setNewFollowUp] = useState<string | null>(null);
   const [newDue, setNewDue] = useState<string | null>(null);
-  const waiting = status !== 'open';
+  const waiting = isWaitingStatus(status);
   const add = useMutation({
     mutationFn: () => api.post('/tasks', { title, status, conversationId, clientId, followUpAt: waiting ? newFollowUp : null, dueAt: newDue }),
     onSuccess: () => {

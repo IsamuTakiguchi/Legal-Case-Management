@@ -25,7 +25,8 @@ export async function morningDigest(): Promise<string> {
     .select({ t: schema.tasks, clientName: schema.clients.name })
     .from(schema.tasks)
     .leftJoin(schema.clients, eq(schema.clients.id, schema.tasks.clientId))
-    .where(and(eq(schema.tasks.status, 'open')))
+    // 対応中と起案・検討完了（提出・送付が残っている）の、締切が近いもの
+    .where(inArray(schema.tasks.status, ['open', 'drafted']))
     .all()
     .filter((r) => r.t.dueAt && r.t.dueAt <= new Date(Date.now() + 86400_000).toISOString());
   const events = todaysEvents();

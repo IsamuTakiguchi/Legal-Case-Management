@@ -24,13 +24,15 @@ describe('タスクの件数を「対応中」と「連絡待ち」に分ける'
       { status: 'open', dueAt: past },
       { status: 'open', dueAt: future },
       { status: 'open' },
+      { status: 'drafted', dueAt: past },
       { status: 'waiting_client', followUpAt: past },
       { status: 'waiting_client', followUpAt: future },
       { status: 'waiting_other', followUpAt: future },
       { status: 'waiting_staff', followUpAt: past },
       { status: 'done', dueAt: past },
     ]);
-    expect(c).toEqual({ open: 3, waiting: 4, waitingClient: 2, waitingOther: 1, waitingStaff: 1, openOverdue: 1, waitingOverdue: 2 });
+    // 起案・検討完了は対応中・連絡待ちとは別に数える
+    expect(c).toEqual({ open: 3, drafted: 1, waiting: 4, waitingClient: 2, waitingOther: 1, waitingStaff: 1, openOverdue: 1, waitingOverdue: 2 });
   });
 
   it('期限は、連絡待ちなら「いつまで待つか」（無ければ期日）、対応中なら期日だけを見る', () => {
@@ -46,6 +48,8 @@ describe('タスクの件数を「対応中」と「連絡待ち」に分ける'
     const values = [
       { title: '準備書面を書く', status: 'open', dueAt: past },
       { title: '証拠の整理', status: 'open' },
+      // 起案は済んで提出が残っている。前に返信待ちだったときの期限が残っていても、連絡待ちには数えない
+      { title: '答弁書の提出', status: 'drafted', followUpAt: past },
       { title: '依頼者から資料', status: 'waiting_client', followUpAt: past, waitingSince: past },
       { title: '相手方の回答', status: 'waiting_other', followUpAt: future, waitingSince: past },
       { title: '事務局の登記簿取寄せ', status: 'waiting_staff', followUpAt: future, waitingSince: past },
@@ -59,12 +63,32 @@ describe('タスクの件数を「対応中」と「連絡待ち」に分ける'
     const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
 
     const dash = (await (await app.request('/api/dashboard', { headers: { cookie } })).json()) as { openTasks: number; taskCounts: Record<string, number> };
-    expect(dash.taskCounts).toEqual({ open: 2, waiting: 3, waitingClient: 1, waitingOther: 1, waitingStaff: 1, openOverdue: 1, waitingOverdue: 1 });
+    expect(dash.taskCounts).toEqual({ open: 2, drafted: 1, waiting: 3, waitingClient: 1, waitingOther: 1, waitingStaff: 1, openOverdue: 1, waitingOverdue: 1 });
     expect(dash.openTasks).toBe(2);
+    expect((dash as unknown as { waiting: { title: string }[] }).waiting.map((t) => t.title)).not.toContain('答弁書の提出');
 
     const waiting = (await (await app.request('/api/tasks?status=waiting', { headers: { cookie } })).json()) as { title: string }[];
     expect(waiting.map((t) => t.title).sort()).toEqual(['事務局の登記簿取寄せ', '依頼者から資料', '相手方の回答'].sort());
     const open = (await (await app.request('/api/tasks?status=open', { headers: { cookie } })).json()) as { title: string }[];
     expect(open.map((t) => t.title).sort()).toEqual(['準備書面を書く', '証拠の整理']);
+    // 未完了には入る
+    const active = (await (await app.request('/api/tasks?status=active', { headers: { cookie } })).json()) as { title: string }[];
+    expect(active.map((t) => t.title)).toContain('答弁書の提出');
+    const drafted = (await (await app.request('/api/tasks?status=drafted', { headers: { cookie } })).json()) as { title: string }[];
+    expect(drafted.map((t) => t.title)).toEqual(['答弁書の提出']);
+  });
+
+  it('まとめて「起案・検討完了」にでき、そのとき待ちの期限切れのお知らせは閉じる', async () => {
+    const { bulkUpdateTasks, checkOverdueWaitingTasks } = await import('../services/tasks.js');
+    const t = db().insert(schema.tasks).values({ title: '訴状の起案', status: 'waiting_staff', followUpAt: past, waitingSince: past }).returning().get();
+    checkOverdueWaitingTasks();
+    const open = () => db().select().from(schema.alerts).all().filter((a) => a.status === 'open' && a.dedupeKey?.startsWith(`waiting_overdue:${t.id}:`));
+    expect(open()).toHaveLength(1);
+    expect(bulkUpdateTasks([t.id], 'drafted')).toEqual({ updated: 1 });
+    expect(db().select().from(schema.tasks).all().find((x) => x.id === t.id)?.status).toBe('drafted');
+    expect(open()).toHaveLength(0);
+    // 起案・検討完了は期限切れの催促の対象にしない
+    checkOverdueWaitingTasks();
+    expect(open()).toHaveLength(0);
   });
 });

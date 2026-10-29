@@ -16,7 +16,7 @@ import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { CaseFolderCard, type CaseFolderInfo } from '../lib/CaseFolderCard';
 import { NoteComposer, ActionDeadlineInputs, dueYmd } from '../lib/NoteComposer';
 import { fmtDateTime, fmtDate, fmtYen, fmtBytes, toLocalInput, fromLocalInput, channelLabel, fmtEventTime } from '../lib/format';
-import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, messageLink, ACTIVE_TASK_STATUSES, taskStatusForWaiting, formatWareki, parseJaDate, addYearsIso, taskDeadline, jstYmd, actionDeadlinesLabel, isWaitingStatus, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus, isAllDayRange } from '@lcm/shared';
+import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, messageLink, ACTIVE_TASK_STATUSES, taskStatusForWaiting, formatWareki, parseJaDate, addYearsIso, taskDeadline, jstYmd, actionDeadlinesLabel, isWaitingStatus, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus, isAllDayRange, NEW_TASK_STATUSES } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 import { ChatworkTaskReply } from '../lib/ChatworkTaskReply';
@@ -366,7 +366,24 @@ export default function CaseDetail() {
                           {t.note && <span className="block truncate text-xs text-slate-500" title={t.note}>{t.note.split('\n')[0]}</span>}
                         </span>
                         <TaskEditButton onClick={() => setEditingTask(t.id)} />
-                        <span className="badge badge-gray">{TASK_STATUS_LABEL[t.status as TaskStatus]}</span>
+                        {/* 状態はここで変えられる（起案・検討完了・待ち・完了など） */}
+                        <select
+                          className="input w-auto py-0.5 text-xs"
+                          value={t.status}
+                          aria-label={`${t.title}の状態`}
+                          onChange={(e) =>
+                            api.put(`/tasks/${t.id}`, { status: e.target.value }).then(() => {
+                              qc.invalidateQueries({ queryKey: ['case', id] });
+                              qc.invalidateQueries({ queryKey: ['tasks'] });
+                            })
+                          }
+                        >
+                          {[...ACTIVE_TASK_STATUSES, 'done' as const].map((st) => (
+                            <option key={st} value={st}>
+                              {TASK_STATUS_LABEL[st]}
+                            </option>
+                          ))}
+                        </select>
                         {/* 締切（タスクそのもの）と、返信待ちなら返信期限。押すと変えられる */}
                         <span className="flex flex-wrap items-center">
                           <TaskDeadlines
@@ -1063,7 +1080,7 @@ function CaseTaskForm({ caseId, hasStaff, onDone }: { caseId: number; hasStaff: 
   const [msg, setMsg] = useState('');
   // 書きかけのタスク名は、この事件ごとに自動保存する
   const draft = useDraft(`case:${caseId}:new-task`, title, setTitle);
-  const waiting = status !== 'open';
+  const waiting = isWaitingStatus(status);
   const add = useMutation({
     mutationFn: () => {
       // 1 行目がタスク名、2 行目からはメモ（タスク画面と同じ書き方）
@@ -1119,7 +1136,7 @@ function CaseTaskForm({ caseId, hasStaff, onDone }: { caseId: number; hasStaff: 
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <select className="input w-auto py-0.5 text-xs" value={status} onChange={(e) => setStatus(e.target.value as TaskStatus)} aria-label="状態">
-          {ACTIVE_TASK_STATUSES.map((st) => (
+          {NEW_TASK_STATUSES.map((st) => (
             <option key={st} value={st}>
               {TASK_STATUS_LABEL[st]}
             </option>
@@ -2096,7 +2113,7 @@ function NoteTaskPanel({ n, onDone, onClose }: { n: Note; onDone: () => void; on
                 </div>
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   <select className="input w-auto py-0.5" value={dft.status} onChange={(e) => setDraft(i, { status: e.target.value })} aria-label="状態">
-                    {ACTIVE_TASK_STATUSES.map((st) => (
+                    {NEW_TASK_STATUSES.map((st) => (
                       <option key={st} value={st}>
                         {TASK_STATUS_LABEL[st]}
                       </option>
@@ -2194,7 +2211,7 @@ function NoteTaskPanel({ n, onDone, onClose }: { n: Note; onDone: () => void; on
         <label className="flex items-center gap-1">
           状態
           <select className="input w-auto py-0.5" value={status} onChange={(e) => setStatus(e.target.value)}>
-            {ACTIVE_TASK_STATUSES.map((st) => (
+            {NEW_TASK_STATUSES.map((st) => (
               <option key={st} value={st}>
                 {TASK_STATUS_LABEL[st]}
               </option>

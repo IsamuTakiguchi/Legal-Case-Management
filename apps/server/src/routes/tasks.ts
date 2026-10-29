@@ -38,7 +38,7 @@ taskRoutes.put('/tasks/:id', async (c) => {
 
 /** チェックしたタスクをまとめて処理 */
 taskRoutes.post('/tasks/bulk', async (c) => {
-  const body = z.object({ ids: z.array(z.number().int()).min(1).max(500), action: z.enum(['done', 'open', ...WAITING_TASK_STATUSES, 'nudge', 'delete']) }).parse(await c.req.json());
+  const body = z.object({ ids: z.array(z.number().int()).min(1).max(500), action: z.enum(['done', 'open', 'drafted', ...WAITING_TASK_STATUSES, 'nudge', 'delete']) }).parse(await c.req.json());
   return c.json(bulkUpdateTasks(body.ids, body.action));
 });
 

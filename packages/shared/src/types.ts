@@ -11,10 +11,12 @@ export const CHANNEL_LABEL: Record<Channel, string> = {
 };
 
 /** memo は時期未定の備忘。きっかけが来るまではタスクとして数えない（未完了にも連絡待ちにも入れない） */
-export const TASK_STATUSES = ['open', 'waiting_client', 'waiting_other', 'waiting_staff', 'memo', 'done'] as const;
+export const TASK_STATUSES = ['open', 'drafted', 'waiting_client', 'waiting_other', 'waiting_staff', 'memo', 'done'] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
   open: '対応中',
+  /** 起案・検討は済んだが、提出・送付・確認などがまだ残っているもの（未完了。連絡待ちではない） */
+  drafted: '起案・検討完了',
   waiting_client: '依頼者の返信待ち',
   waiting_other: '相手方・裁判所待ち',
   waiting_staff: '事務局の回答・作業待ち',
@@ -23,8 +25,10 @@ export const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
 };
 /** 相手の返事・作業を待っている状態（依頼者・相手方など・事務局）。期限を過ぎたら催促のお知らせを出す */
 export const WAITING_TASK_STATUSES = ['waiting_client', 'waiting_other', 'waiting_staff'] as const satisfies readonly TaskStatus[];
-/** 未完了（対応中＋待ち） */
-export const ACTIVE_TASK_STATUSES = ['open', ...WAITING_TASK_STATUSES] as const satisfies readonly TaskStatus[];
+/** 未完了（対応中＋起案・検討完了＋待ち） */
+export const ACTIVE_TASK_STATUSES = ['open', 'drafted', ...WAITING_TASK_STATUSES] as const satisfies readonly TaskStatus[];
+/** 新しくタスクを作るときに選べる状態（起案・検討完了は、作ったあとに進めてなる状態なので含めない） */
+export const NEW_TASK_STATUSES = ['open', ...WAITING_TASK_STATUSES] as const satisfies readonly TaskStatus[];
 
 
 export const EVENT_KINDS = ['hearing', 'meeting', 'consult', 'hold', 'other'] as const;
