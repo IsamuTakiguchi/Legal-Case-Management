@@ -81,10 +81,19 @@ taskRoutes.get('/tasks/:id/callback', (c) => c.json(callbackContext(Number(c.req
 
 taskRoutes.post('/tasks/:id/callback', async (c) => {
   const raw = await c.req.json();
-  const input = caseNoteInputSchema.omit({ kind: true }).parse(raw);
+  // 誰の事件か未確定なら事件の代わりに provisional（仮の呼び名）を受け取り、「氏名未確認」の相談を作って記録する
+  const provisional = z.object({ label: z.string().trim().max(100).nullable().optional() }).nullable().optional().parse(raw.provisional);
+  const input = caseNoteInputSchema.omit({ kind: true }).extend({ caseId: z.number().int().nullable().optional() }).parse(raw);
   const mode = raw.createTasks === 'single' ? 'single' : raw.createTasks === 'each' || raw.createTasks === true ? 'each' : false;
   const taskIndexes = Array.isArray(raw.taskIndexes) ? (raw.taskIndexes as unknown[]).map(Number).filter((n) => Number.isInteger(n) && n >= 0) : undefined;
-  return c.json(await saveCallbackNote(Number(c.req.param('id')), input, { completeTask: raw.completeTask === true, createTasks: mode, taskIndexes }));
+  return c.json(
+    await saveCallbackNote(Number(c.req.param('id')), input, {
+      completeTask: raw.completeTask === true,
+      createTasks: mode,
+      taskIndexes,
+      provisional: provisional ? { label: provisional.label || null } : null,
+    }),
+  );
 });
 
 // ---- 時期未定の備忘 ----

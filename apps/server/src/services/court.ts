@@ -1,7 +1,7 @@
-import { and, eq, gt, inArray, lt, desc } from 'drizzle-orm';
+import { and, eq, gt, gte, inArray, lt, desc } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import * as cal from '../integrations/calendar.js';
-import { classifyEventTitle, titleMentionsClient, isNonClientTitle, formatJaDateTime, familyName, type EventKind, type NextHearingInput, OPEN_CASE_STATUSES } from '@lcm/shared';
+import { classifyEventTitle, titleMentionsClient, isNonClientTitle, formatJaDateTime, familyName, type EventKind, type NextHearingInput, OPEN_CASE_STATUSES, formatJaEventTime } from '@lcm/shared';
 import { upsertAlert, resolveAlert, resolveAlertsByKeyPrefix } from './alerts.js';
 import { storage } from '../integrations/storage.js';
 import { clientFolder, caseFolder, caseOfClient } from './attachments.js';
@@ -234,7 +234,8 @@ export function todaysEvents() {
     .select({ ev: schema.calendarEvents, clientName: schema.clients.name })
     .from(schema.calendarEvents)
     .leftJoin(schema.clients, eq(schema.clients.id, schema.calendarEvents.clientId))
-    .where(and(gt(schema.calendarEvents.startAt, start.toISOString()), lt(schema.calendarEvents.startAt, end.toISOString())))
+        // 0:00 ちょうどに始まる予定（終日の予定）も今日に入れる
+    .where(and(gte(schema.calendarEvents.startAt, start.toISOString()), lt(schema.calendarEvents.startAt, end.toISOString())))
     .orderBy(schema.calendarEvents.startAt)
     .all()
     .map((r) => ({ ...r.ev, clientName: r.clientName ?? null }));
@@ -284,12 +285,12 @@ export function listCalendarEvents(from: Date, to: Date, filter: { clientId?: nu
   if (filter.clientId) conds.push(eq(schema.calendarEvents.clientId, filter.clientId));
   if (filter.caseId) conds.push(eq(schema.calendarEvents.caseId, filter.caseId));
   // 日程調整中の仮押さえは、どのセッションの候補かを付ける（確定・取消をカレンダーから行うため）
-  const sessionByEvent = new Map<string, { id: number; count: number }>();
+  const sessionByEvent = new Map<string, { id: number; count: number; durationMinutes: number | null }>();
   // 日程変更（リスケ）の調整中なら、元の予定にその印を付ける
   const rescheduleByEvent = new Map<number, number>();
   for (const s of db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.state, 'proposing')).all()) {
     const withEvent = s.candidates.filter((c) => c.eventId);
-    for (const c of withEvent) sessionByEvent.set(c.eventId!, { id: s.id, count: withEvent.length });
+    for (const c of withEvent) sessionByEvent.set(c.eventId!, { id: s.id, count: withEvent.length, durationMinutes: s.durationMinutes ?? null });
     if (s.rescheduleEventId) rescheduleByEvent.set(s.rescheduleEventId, s.id);
   }
   return db()
@@ -309,6 +310,8 @@ export function listCalendarEvents(from: Date, to: Date, filter: { clientId?: nu
         local: isLocalEventId(r.ev.googleEventId),
         sessionId: sess?.id ?? null,
         sessionCandidates: sess?.count ?? 0,
+        // 仮押さえの所要時間（候補が枠なら、確定するときにこの長さで時間を決める）
+        sessionDurationMinutes: sess?.durationMinutes ?? null,
         rescheduleSessionId: rescheduleByEvent.get(r.ev.id) ?? null,
       };
     });
@@ -436,6 +439,8 @@ export interface HoldSetInput {
   web?: boolean;
   /** 受信箱の会話から始めた仮押さえなら、その会話（会話の画面から確定できるようにする） */
   conversationId?: number | null;
+  /** 所要時間（分）。候補がこれより長い時間帯（枠）なら、確定するときにその中でこの長さの時間を決める */
+  durationMinutes?: number | null;
 }
 
 export function holdSetTitle(input: Pick<HoldSetInput, 'exactTitle' | 'counterpartName' | 'title'>, clientName: string | null): { hold: string; confirmed: string } {
@@ -457,7 +462,7 @@ export async function createHoldSet(input: HoldSetInput) {
   for (const sl of sorted) assertRange(sl.startAt, sl.endAt);
   const session = db()
     .insert(schema.schedulingSessions)
-    .values({ clientId: client?.id ?? null, conversationId: input.conversationId ?? null, kind: input.kind === 'hearing' ? '期日' : input.kind === 'consult' ? '面談' : '打合せ', state: 'proposing', candidates: [], rescheduleEventId: input.rescheduleEventId ?? null, web: input.web ?? false, location: input.location?.trim() || null, proposedAt: new Date().toISOString() })
+    .values({ clientId: client?.id ?? null, conversationId: input.conversationId ?? null, kind: input.kind === 'hearing' ? '期日' : input.kind === 'consult' ? '面談' : '打合せ', state: 'proposing', candidates: [], rescheduleEventId: input.rescheduleEventId ?? null, web: input.web ?? false, location: input.location?.trim() || null, durationMinutes: input.durationMinutes ?? null, proposedAt: new Date().toISOString() })
     .returning()
     .get();
   const candidates: { startAt: string; endAt: string; eventId?: string }[] = [];
@@ -533,12 +538,14 @@ const holdMeta = new Map<number, { kind: EventKind; confirmedTitle: string }>();
  * 仮押さえの候補の 1 つで確定する。
  * theirs を渡すと、WEB 会議の URL はこちらで発行せず、相手が発行したもの（まだ届いていなければ null）を予定に入れる
  */
-export async function confirmHold(sessionId: number, eventId: number, opts: { theirs?: { meeting: ExternalMeeting | null } } = {}) {
+export async function confirmHold(sessionId: number, eventId: number, opts: { theirs?: { meeting: ExternalMeeting | null }; time?: { startAt: string; endAt: string } | null } = {}) {
   const session = db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, sessionId)).get();
   if (!session) throw new Error('日程調整が見つかりません');
   if (session.state !== 'proposing') throw new Error('この日程調整はすでに確定または取消されています');
   const chosen = db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, eventId)).get();
   if (!chosen || !session.candidates.some((c) => c.eventId === chosen.googleEventId)) throw new Error('選んだ予定はこの日程調整の候補ではありません');
+  // 枠（例: 13:00〜17:00）で押さえた候補は、その中で決めた時間（例: 14:00〜15:00）で確定する
+  const time = opts.time ? holdTimeWithin(chosen, opts.time) : null;
   for (const c of session.candidates) {
     if (!c.eventId || c.eventId === chosen.googleEventId) continue;
     const row = db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.googleEventId, c.eventId)).get();
@@ -565,7 +572,9 @@ export async function confirmHold(sessionId: number, eventId: number, opts: { th
     theirsText = externalMeetingText(opts.theirs.meeting);
   } else if (session.web) {
     const provider = webMeetingProvider();
-    web = await issueZoomIfNeeded(provider, { topic: title, startAt: new Date(chosen.startAt), durationMinutes: Math.max(15, Math.round((new Date(chosen.endAt).getTime() - new Date(chosen.startAt).getTime()) / 60_000)) });
+    const startAt = time?.startAt ?? chosen.startAt;
+    const endAt = time?.endAt ?? chosen.endAt;
+    web = await issueZoomIfNeeded(provider, { topic: title, startAt: new Date(startAt), durationMinutes: Math.max(15, Math.round((new Date(endAt).getTime() - new Date(startAt).getTime()) / 60_000)) });
     if (provider === 'meet' && isGoogleConnected() && !isLocalEventId(chosen.googleEventId)) {
       const ev = await cal.updateEvent(chosen.googleEventId, { meet: true });
       if (ev?.meetUrl) web = { provider: 'meet', url: ev.meetUrl, password: '', id: null };
@@ -573,7 +582,7 @@ export async function confirmHold(sessionId: number, eventId: number, opts: { th
     const text = webMeetingText(web);
     if (text) description = [text, description].filter(Boolean).join('\n');
   }
-  const updated = await editCalendarEvent(chosen.id, { title, kind, tentative: false, description, ...(location !== undefined ? { location } : {}) });
+  const updated = await editCalendarEvent(chosen.id, { title, kind, tentative: false, description, ...(location !== undefined ? { location } : {}), ...(time ?? {}) });
   if (web?.provider === 'zoom' && web.id) {
     db().update(schema.schedulingSessions).set({ zoom: { id: web.id, joinUrl: web.url ?? '', password: web.password } }).where(eq(schema.schedulingSessions.id, sessionId)).run();
   }
@@ -584,7 +593,7 @@ export async function confirmHold(sessionId: number, eventId: number, opts: { th
   }
   db()
     .update(schema.schedulingSessions)
-    .set({ state: 'confirmed', confirmedEventId: chosen.googleEventId, confirmedStartAt: chosen.startAt, updatedAt: new Date().toISOString() })
+    .set({ state: 'confirmed', confirmedEventId: chosen.googleEventId, confirmedStartAt: time?.startAt ?? chosen.startAt, updatedAt: new Date().toISOString() })
     .where(eq(schema.schedulingSessions.id, sessionId))
     .run();
   holdMeta.delete(sessionId);
@@ -592,12 +601,21 @@ export async function confirmHold(sessionId: number, eventId: number, opts: { th
   return { ...updated, web, webText: theirsText || webMeetingText(web) };
 }
 
+/** 確定する時間が、選んだ候補の枠の中に収まっているか確かめる */
+function holdTimeWithin(chosen: { startAt: string; endAt: string }, time: { startAt: string; endAt: string }): { startAt: string; endAt: string } {
+  const { s, e } = assertRange(time.startAt, time.endAt);
+  if (s.getTime() < new Date(chosen.startAt).getTime() || e.getTime() > new Date(chosen.endAt).getTime()) {
+    throw new Error('確定する時間は、仮押さえた候補の時間帯の中にしてください');
+  }
+  return { startAt: s.toISOString(), endAt: e.toISOString() };
+}
+
 /**
  * 決まっている予定の日程変更（リスケ）を始める。
  * 元の予定の件名・種別・依頼者・事件・場所を引き継いだ仮押さえを候補の数だけ登録し、
  * どれかを確定した時点で元の予定を削除する（それまでは元の予定も残る）。
  */
-export async function startReschedule(eventId: number, input: { slots: { startAt: string; endAt: string }[]; location?: string | null; note?: string | null }) {
+export async function startReschedule(eventId: number, input: { slots: { startAt: string; endAt: string }[]; location?: string | null; note?: string | null; durationMinutes?: number | null }) {
   const ev = db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, eventId)).get();
   if (!ev) throw new Error('予定が見つかりません');
   if (ev.kind === 'hold') throw new Error('仮押さえ自体は日程変更できません。候補を足すか、いったん取り消してください');
@@ -612,9 +630,10 @@ export async function startReschedule(eventId: number, input: { slots: { startAt
     clientId: ev.clientId,
     caseId: ev.caseId,
     location: input.location !== undefined ? input.location : ev.location,
-    description: [`${formatJaDateTime(new Date(ev.startAt))} の「${ev.title}」の日程変更`, note].filter(Boolean).join('\n'),
+    description: [`${formatJaEventTime(ev.startAt, ev.endAt)} の「${ev.title}」の日程変更`, note].filter(Boolean).join('\n'),
     slots: input.slots,
     rescheduleEventId: ev.id,
+    durationMinutes: input.durationMinutes ?? null,
   });
 }
 
@@ -641,6 +660,8 @@ export interface PendingHoldSet {
   fromThisConversation: boolean;
   rescheduleOf: { eventId: number; title: string; startAt: string } | null;
   candidates: { eventId: number; startAt: string; endAt: string }[];
+  /** 所要時間（分）。候補が枠なら、確定するときにこの長さで時間を決める */
+  durationMinutes: number | null;
 }
 
 /**
@@ -666,6 +687,7 @@ export function pendingHoldsFor(opts: { conversationId: number; clientId: number
       fromThisConversation,
       rescheduleOf: original ? { eventId: original.id, title: original.title, startAt: original.startAt } : null,
       candidates: rows.map((r) => ({ eventId: r.id, startAt: r.startAt, endAt: r.endAt })).sort((a, b) => a.startAt.localeCompare(b.startAt)),
+      durationMinutes: s.durationMinutes ?? null,
     });
   }
   // この会話のものを先に、あとは候補の早い順
@@ -758,6 +780,8 @@ export interface CaseHoldCandidate {
 
 export interface CaseHoldSet {
   sessionId: number;
+  /** 所要時間（分）。候補が枠なら、確定するときにこの長さで時間を決める */
+  durationMinutes: number | null;
   kind: string;
   proposedAt: string | null;
   /** 日程変更なら、元の予定（すでに消えていれば null） */
@@ -806,6 +830,7 @@ export function listCaseHolds(caseId: number): CaseHoldSet[] {
       linkedToCase,
       location: s.location?.trim() || (places.size === 1 ? [...places][0]! : '') || null,
       web: s.web,
+      durationMinutes: s.durationMinutes ?? null,
       candidates: rows
         .map(({ c, ev }) => ({
           eventId: ev?.id ?? null,

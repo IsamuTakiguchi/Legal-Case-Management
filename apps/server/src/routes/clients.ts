@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { deleteCase } from '../services/caseDelete.js';
 import { noteContactSuggestions } from '../services/noteContacts.js';
 import { listStaff, createStaff, updateStaff, deleteStaff, listChatworkAccounts, staffRooms } from '../services/staff.js';
 import { listRooms } from '../channels/chatwork.js';
@@ -424,6 +425,17 @@ clientRoutes.post('/cases/bulk', async (c) => {
   return c.json(bulkUpdateCases(ids, patch));
 });
 
+/** 事件を削除する（記録・タスク・債権者・関係者も削除。会話・予定は残して紐付けだけ外す。フォルダには触らない） */
+clientRoutes.delete('/cases/:id', (c) => (deleteCase(Number(c.req.param('id'))) ? c.json({ ok: true }) : c.json({ error: 'not found' }, 404)));
+
+/** 一覧でチェックした事件をまとめて削除する */
+clientRoutes.post('/cases/bulk-delete', async (c) => {
+  const body = z.object({ ids: z.array(z.number().int()).min(1).max(500) }).parse(await c.req.json());
+  let deleted = 0;
+  for (const id of body.ids) if (deleteCase(id)) deleted++;
+  return c.json({ deleted });
+});
+
 clientRoutes.put('/cases/:id', async (c) => {
   const body = caseInputSchema.partial().extend(caseExtra).parse(await c.req.json());
   return c.json(updateCase(Number(c.req.param('id')), body));
@@ -440,23 +452,29 @@ clientRoutes.get('/note-contact-suggestions', (c) => {
   return c.json(noteContactSuggestions(caseId));
 });
 
+const structureBody = z.object({
+  rawText: z.string().min(1),
+  kind: z.string().default('phone'),
+  counterpart: z.string().optional().nullable(),
+  phone: z.string().optional().nullable(),
+  // 折り返し電話なら、きっかけになった伝言（参考に渡す）
+  context: z.string().max(4000).optional().nullable(),
+});
+
 /** 電話メモなどの整理（保存前プレビュー） */
 clientRoutes.post('/cases/:id/notes/structure', async (c) => {
   const id = Number(c.req.param('id'));
-  const body = z
-    .object({
-      rawText: z.string().min(1),
-      kind: z.string().default('phone'),
-      counterpart: z.string().optional().nullable(),
-      phone: z.string().optional().nullable(),
-      // 折り返し電話なら、きっかけになった伝言（参考に渡す）
-      context: z.string().max(4000).optional().nullable(),
-    })
-    .parse(await c.req.json());
+  const body = structureBody.parse(await c.req.json());
   const kase = getCase(id);
   if (!kase) return c.json({ error: 'not found' }, 404);
   const r = await structureNote(body.rawText, { caseTitle: kase.title, clientName: kase.client?.name, kind: body.kind, counterpart: body.counterpart, phone: body.phone, context: body.context });
   return c.json(r);
+});
+
+/** 事件がまだ決まっていない記録の整理（誰の事件か未確定の折り返し電話など） */
+clientRoutes.post('/notes/structure', async (c) => {
+  const body = structureBody.parse(await c.req.json());
+  return c.json(await structureNote(body.rawText, { kind: body.kind, counterpart: body.counterpart, phone: body.phone, context: body.context }));
 });
 
 clientRoutes.post('/cases/:id/notes', async (c) => {

@@ -139,6 +139,38 @@ describe('折り返し電話', () => {
     await expect(saveCallbackNote(task.id, { ...base, caseId: 99999, rawText: 'x' })).rejects.toThrow('事件を選んでください');
   });
 
+  it('誰の事件か未確定なら「氏名未確認」の相談者と相談の事件を作って記録し、番号も覚える', async () => {
+    const task = db()
+      .insert(schema.tasks)
+      .values({ title: '鈴木様よりTEL', note: '鈴木様より電話。090-5555-6666 に折り返しお願いします', status: 'open' })
+      .returning()
+      .get();
+    const base = { theirSaid: [], ourSaid: [], decisions: [], nextActions: [], attachments: [] };
+    // 事件も仮の呼び名も無ければ断る（何も作らない）
+    const before = db().select().from(schema.clients).all().length;
+    await expect(saveCallbackNote(task.id, { ...base, rawText: '相続の相談' })).rejects.toThrow('事件を選んでください');
+    // 内容が空なら、仮の依頼者・事件も作らない
+    await expect(saveCallbackNote(task.id, { ...base, rawText: ' ' }, { provisional: { label: null } })).rejects.toThrow('通話の内容を入力してください');
+    expect(db().select().from(schema.clients).all().length).toBe(before);
+
+    const r = await saveCallbackNote(task.id, { ...base, caseId: null, counterpart: '鈴木様', rawText: '相続の相談。来週面談' }, { provisional: { label: '（氏名未確認）鈴木さん' }, completeTask: true });
+    const kase = db().select().from(schema.cases).where(eq(schema.cases.id, r.caseId)).get()!;
+    expect(kase).toMatchObject({ status: 'consultation' });
+    expect(kase.title).toMatch(/^電話相談（\d+\/\d+）$/);
+    const client = db().select().from(schema.clients).where(eq(schema.clients.id, kase.clientId)).get()!;
+    expect(client).toMatchObject({ name: '（氏名未確認）鈴木さん', provisional: true, phones: ['090-5555-6666'] });
+    expect(r.note.caseId).toBe(kase.id);
+    expect(r.note.rawText).toContain('相続の相談。来週面談');
+    expect(db().select().from(schema.tasks).where(eq(schema.tasks.id, task.id)).get()).toMatchObject({ status: 'done', caseId: kase.id, clientId: client.id });
+  });
+
+  it('仮の呼び名が空なら「（氏名未確認）相談者」にする', async () => {
+    const task = db().insert(schema.tasks).values({ title: '電話あり', note: '折り返し希望', status: 'open' }).returning().get();
+    const r = await saveCallbackNote(task.id, { theirSaid: [], ourSaid: [], decisions: [], nextActions: [], attachments: [], rawText: '留守電' }, { provisional: { label: null } });
+    const kase = db().select().from(schema.cases).where(eq(schema.cases.id, r.caseId)).get()!;
+    expect(db().select().from(schema.clients).where(eq(schema.clients.id, kase.clientId)).get()).toMatchObject({ name: '（氏名未確認）相談者', provisional: true, phones: [] });
+  });
+
   it('AI で整理するとき、伝言は参考として渡し、今回の発言とは分ける', async () => {
     await structureNote('300 万なら応じるとのこと', { kind: 'phone', context: '和解の件で折り返しをお願いしたい' });
     expect(lastUser).toContain('メモ:\n300 万なら応じるとのこと');

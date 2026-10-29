@@ -37,6 +37,8 @@ export interface NoteCallback {
   context: string;
   counterpart?: string | null;
   phone?: string | null;
+  /** 誰の事件か未確定なら、仮の呼び名（「氏名未確認」の相談を作ってそこに記録する） */
+  provisional?: { label: string | null } | null;
 }
 
 /**
@@ -49,7 +51,7 @@ export function NoteComposer({
   callback,
 }: {
   caseId: number;
-  onSaved: (note?: { id: number; kind: string }, extra?: { taskStatus?: string }) => void;
+  onSaved: (note?: { id: number; kind: string }, extra?: { taskStatus?: string; caseId?: number }) => void;
   callback?: NoteCallback;
 }) {
   const [kind, setKind] = useState<CaseNoteKind>('phone');
@@ -76,7 +78,9 @@ export function NoteComposer({
     ourSaid: { value: ourSaid, set: setOurSaid },
   });
   const structure = useMutation({
-    mutationFn: () => api.post<NonNullable<typeof preview>>(`/cases/${caseId}/notes/structure`, { rawText: raw, kind, counterpart: counterpart || null, phone: phone || null, context: callback?.context ?? null }),
+    // 事件がまだ決まっていなければ、事件なしで整理する
+    mutationFn: () =>
+      api.post<NonNullable<typeof preview>>(caseId ? `/cases/${caseId}/notes/structure` : '/notes/structure', { rawText: raw, kind, counterpart: counterpart || null, phone: phone || null, context: callback?.context ?? null }),
     onSuccess: (r) => {
       setPreview(r);
       setTaskPick(new Set(r.nextActions.map((_, i) => i)));
@@ -103,8 +107,12 @@ export function NoteComposer({
         createTasks: preview && taskMode !== 'none' && taskPick.size > 0 ? taskMode : false,
         taskIndexes: [...taskPick],
       };
-      if (!callback) return { note: await api.post<{ id: number; kind: string }>(`/cases/${caseId}/notes`, body), taskStatus: undefined };
-      const r = await api.post<{ note: { id: number; kind: string }; taskStatus: string }>(`/tasks/${callback.taskId}/callback`, { ...body, caseId, completeTask });
+      if (!callback) return { note: await api.post<{ id: number; kind: string }>(`/cases/${caseId}/notes`, body), taskStatus: undefined, caseId };
+      const r = await api.post<{ note: { id: number; kind: string }; taskStatus: string; caseId: number }>(`/tasks/${callback.taskId}/callback`, {
+        ...body,
+        ...(callback.provisional ? { caseId: null, provisional: callback.provisional } : { caseId }),
+        completeTask,
+      });
       return r;
     },
     onSuccess: (r) => {
@@ -115,7 +123,7 @@ export function NoteComposer({
       noteDraft.clear();
       setPreview(null);
       setErr('');
-      onSaved(r.note, { taskStatus: r.taskStatus });
+      onSaved(r.note, { taskStatus: r.taskStatus, caseId: r.caseId });
     },
     onError: (e) => setErr((e as Error).message),
   });
@@ -180,7 +188,7 @@ export function NoteComposer({
             <input type="checkbox" checked={completeTask} onChange={(e) => setCompleteTask(e.target.checked)} /> 伝言のタスクを完了にする
           </label>
         )}
-        <button className="btn btn-primary ml-auto" onClick={() => save.mutate()} disabled={!raw.trim() || !caseId || save.isPending}>
+        <button className="btn btn-primary ml-auto" onClick={() => save.mutate()} disabled={!raw.trim() || (!caseId && !callback?.provisional) || save.isPending}>
           {callback ? '記録を保存' : '保存'}
         </button>
       </div>

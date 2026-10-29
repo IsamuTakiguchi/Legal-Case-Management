@@ -366,6 +366,11 @@ export const schedulingSessions = sqliteTable('scheduling_sessions', {
   web: integer('web', { mode: 'boolean' }).notNull().default(false),
   /** 場所（仮押さえの時点で決めたもの）。確定した予定にも引き継ぐ */
   location: text('location'),
+  /**
+   * 所要時間（分）。候補をこれより長い時間帯（枠。例: 13:00〜17:00 の中で 60 分）で押さえたときは、
+   * 確定するときにその中でこの長さの時間を決める
+   */
+  durationMinutes: integer('duration_minutes'),
   proposedAt: text('proposed_at'),
   createdAt: text('created_at').notNull().default(now()),
   updatedAt: text('updated_at').notNull().default(now()),

@@ -90,6 +90,44 @@ export function jstYmd(d: Date): string {
 }
 
 /**
+ * 終日の予定か。JST の 0:00 に始まり、何日か後の 0:00 に終わるものを終日とみなす
+ * （Google カレンダーの終日予定も、取り込むとこの形になる）
+ */
+export function isAllDayRange(startAt: string | Date, endAt: string | Date): boolean {
+  const s = new Date(startAt);
+  const e = new Date(endAt);
+  if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return false;
+  const ps = toJstParts(s);
+  const pe = toJstParts(e);
+  const days = (e.getTime() - s.getTime()) / 86400_000;
+  return ps.hour === 0 && ps.minute === 0 && pe.hour === 0 && pe.minute === 0 && days >= 1 && Number.isInteger(days);
+}
+
+/** 終日の予定の開始・終了（YYYY-MM-DD の 0:00 から、最終日の翌日 0:00 まで。最終日を省けば 1 日だけ） */
+export function allDayRange(ymd: string, lastYmd?: string | null): { startAt: string; endAt: string } {
+  const [y, m, d] = ymd.slice(0, 10).split('-').map(Number) as [number, number, number];
+  const start = jstDate(y, m, d);
+  const last = lastYmd && lastYmd.slice(0, 10) > ymd.slice(0, 10) ? lastYmd : ymd;
+  const [ly, lm, ld] = last.slice(0, 10).split('-').map(Number) as [number, number, number];
+  return { startAt: start.toISOString(), endAt: new Date(jstDate(ly, lm, ld).getTime() + 86400_000).toISOString() };
+}
+
+/** 予定の日時の表示。終日なら「4月10日(木)終日」（2 日以上なら「4月10日(木)〜4月11日 終日」）、それ以外は開始日時 */
+export function formatJaEventTime(startAt: string | Date, endAt: string | Date, opts: { withWeekday?: boolean } = {}): string {
+  if (!isAllDayRange(startAt, endAt)) return formatJaDateTime(new Date(startAt), opts);
+  const p = toJstParts(new Date(startAt));
+  const wd = opts.withWeekday === false ? '' : `(${WEEKDAY_JA[p.weekday]})`;
+  const last = toJstParts(new Date(new Date(endAt).getTime() - 86400_000));
+  const sameDay = last.month === p.month && last.day === p.day;
+  return `${p.month}月${p.day}日${wd}${sameDay ? '' : `〜${last.month}月${last.day}日 `}終日`;
+}
+
+/** 終日の予定の最終日（終了の前日）の YYYY-MM-DD */
+export function allDayLastYmd(endAt: string | Date): string {
+  return jstYmd(new Date(new Date(endAt).getTime() - 86400_000));
+}
+
+/**
  * AI が読み取った期限（YYYY-MM-DD）の年を直す。
  * 「11/10」のように年の無い日付を去年と読んでしまうことがあるので、
  * 今日より 90 日以上前になっていれば、90 日以内に入るまで 1 年ずつ進める（直近の過去の期限はそのまま）

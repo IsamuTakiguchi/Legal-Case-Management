@@ -75,8 +75,11 @@ schedulingRoutes.get('/conversations/:id/schedule/holds', (c) => c.json(conversa
 
 /** 会話の画面から、仮押さえの候補の 1 つで確定する */
 schedulingRoutes.post('/conversations/:id/schedule/confirm-hold', async (c) => {
-  const body = z.object({ sessionId: z.number().int(), eventId: z.number().int(), meetingBy: z.enum(['us', 'them']).optional(), meeting: externalMeetingSchema.nullable().optional() }).parse(await c.req.json());
-  return c.json(await confirmHoldFromConversation(Number(c.req.param('id')), body.sessionId, body.eventId, { meetingBy: body.meetingBy, meeting: body.meeting }));
+  const body = z
+    .object({ sessionId: z.number().int(), eventId: z.number().int(), meetingBy: z.enum(['us', 'them']).optional(), meeting: externalMeetingSchema.nullable().optional(), startAt: z.string().optional(), endAt: z.string().optional() })
+    .parse(await c.req.json());
+  const time = body.startAt && body.endAt ? { startAt: body.startAt, endAt: body.endAt } : null;
+  return c.json(await confirmHoldFromConversation(Number(c.req.param('id')), body.sessionId, body.eventId, { meetingBy: body.meetingBy, meeting: body.meeting, time }));
 });
 
 /** 相手から後で届いた WEB 会議の URL を、すでに入っている予定に入れる */
@@ -170,6 +173,7 @@ schedulingRoutes.post('/calendar/holds', async (c) => {
       location: z.string().nullable().optional(),
       description: z.string().nullable().optional(),
       slots: z.array(z.object({ startAt: z.string(), endAt: z.string() })).min(1).max(10),
+      durationMinutes: z.number().int().min(5).max(24 * 60).nullable().optional(),
     })
     .parse(await c.req.json());
   return c.json(await createHoldSet(body));
@@ -202,14 +206,17 @@ schedulingRoutes.post('/calendar/events/:id/reschedule', async (c) => {
       slots: z.array(z.object({ startAt: z.string(), endAt: z.string() })).min(1).max(10),
       location: z.string().nullable().optional(),
       note: z.string().nullable().optional(),
+      durationMinutes: z.number().int().min(5).max(24 * 60).nullable().optional(),
     })
     .parse(await c.req.json());
   return c.json(await startReschedule(Number(c.req.param('id')), body));
 });
 
 schedulingRoutes.post('/calendar/holds/:sessionId/confirm', async (c) => {
-  const body = z.object({ eventId: z.number().int() }).parse(await c.req.json());
-  return c.json(await confirmHold(Number(c.req.param('sessionId')), body.eventId));
+  // 枠で押さえた候補は、その中で決めた時間（startAt・endAt）で確定できる
+  const body = z.object({ eventId: z.number().int(), startAt: z.string().optional(), endAt: z.string().optional() }).parse(await c.req.json());
+  const time = body.startAt && body.endAt ? { startAt: body.startAt, endAt: body.endAt } : null;
+  return c.json(await confirmHold(Number(c.req.param('sessionId')), body.eventId, { time }));
 });
 
 /** 仮押さえた候補の場所を、まとめて付け直す */
