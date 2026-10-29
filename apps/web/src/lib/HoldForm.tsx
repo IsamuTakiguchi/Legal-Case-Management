@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { EVENT_KINDS, EVENT_KIND_LABEL, parseHoldText, type EventKind } from '@lcm/shared';
+import { EVENT_KINDS, EVENT_KIND_LABEL, parseHoldText, isAllDayRange, allDayRange, allDayLastYmd, type EventKind } from '@lcm/shared';
 import { api } from './api';
 import { useDraftGroup, DraftHint } from './draft';
 import { ClientPicker } from './ClientPicker';
-import { toLocalInput, fromLocalInput } from './format';
+import { toLocalInput, fromLocalInput, fmtEventTime } from './format';
 
 /** 事件ページなどから開くときに、依頼者と事件を決め打ちする */
 export interface HoldFormFixed {
@@ -14,8 +14,9 @@ export interface HoldFormFixed {
   caseTitle: string;
 }
 
-/** 「9/21(月) 10:00〜11:00」の形にする */
+/** 「9/21(月) 10:00〜11:00」の形にする（終日なら「9/21(月) 終日」） */
 export function fmtEventRange(startAt: string, endAt: string): string {
+  if (isAllDayRange(startAt, endAt)) return fmtEventTime(startAt, endAt);
   const d = new Date(startAt);
   const day = d.toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric', weekday: 'short' });
   const t = (iso: string) => new Date(iso).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' });
@@ -41,6 +42,79 @@ function rescheduleSlots(t: RescheduleTarget): { start: string; end: string }[] 
     const start = new Date(s0 + d * 86400_000).toISOString();
     return { start: toLocalInput(start), end: toLocalInput(new Date(new Date(start).getTime() + dur).toISOString()) };
   });
+}
+
+/** 候補 1 行。終日なら start・end は日付（YYYY-MM-DD。end は最終日）、それ以外は日時（datetime-local の値） */
+export interface SlotDraft {
+  start: string;
+  end: string;
+  allDay?: boolean;
+}
+
+const plusMinutes = (local: string, m: number) => toLocalInput(new Date(new Date(fromLocalInput(local)).getTime() + m * 60_000).toISOString());
+
+/** 候補の行を、サーバーに送る開始・終了にする（終日なら最終日の翌日 0:00 まで） */
+function slotRange(v: SlotDraft, mins: number): { startAt: string; endAt: string } {
+  if (v.allDay) return allDayRange(v.start.slice(0, 10), v.end ? v.end.slice(0, 10) : null);
+  const start = new Date(fromLocalInput(v.start));
+  const end = v.end ? new Date(fromLocalInput(v.end)) : new Date(start.getTime() + mins * 60_000);
+  return { startAt: start.toISOString(), endAt: (end > start ? end : new Date(start.getTime() + mins * 60_000)).toISOString() };
+}
+
+/** 読み取った候補（parseHoldText の結果）を行にする */
+function parsedToSlot(x: { startAt: string; endAt: string; allDay?: boolean }): SlotDraft {
+  return x.allDay ? { start: x.startAt ? toLocalInput(x.startAt).slice(0, 10) : '', end: allDayLastYmd(x.endAt), allDay: true } : { start: toLocalInput(x.startAt), end: toLocalInput(x.endAt) };
+}
+
+/**
+ * 候補 1 行の入力（開始〜終了、または終日）。
+ * 所要時間より長い時間帯は「枠」として押さえ、確定するときにその中で時間を決められる
+ */
+function SlotRow({ v, mins, onChange, onRemove, canRemove, label }: { v: SlotDraft; mins: number; onChange: (v: SlotDraft) => void; onRemove: () => void; canRemove: boolean; label: string }) {
+  const lenMin = !v.allDay && v.start && v.end ? (new Date(fromLocalInput(v.end)).getTime() - new Date(fromLocalInput(v.start)).getTime()) / 60_000 : 0;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {v.allDay ? (
+        <>
+          <input type="date" className="input w-auto" value={v.start} onChange={(e) => onChange({ ...v, start: e.target.value, end: !v.end || v.end < e.target.value ? e.target.value : v.end })} aria-label={`${label}の日付`} required />
+          <span className="text-slate-400">〜</span>
+          <input type="date" className="input w-auto" value={v.end} min={v.start} onChange={(e) => onChange({ ...v, end: e.target.value })} aria-label={`${label}の最終日`} title="2 日以上押さえるときだけ変えます" />
+        </>
+      ) : (
+        <>
+          <input
+            type="datetime-local"
+            className="input w-auto"
+            value={v.start}
+            aria-label={`${label}の開始`}
+            onChange={(e) => {
+              const start = e.target.value;
+              const prevDur = Math.max(15, (new Date(fromLocalInput(v.end)).getTime() - new Date(fromLocalInput(v.start)).getTime()) / 60_000 || mins);
+              onChange({ start, end: start ? plusMinutes(start, prevDur) : v.end });
+            }}
+            required
+          />
+          <span className="text-slate-400">〜</span>
+          <input type="datetime-local" className="input w-auto" value={v.end} aria-label={`${label}の終了`} onChange={(e) => onChange({ ...v, end: e.target.value })} />
+        </>
+      )}
+      <label className="flex items-center gap-1 text-xs text-slate-600" title="時間を決めず、その日 1 日を押さえます">
+        <input
+          type="checkbox"
+          checked={!!v.allDay}
+          onChange={(e) => {
+            const day = (v.start || toLocalInput(new Date().toISOString())).slice(0, 10);
+            onChange(e.target.checked ? { start: day, end: day, allDay: true } : { start: `${day}T10:00`, end: plusMinutes(`${day}T10:00`, mins) });
+          }}
+        />
+        終日
+      </label>
+      {lenMin > mins && <span className="badge badge-blue" title={`この時間帯の中で ${mins} 分を、確定するときに決めます`}>枠（この中で {mins} 分）</span>}
+      <button type="button" className="btn btn-sm" onClick={onRemove} disabled={!canRemove} aria-label={`${label}を外す`}>
+        ×
+      </button>
+    </div>
+  );
 }
 
 /**
@@ -72,7 +146,7 @@ export function HoldForm({
   const [location, setLocation] = useState(reschedule?.location ?? '');
   const [note, setNote] = useState('');
   const [duration, setDuration] = useState(reschedule ? String(Math.max(15, Math.round((new Date(reschedule.endAt).getTime() - new Date(reschedule.startAt).getTime()) / 60_000))) : '60');
-  const [slots, setSlots] = useState<{ start: string; end: string }[]>(
+  const [slots, setSlots] = useState<SlotDraft[]>(
     reschedule
       ? rescheduleSlots(reschedule)
       : [
@@ -83,13 +157,13 @@ export function HoldForm({
   const [text, setText] = useState('');
   const [textErr, setTextErr] = useState<string[]>([]);
   const mins = () => Math.max(15, Number(duration) || 60);
-  const plus = (local: string, m: number) => toLocalInput(new Date(new Date(fromLocalInput(local)).getTime() + m * 60_000).toISOString());
+  const plus = plusMinutes;
   /** 「12/21（月）10～11：30　13～15」のような文字列を候補に変換して追加 */
   const readText = () => {
     const r = parseHoldText(text, { defaultMinutes: mins() });
     setTextErr(r.errors);
     if (r.slots.length) {
-      const parsed = r.slots.map((x) => ({ start: toLocalInput(x.startAt), end: toLocalInput(x.endAt) }));
+      const parsed = r.slots.map(parsedToSlot);
       // 既定の空行（未編集の初期値）は置き換え、入力済みなら追加
       const untouched = (reschedule ? true : slots.every((x) => x.start.endsWith('T10:00') || x.start.endsWith('T14:00'))) && slots.length <= 2;
       setSlots((untouched ? parsed : [...slots, ...parsed]).slice(0, 10));
@@ -113,20 +187,20 @@ export function HoldForm({
 
   const addSlot = () => {
     const last = slots[slots.length - 1];
-    const start = last ? plus(last.start, 24 * 60) : `${defaultDay}T10:00`;
+    if (last?.allDay && last.start) {
+      // 終日の次は、その翌日の終日
+      const next = toLocalInput(new Date(new Date(`${last.start}T00:00:00+09:00`).getTime() + 86400_000).toISOString()).slice(0, 10);
+      setSlots([...slots, { start: next, end: next, allDay: true }]);
+      return;
+    }
+    const start = last?.start ? plus(last.start, 24 * 60) : `${defaultDay}T10:00`;
     setSlots([...slots, { start, end: plus(start, mins()) }]);
   };
   const save = useMutation({
     mutationFn: () => {
-      const picked = slots
-        .filter((v) => v.start)
-        .map((v) => {
-          const start = new Date(fromLocalInput(v.start));
-          const end = v.end ? new Date(fromLocalInput(v.end)) : new Date(start.getTime() + mins() * 60_000);
-          return { startAt: start.toISOString(), endAt: (end > start ? end : new Date(start.getTime() + mins() * 60_000)).toISOString() };
-        });
+      const picked = slots.filter((v) => v.start).map((v) => slotRange(v, mins()));
       if (reschedule) {
-        return api.post<{ sessionId: number; events: unknown[] }>(`/calendar/events/${reschedule.eventId}/reschedule`, { slots: picked, location: location || null, note: note || null });
+        return api.post<{ sessionId: number; events: unknown[] }>(`/calendar/events/${reschedule.eventId}/reschedule`, { slots: picked, location: location || null, note: note || null, durationMinutes: mins() });
       }
       return api.post<{ sessionId: number; events: unknown[] }>('/calendar/holds', {
         title,
@@ -136,6 +210,8 @@ export function HoldForm({
         counterpartName: clientId ? null : counterpartName || null,
         location: location || null,
         slots: picked,
+        // 枠（所要時間より長い時間帯）で押さえた候補は、確定するときにこの長さで時間を決める
+        durationMinutes: mins(),
       });
     },
     onSuccess: (r) => {
@@ -242,7 +318,9 @@ export function HoldForm({
           </>
         )}
         <div>
-          <label className="label">所要時間（分）</label>
+          <label className="label" title="候補をこれより長い時間帯（例: 13:00〜17:00）にすると「枠」として押さえ、確定するときにその中でこの長さの時間を決めます">
+            所要時間（分）
+          </label>
           <input type="number" className="input" min={15} step={15} value={duration} onChange={(e) => setDuration(e.target.value)} />
         </div>
         <div>
@@ -256,7 +334,7 @@ export function HoldForm({
           </div>
         )}
         <div className="md:col-span-2">
-          <label className="label">候補をまとめて入力（1 行に日付と時間帯。例: 12/21（月）10～11：30　13～15）</label>
+          <label className="label">候補をまとめて入力（1 行に日付と時間帯。例: 12/21（月）10～11：30　13～15 ／ 12/22 終日）</label>
           <div className="flex flex-wrap items-start gap-2">
             <textarea className="input min-h-16 flex-1 text-sm" value={text} onChange={(e) => setText(e.target.value)} placeholder={'12/21（月）10～11：30　13～15\n12/22 14～16'} />
           <DraftHint handle={holdDraft} />
@@ -265,30 +343,17 @@ export function HoldForm({
             </button>
           </div>
           {textErr.length > 0 && <div className="mt-1 text-xs text-red-600">{textErr.join(' / ')}</div>}
-          <div className="mt-1 text-xs text-slate-500">終了時刻を書かない場合は「所要時間」の長さで終了を補います。読み取った候補は下で 1 件ずつ直せます。</div>
+          <div className="mt-1 text-xs text-slate-500">
+            終了時刻を書かない場合は「所要時間」の長さで終了を補います。所要時間より長い時間帯（例: 13～17）は「枠」として押さえ、確定するときにその中で時間を決めます。読み取った候補は下で 1 件ずつ直せます。
+          </div>
         </div>
         <div className="md:col-span-2">
           <label className="label">候補日時（開始 〜 終了）</label>
           <div className="space-y-2">
             {slots.map((v, i) => (
-              <div key={i} className="flex flex-wrap items-center gap-2">
-                <span className="w-6 text-xs text-slate-500">{i + 1}.</span>
-                <input
-                  type="datetime-local"
-                  className="input w-auto"
-                  value={v.start}
-                  onChange={(e) => {
-                    const start = e.target.value;
-                    const prevDur = Math.max(15, (new Date(fromLocalInput(v.end)).getTime() - new Date(fromLocalInput(v.start)).getTime()) / 60_000 || mins());
-                    setSlots(slots.map((x, j) => (j === i ? { start, end: start ? plus(start, prevDur) : x.end } : x)));
-                  }}
-                  required
-                />
-                <span className="text-slate-400">〜</span>
-                <input type="datetime-local" className="input w-auto" value={v.end} onChange={(e) => setSlots(slots.map((x, j) => (j === i ? { ...x, end: e.target.value } : x)))} />
-                <button type="button" className="btn btn-sm" onClick={() => setSlots(slots.filter((_, j) => j !== i))} disabled={slots.length <= 1} aria-label="この候補を外す">
-                  ×
-                </button>
+              <div key={i} className="flex items-center gap-2">
+                <span className="w-6 shrink-0 text-xs text-slate-500">{i + 1}.</span>
+                <SlotRow v={v} mins={mins()} label={`候補 ${i + 1}`} onChange={(nv) => setSlots(slots.map((x, j) => (j === i ? nv : x)))} onRemove={() => setSlots(slots.filter((_, j) => j !== i))} canRemove={slots.length > 1} />
               </div>
             ))}
             <button type="button" className="btn btn-sm" onClick={addSlot} disabled={slots.length >= 10}>
@@ -374,7 +439,7 @@ export function HoldAddCandidates({ sessionId, after, minutes, onClose, onSaved,
   const dur = Math.max(15, minutes || 60);
   const plus = (local: string, m: number) => toLocalInput(new Date(new Date(fromLocalInput(local)).getTime() + m * 60_000).toISOString());
   const first = toLocalInput(new Date(new Date(after).getTime() + 86400_000).toISOString());
-  const [slots, setSlots] = useState<{ start: string; end: string }[]>([{ start: first, end: plus(first, dur) }]);
+  const [slots, setSlots] = useState<SlotDraft[]>([{ start: first, end: plus(first, dur) }]);
   const [text, setText] = useState('');
   const [textErr, setTextErr] = useState<string[]>([]);
   const [touched, setTouched] = useState(false);
@@ -382,7 +447,7 @@ export function HoldAddCandidates({ sessionId, after, minutes, onClose, onSaved,
     const r = parseHoldText(text, { defaultMinutes: dur });
     setTextErr(r.errors);
     if (r.slots.length) {
-      const parsed = r.slots.map((x) => ({ start: toLocalInput(x.startAt), end: toLocalInput(x.endAt) }));
+      const parsed = r.slots.map(parsedToSlot);
       // 手を付けていない既定の 1 行は置き換える
       setSlots((touched ? [...slots, ...parsed] : parsed).slice(0, 10));
       setTouched(true);
@@ -392,13 +457,7 @@ export function HoldAddCandidates({ sessionId, after, minutes, onClose, onSaved,
   const save = useMutation({
     mutationFn: () =>
       api.post<{ events: unknown[]; skipped: number; total: number }>(`/calendar/holds/${sessionId}/candidates`, {
-        slots: slots
-          .filter((v) => v.start)
-          .map((v) => {
-            const start = new Date(fromLocalInput(v.start));
-            const end = v.end ? new Date(fromLocalInput(v.end)) : new Date(start.getTime() + dur * 60_000);
-            return { startAt: start.toISOString(), endAt: (end > start ? end : new Date(start.getTime() + dur * 60_000)).toISOString() };
-          }),
+        slots: slots.filter((v) => v.start).map((v) => slotRange(v, dur)),
       }),
     onSuccess: (r) => onSaved(`候補を ${r.events.length} 件追加しました（候補は全部で ${r.total} 件）${r.skipped ? `。${r.skipped} 件はすでに候補にある日時なので追加していません` : ''}`),
     onError: (e) => onError((e as Error).message),
@@ -421,26 +480,18 @@ export function HoldAddCandidates({ sessionId, after, minutes, onClose, onSaved,
       {textErr.length > 0 && <div className="text-xs text-red-600">{textErr.join(' / ')}</div>}
       <div className="space-y-1.5">
         {slots.map((v, i) => (
-          <div key={i} className="flex flex-wrap items-center gap-2">
-            <input
-              type="datetime-local"
-              className="input w-auto"
-              value={v.start}
-              aria-label="追加する候補の開始"
-              onChange={(e) => {
-                const start = e.target.value;
-                const prevDur = Math.max(15, (new Date(fromLocalInput(v.end)).getTime() - new Date(fromLocalInput(v.start)).getTime()) / 60_000 || dur);
-                setTouched(true);
-                setSlots(slots.map((x, j) => (j === i ? { start, end: start ? plus(start, prevDur) : x.end } : x)));
-              }}
-              required
-            />
-            <span className="text-slate-400">〜</span>
-            <input type="datetime-local" className="input w-auto" value={v.end} aria-label="追加する候補の終了" onChange={(e) => setSlots(slots.map((x, j) => (j === i ? { ...x, end: e.target.value } : x)))} />
-            <button type="button" className="btn btn-sm" onClick={() => setSlots(slots.filter((_, j) => j !== i))} disabled={slots.length <= 1} aria-label="この行を外す">
-              ×
-            </button>
-          </div>
+          <SlotRow
+            key={i}
+            v={v}
+            mins={dur}
+            label="追加する候補"
+            onChange={(nv) => {
+              setTouched(true);
+              setSlots(slots.map((x, j) => (j === i ? nv : x)));
+            }}
+            onRemove={() => setSlots(slots.filter((_, j) => j !== i))}
+            canRemove={slots.length > 1}
+          />
         ))}
         <button
           type="button"
@@ -448,7 +499,7 @@ export function HoldAddCandidates({ sessionId, after, minutes, onClose, onSaved,
           disabled={slots.length >= 10}
           onClick={() => {
             const last = slots[slots.length - 1];
-            const start = last?.start ? plus(last.start, 24 * 60) : first;
+            const start = last?.start && !last.allDay ? plus(last.start, 24 * 60) : first;
             setTouched(true);
             setSlots([...slots, { start, end: plus(start, dur) }]);
           }}
@@ -465,5 +516,78 @@ export function HoldAddCandidates({ sessionId, after, minutes, onClose, onSaved,
         </button>
       </div>
     </form>
+  );
+}
+
+/** 枠で押さえた候補か（所要時間より長い時間帯。終日は除く） */
+export function isHoldWindow(c: { startAt: string; endAt: string }, durationMinutes: number | null | undefined): boolean {
+  if (!durationMinutes || isAllDayRange(c.startAt, c.endAt)) return false;
+  return (new Date(c.endAt).getTime() - new Date(c.startAt).getTime()) / 60_000 > durationMinutes;
+}
+
+/**
+ * 枠（例: 13:00〜17:00 の中で 60 分）で押さえた候補を確定するとき、その中の時間を決める。
+ * 開始は 15 分刻みで選び、長さは所要時間が既定（変えられる）。決めた時間で確定すると、ほかの時間は空く
+ */
+export function WindowConfirm({
+  candidate,
+  durationMinutes,
+  pending,
+  note,
+  onConfirm,
+  onCancel,
+}: {
+  candidate: { startAt: string; endAt: string };
+  durationMinutes: number;
+  pending: boolean;
+  /** 確定の確認文に添える一言（「ほかの候補は削除されます」など） */
+  note?: string;
+  onConfirm: (time: { startAt: string; endAt: string }) => void;
+  onCancel?: () => void;
+}) {
+  const ws = new Date(candidate.startAt).getTime();
+  const we = new Date(candidate.endAt).getTime();
+  const [minutes, setMinutes] = useState(String(durationMinutes));
+  const len = Math.max(5, Number(minutes) || durationMinutes);
+  const starts: number[] = [];
+  for (let t = ws; t + len * 60_000 <= we; t += 15 * 60_000) starts.push(t);
+  const [start, setStart] = useState(ws);
+  const startAt = starts.includes(start) ? start : (starts[0] ?? ws);
+  const hm = (t: number) => new Date(t).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' });
+  const fits = starts.length > 0;
+  const time = { startAt: new Date(startAt).toISOString(), endAt: new Date(startAt + len * 60_000).toISOString() };
+  return (
+    <div className="fade-in flex w-full flex-wrap items-center gap-2 rounded-md bg-blue-50/60 px-2 py-1.5 text-sm">
+      <span className="text-xs text-slate-600">
+        {hm(ws)}〜{hm(we)} の枠の中で、確定する時間:
+      </span>
+      <select className="input w-auto py-0.5" value={startAt} onChange={(e) => setStart(Number(e.target.value))} aria-label="確定する開始時刻" disabled={!fits}>
+        {starts.map((t) => (
+          <option key={t} value={t}>
+            {hm(t)}〜{hm(t + len * 60_000)}
+          </option>
+        ))}
+      </select>
+      <label className="flex items-center gap-1 text-xs text-slate-600">
+        長さ
+        <input type="number" className="input w-20 py-0.5" min={5} step={15} value={minutes} onChange={(e) => setMinutes(e.target.value)} aria-label="確定する長さ（分）" />分
+      </label>
+      <button
+        type="button"
+        className="btn btn-sm btn-primary"
+        disabled={pending || !fits}
+        onClick={() => {
+          if (window.confirm(`${fmtEventRange(time.startAt, time.endAt)} で確定しますか？${note ? `\n${note}` : ''}`)) onConfirm(time);
+        }}
+      >
+        {pending ? '確定中…' : 'この時間で確定'}
+      </button>
+      {onCancel && (
+        <button type="button" className="btn btn-sm" onClick={onCancel}>
+          やめる
+        </button>
+      )}
+      {!fits && <span className="text-xs text-red-600">長さが枠より長くなっています</span>}
+    </div>
   );
 }

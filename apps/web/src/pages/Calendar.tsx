@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { EVENT_KINDS, EVENT_KIND_LABEL, type EventKind } from '@lcm/shared';
+import { EVENT_KINDS, EVENT_KIND_LABEL, type EventKind, isAllDayRange } from '@lcm/shared';
 import { api } from '../lib/api';
 import { useDraftGroup, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
-import { HoldForm, HoldLocationEditor, HoldAddCandidates, type RescheduleTarget } from '../lib/HoldForm';
+import { HoldForm, HoldLocationEditor, HoldAddCandidates, WindowConfirm, isHoldWindow, type RescheduleTarget } from '../lib/HoldForm';
 import { toLocalInput, fromLocalInput } from '../lib/format';
 
 interface Ev {
@@ -26,6 +26,8 @@ interface Ev {
   /** 日程調整中の仮押さえなら、そのセッション ID と候補数 */
   sessionId: number | null;
   sessionCandidates: number;
+  /** 仮押さえの所要時間（候補が枠なら、確定するときにこの長さで時間を決める） */
+  sessionDurationMinutes?: number | null;
   /** この予定の日程変更を調整中なら、そのセッション ID */
   rescheduleSessionId: number | null;
 }
@@ -116,6 +118,8 @@ export default function Calendar() {
   const [rescheduling, setRescheduling] = useState<RescheduleTarget | null>(null);
   // 候補を足すフォームを開いている予定（その予定の行の下に出す）
   const [addingAt, setAddingAt] = useState<number | null>(null);
+  // 枠で押さえた候補を確定する時間を選んでいる予定
+  const [windowFor, setWindowFor] = useState<number | null>(null);
   const range = useMemo(() => rangeFor(view, anchor), [view, anchor]);
   const list = useQuery({
     queryKey: ['calendar', range.from, range.to],
@@ -144,8 +148,10 @@ export default function Calendar() {
     onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
   });
   const confirmHold = useMutation({
-    mutationFn: (v: { sessionId: number; eventId: number }) => api.post<{ webText?: string }>(`/calendar/holds/${v.sessionId}/confirm`, { eventId: v.eventId }),
+    mutationFn: (v: { sessionId: number; eventId: number; startAt?: string; endAt?: string }) =>
+      api.post<{ webText?: string }>(`/calendar/holds/${v.sessionId}/confirm`, { eventId: v.eventId, startAt: v.startAt, endAt: v.endAt }),
     onSuccess: (r) => {
+      setWindowFor(null);
       invalidate();
       setMsg({ kind: 'ok', text: `確定しました。ほかの候補の仮押さえは削除しました${r.webText ? `\n${r.webText}` : ''}` });
     },
@@ -293,7 +299,7 @@ export default function Calendar() {
                 <li key={e.id} className="py-2 text-sm">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="whitespace-nowrap text-slate-600 md:w-24">
-                      {fmtTime(e.startAt)}〜{fmtTime(e.endAt)}
+                      {isAllDayRange(e.startAt, e.endAt) ? '終日' : `${fmtTime(e.startAt)}〜${fmtTime(e.endAt)}`}
                     </span>
                     <span className={`badge ${KIND_BADGE[e.kind] ?? 'badge-gray'}`}>{EVENT_KIND_LABEL[e.kind as EventKind] ?? e.kind}</span>
                     <span className={`min-w-0 flex-1 font-medium ${e.status === 'tentative' ? 'text-slate-500' : ''}`}>
@@ -312,6 +318,8 @@ export default function Calendar() {
                             className="btn btn-sm btn-primary"
                             disabled={confirmHold.isPending}
                             onClick={() => {
+                              // 枠の候補は、その中で確定する時間を選んでから
+                              if (isHoldWindow(e, e.sessionDurationMinutes)) return setWindowFor(windowFor === e.id ? null : e.id);
                               if (window.confirm(`この候補で確定しますか？\nほかの候補（${Math.max(e.sessionCandidates - 1, 0)} 件）の仮押さえは削除されます。`)) confirmHold.mutate({ sessionId: e.sessionId!, eventId: e.id });
                             }}
                           >
@@ -402,6 +410,18 @@ export default function Calendar() {
                     </div>
                   )}
                   {e.description && <div className="mt-0.5 line-clamp-2 whitespace-pre-wrap text-xs text-slate-500 md:pl-[6.5rem]">{e.description}</div>}
+                  {windowFor === e.id && e.sessionId && e.sessionDurationMinutes && (
+                    <div className="mt-1">
+                      <WindowConfirm
+                        candidate={e}
+                        durationMinutes={e.sessionDurationMinutes}
+                        pending={confirmHold.isPending}
+                        note={`ほかの候補（${Math.max(e.sessionCandidates - 1, 0)} 件）の仮押さえは削除されます。`}
+                        onConfirm={(t) => confirmHold.mutate({ sessionId: e.sessionId!, eventId: e.id, ...t })}
+                        onCancel={() => setWindowFor(null)}
+                      />
+                    </div>
+                  )}
                   {addingAt === e.id && e.sessionId && (
                     <div className="md:pl-[6.5rem]">
                       <HoldAddCandidates

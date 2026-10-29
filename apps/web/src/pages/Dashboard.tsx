@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { channelBadge, channelLabel, fmtDateTime, fmtRelative } from '../lib/format';
-import { ALERT_TYPE_LABEL, TASK_STATUS_LABEL, EVENT_KIND_LABEL, type AlertType, type TaskStatus, type EventKind, type TaskCounts, CASE_STATUS_LABEL, type CaseStatus } from '@lcm/shared';
+import { ALERT_TYPE_LABEL, TASK_STATUS_LABEL, EVENT_KIND_LABEL, type AlertType, type TaskStatus, type EventKind, type TaskCounts, CASE_STATUS_LABEL, type CaseStatus, isAllDayRange } from '@lcm/shared';
 import { Icon, type IconName } from '../lib/icons';
 import { alertLink } from '../lib/alertLink';
 import { DeadlineEditor } from '../lib/Deadline';
@@ -20,7 +20,7 @@ interface DashboardData {
   taskCounts?: TaskCounts;
   /** 区分ごとの事件の件数 */
   caseCounts?: Record<CaseStatus, number>;
-  todaysEvents: { id: number; title: string; startAt: string; kind: string; clientName: string | null; location: string | null }[];
+  todaysEvents: { id: number; title: string; startAt: string; endAt: string; kind: string; clientName: string | null; location: string | null }[];
   /** 直前の行動（記録・送受信・タスク）。新しい順 */
   recent: RecentItem[];
   lineQuota: { used: number; limit: number } | null;
@@ -108,7 +108,7 @@ export default function Dashboard() {
           <ul className="space-y-1 text-sm">
             {d.todaysEvents.map((e) => (
               <li key={e.id} className="flex items-center gap-2">
-                <span className="w-24 text-slate-500">{fmtDateTime(e.startAt).replace(/^.*?\s/, '')}</span>
+                <span className="w-24 text-slate-500">{isAllDayRange(e.startAt, e.endAt) ? '終日' : fmtDateTime(e.startAt).replace(/^.*?\s/, '')}</span>
                 <span className="badge badge-gray">{EVENT_KIND_LABEL[e.kind as EventKind] ?? e.kind}</span>
                 <span>{e.title}</span>
               </li>

@@ -8,15 +8,15 @@ import { useDraftRecord, useDraftGroup, useDraft, DraftHint } from '../lib/draft
 import { RoomPicker } from '../lib/RoomPicker';
 import { CASE_DELETE_NOTE } from '../lib/caseDelete';
 import { ClientPicker } from '../lib/ClientPicker';
-import { HoldForm, HoldLocationEditor, HoldAddCandidates, fmtEventRange, type RescheduleTarget } from '../lib/HoldForm';
+import { HoldForm, HoldLocationEditor, HoldAddCandidates, fmtEventRange, WindowConfirm, isHoldWindow, type RescheduleTarget } from '../lib/HoldForm';
 import { LongText } from '../lib/LongText';
 import { TaskDeadlines, NewTaskDeadlines, TaskDeadlineSelect, FOLLOW_LABEL, DUE_HINT, FOLLOW_HINT } from '../lib/Deadline';
 import { MemoBadge, MemoForm, MEMO_HINT } from '../lib/Memo';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { CaseFolderCard, type CaseFolderInfo } from '../lib/CaseFolderCard';
 import { NoteComposer, ActionDeadlineInputs, dueYmd } from '../lib/NoteComposer';
-import { fmtDateTime, fmtDate, fmtYen, fmtBytes, toLocalInput, fromLocalInput, channelLabel } from '../lib/format';
-import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, messageLink, ACTIVE_TASK_STATUSES, taskStatusForWaiting, formatWareki, parseJaDate, addYearsIso, taskDeadline, jstYmd, actionDeadlinesLabel, isWaitingStatus, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
+import { fmtDateTime, fmtDate, fmtYen, fmtBytes, toLocalInput, fromLocalInput, channelLabel, fmtEventTime } from '../lib/format';
+import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, messageLink, ACTIVE_TASK_STATUSES, taskStatusForWaiting, formatWareki, parseJaDate, addYearsIso, taskDeadline, jstYmd, actionDeadlinesLabel, isWaitingStatus, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus, isAllDayRange } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 import { ChatworkTaskReply } from '../lib/ChatworkTaskReply';
@@ -480,7 +480,7 @@ export default function CaseDetail() {
                     <li key={e.id} className="border-b border-slate-100 pb-1 last:border-0">
                       {/* 狭い列でも件名がつぶれないよう、日時・ボタンの行と件名の行を分ける */}
                       <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-slate-500">{fmtDateTime(e.startAt)}</span>
+                      <span className="text-slate-500">{fmtEventTime(e.startAt, e.endAt)}</span>
                       <span className="badge badge-gray">{EVENT_KIND_LABEL[e.kind as EventKind]}</span>
                       <span className="ml-auto flex flex-wrap items-center gap-2">
                       <button className="text-xs text-slate-500 hover:text-blue-700 hover:underline" onClick={() => setRelinking(relinking === e.id ? null : e.id)} title="別の依頼者・事件に紐付けてしまったときに直します">
@@ -613,9 +613,12 @@ interface HoldSet {
   location: string | null;
   web: boolean;
   candidates: HoldCandidate[];
+  /** 所要時間（分）。候補が枠なら、確定するときにこの長さで時間を決める */
+  durationMinutes?: number | null;
 }
 
 function fmtSlot(startAt: string, endAt: string): string {
+  if (isAllDayRange(startAt, endAt)) return fmtEventTime(startAt, endAt);
   const t = (iso: string) => new Date(iso).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' });
   return `${fmtDate(startAt)} ${t(startAt)}〜${t(endAt)}`;
 }
@@ -770,6 +773,8 @@ function CaseHolds({
   const [addingTo, setAddingTo] = useState<number | null>(null);
   // 候補日の打診を開いている日程調整
   const [proposing, setProposing] = useState<number | null>(null);
+  // 枠で押さえた候補を確定する時間を選んでいる候補（googleEventId）
+  const [windowFor, setWindowFor] = useState<string | null>(null);
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['case-holds', caseId] });
     qc.invalidateQueries({ queryKey: ['case', String(caseId)] });
@@ -778,8 +783,10 @@ function CaseHolds({
   };
   const fail = (e: unknown) => setMsg({ kind: 'err', text: (e as Error).message });
   const confirmHold = useMutation({
-    mutationFn: (v: { sessionId: number; eventId: number }) => api.post<{ webText?: string }>(`/calendar/holds/${v.sessionId}/confirm`, { eventId: v.eventId }),
+    mutationFn: (v: { sessionId: number; eventId: number; startAt?: string; endAt?: string }) =>
+      api.post<{ webText?: string }>(`/calendar/holds/${v.sessionId}/confirm`, { eventId: v.eventId, startAt: v.startAt, endAt: v.endAt }),
     onSuccess: (r) => {
+      setWindowFor(null);
       refresh();
       setMsg({ kind: 'ok', text: `確定しました。ほかの候補の仮押さえは削除しました${r.webText ? `\n${r.webText}` : ''}` });
     },
@@ -955,6 +962,8 @@ function CaseHolds({
                       className="btn btn-sm btn-primary ml-auto"
                       disabled={confirmHold.isPending}
                       onClick={() => {
+                        // 枠の候補は、その中で確定する時間を選んでから
+                        if (isHoldWindow(v, s.durationMinutes)) return setWindowFor(windowFor === v.googleEventId ? null : v.googleEventId);
                         const extra = s.rescheduleOf ? `\n元の予定（${fmtEventRange(s.rescheduleOf.startAt, s.rescheduleOf.endAt)}）も削除されます。` : '';
                         if (window.confirm(`${fmtSlot(v.startAt, v.endAt)} で確定しますか？\nほかの候補（${Math.max(s.candidates.length - 1, 0)} 件）の仮押さえは削除されます。${extra}`))
                           confirmHold.mutate({ sessionId: s.sessionId, eventId: v.eventId! });
@@ -977,6 +986,16 @@ function CaseHolds({
                   )}
                   {!v.eventId && (
                     <span className="ml-auto text-xs text-slate-400">カレンダーにありません</span>
+                  )}
+                  {windowFor === v.googleEventId && v.eventId && s.durationMinutes && (
+                    <WindowConfirm
+                      candidate={v}
+                      durationMinutes={s.durationMinutes}
+                      pending={confirmHold.isPending}
+                      note={`ほかの候補（${Math.max(s.candidates.length - 1, 0)} 件）の仮押さえは削除されます。${s.rescheduleOf ? `元の予定（${fmtEventRange(s.rescheduleOf.startAt, s.rescheduleOf.endAt)}）も削除されます。` : ''}`}
+                      onConfirm={(t) => confirmHold.mutate({ sessionId: s.sessionId, eventId: v.eventId!, ...t })}
+                      onCancel={() => setWindowFor(null)}
+                    />
                   )}
                 </li>
               ))}

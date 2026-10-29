@@ -11,14 +11,15 @@ import { ConversationTaskPanel } from '../lib/ConversationTaskPanel';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { MemoBadge, MemoPanel, MemoSuggestionCard, type MemoSuggestion } from '../lib/Memo';
 import { ClientConfirmPanel } from '../lib/ClientConfirmPanel';
-import { channelBadge, channelLabel, fmtDateTime, fmtBytes, fromLocalInput, toLocalInput, todayLocalInput } from '../lib/format';
+import { channelBadge, channelLabel, fmtDateTime, fmtBytes, fromLocalInput, toLocalInput, todayLocalInput, fmtEventTime } from '../lib/format';
 import { Icon } from '../lib/icons';
 import { useSpotlight } from '../lib/spotlight';
 import { quickSendTimes } from '../lib/sendTimes';
 import { TaskDeadlines, NewTaskDeadlines, WaitDeadlineSelect, fmtDeadline } from '../lib/Deadline';
-import { dateOnlyDeadline, SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply, messageLink, type EventKind } from '@lcm/shared';
+import { dateOnlyDeadline, SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply, messageLink, type EventKind, isAllDayRange } from '@lcm/shared';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 import { AttachmentImage, canPreviewImage } from '../lib/AttachmentImage';
+import { WindowConfirm, isHoldWindow } from '../lib/HoldForm';
 import { useLocalUploads, LocalFileButton, LocalFileBadges, fileDropProps } from '../lib/LocalFileAttach';
 
 /** Chatwork の取込理由の表示名（設定画面の診断と同じ） */
@@ -1517,6 +1518,8 @@ interface PendingHold {
   fromThisConversation: boolean;
   rescheduleOf: { eventId: number; title: string; startAt: string } | null;
   candidates: { eventId: number; startAt: string; endAt: string }[];
+  /** 所要時間（分）。候補が枠なら、確定するときにこの長さで時間を決める */
+  durationMinutes?: number | null;
 }
 
 interface Replaced {
@@ -1640,7 +1643,9 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
     onError: (e) => setErr((e as Error).message),
   });
   const confirmHold = useMutation({
-    mutationFn: () => api.post<{ webText: string; rescheduled: { title: string; startAt: string } | null }>(`/conversations/${conversationId}/schedule/confirm-hold`, { ...pick, ...(meeting.by === 'them' ? meetingBody(meeting) : {}) }),
+    // 枠で押さえた候補は、その中で決めた時間（time）で確定する
+    mutationFn: (time?: { startAt: string; endAt: string }) =>
+      api.post<{ webText: string; rescheduled: { title: string; startAt: string } | null }>(`/conversations/${conversationId}/schedule/confirm-hold`, { ...pick, ...(meeting.by === 'them' ? meetingBody(meeting) : {}), ...(time ?? {}) }),
     onSuccess: (r) => {
       setWebText(r.webText ?? '');
       setWebTextTheirs(meeting.by === 'them');
@@ -1757,7 +1762,7 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
                       return (
                         <label key={c.eventId} className="flex flex-wrap items-center gap-2">
                           <input type="radio" name="hold-pick" checked={pick?.eventId === c.eventId} onChange={() => setPick({ sessionId: h.sessionId, eventId: c.eventId })} />
-                          <span>{fmtDateTime(c.startAt)}〜{fmtDateTime(c.endAt).split(' ').pop()}</span>
+                          <span>{isAllDayRange(c.startAt, c.endAt) ? fmtEventTime(c.startAt, c.endAt) : `${fmtDateTime(c.startAt)}〜${fmtDateTime(c.endAt).split(' ').pop()}`}</span>
                           {matched && <span className="badge badge-blue">やり取りで決まった日時</span>}
                         </label>
                       );
@@ -1767,18 +1772,35 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
               ))}
               <MeetingByFields value={meeting} onChange={setMeeting} provider={res.webProvider} detected={res.externalMeeting} holdMode />
               <div className="flex flex-wrap items-center gap-2">
-                <button
-                  className="btn btn-primary shrink-0 whitespace-nowrap"
-                  disabled={!pick || confirmHold.isPending}
-                  onClick={() => {
-                    const h = holds.find((x) => x.sessionId === pick?.sessionId);
-                    const c = h?.candidates.find((x) => x.eventId === pick?.eventId);
-                    if (!h || !c) return;
-                    if (window.confirm(`${fmtDateTime(c.startAt)} で確定しますか？\nほかの候補（${h.candidates.length - 1} 件）の仮押さえは削除されます。`)) confirmHold.mutate();
-                  }}
-                >
-                  {confirmHold.isPending ? '確定中…' : 'この候補で確定'}
-                </button>
+                {(() => {
+                  const h = holds.find((x) => x.sessionId === pick?.sessionId);
+                  const c = h?.candidates.find((x) => x.eventId === pick?.eventId);
+                  // 枠の候補は、その中で確定する時間を選ぶ
+                  if (h && c && h.durationMinutes && isHoldWindow(c, h.durationMinutes)) {
+                    return (
+                      <WindowConfirm
+                        key={c.eventId}
+                        candidate={c}
+                        durationMinutes={h.durationMinutes}
+                        pending={confirmHold.isPending}
+                        note={`ほかの候補（${h.candidates.length - 1} 件）の仮押さえは削除されます。`}
+                        onConfirm={(t) => confirmHold.mutate(t)}
+                      />
+                    );
+                  }
+                  return (
+                    <button
+                      className="btn btn-primary shrink-0 whitespace-nowrap"
+                      disabled={!pick || confirmHold.isPending}
+                      onClick={() => {
+                        if (!h || !c) return;
+                        if (window.confirm(`${fmtEventTime(c.startAt, c.endAt)} で確定しますか？\nほかの候補（${h.candidates.length - 1} 件）の仮押さえは削除されます。`)) confirmHold.mutate(undefined);
+                      }}
+                    >
+                      {confirmHold.isPending ? '確定中…' : 'この候補で確定'}
+                    </button>
+                  );
+                })()}
                 <span className="text-xs text-slate-500">「仮」が外れて確定の予定になります。{meeting.by === 'them' ? '会議 URL はこちらでは発行せず、相手方のものを入れます。' : 'WEB 会議の仮押さえなら、ここで会議 URL を発行します。'}</span>
               </div>
             </div>
@@ -1793,7 +1815,7 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
                   <option value="">取り消さない</option>
                   {holds.map((h) => (
                     <option key={h.sessionId} value={h.sessionId}>
-                      {h.title}（候補 {h.candidates.length} 件: {h.candidates.map((c) => fmtDateTime(c.startAt)).join('、')}）
+                      {h.title}（候補 {h.candidates.length} 件: {h.candidates.map((c) => fmtEventTime(c.startAt, c.endAt)).join('、')}）
                     </option>
                   ))}
                 </select>
