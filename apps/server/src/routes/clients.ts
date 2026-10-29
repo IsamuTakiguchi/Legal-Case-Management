@@ -452,23 +452,29 @@ clientRoutes.get('/note-contact-suggestions', (c) => {
   return c.json(noteContactSuggestions(caseId));
 });
 
+const structureBody = z.object({
+  rawText: z.string().min(1),
+  kind: z.string().default('phone'),
+  counterpart: z.string().optional().nullable(),
+  phone: z.string().optional().nullable(),
+  // 折り返し電話なら、きっかけになった伝言（参考に渡す）
+  context: z.string().max(4000).optional().nullable(),
+});
+
 /** 電話メモなどの整理（保存前プレビュー） */
 clientRoutes.post('/cases/:id/notes/structure', async (c) => {
   const id = Number(c.req.param('id'));
-  const body = z
-    .object({
-      rawText: z.string().min(1),
-      kind: z.string().default('phone'),
-      counterpart: z.string().optional().nullable(),
-      phone: z.string().optional().nullable(),
-      // 折り返し電話なら、きっかけになった伝言（参考に渡す）
-      context: z.string().max(4000).optional().nullable(),
-    })
-    .parse(await c.req.json());
+  const body = structureBody.parse(await c.req.json());
   const kase = getCase(id);
   if (!kase) return c.json({ error: 'not found' }, 404);
   const r = await structureNote(body.rawText, { caseTitle: kase.title, clientName: kase.client?.name, kind: body.kind, counterpart: body.counterpart, phone: body.phone, context: body.context });
   return c.json(r);
+});
+
+/** 事件がまだ決まっていない記録の整理（誰の事件か未確定の折り返し電話など） */
+clientRoutes.post('/notes/structure', async (c) => {
+  const body = structureBody.parse(await c.req.json());
+  return c.json(await structureNote(body.rawText, { kind: body.kind, counterpart: body.counterpart, phone: body.phone, context: body.context }));
 });
 
 clientRoutes.post('/cases/:id/notes', async (c) => {

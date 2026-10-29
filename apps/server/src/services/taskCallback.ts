@@ -1,7 +1,7 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { familyName, OPEN_CASE_STATUSES, type CaseNoteInput } from '@lcm/shared';
-import { addCaseNote } from './cases.js';
+import { familyName, OPEN_CASE_STATUSES, provisionalClientName, type CaseNoteInput } from '@lcm/shared';
+import { addCaseNote, createCase } from './cases.js';
 import { updateTask } from './tasks.js';
 import { logger } from '../logger.js';
 import { extractPhones, digitsOf, extractCaller } from './phoneMessage.js';
@@ -139,19 +139,38 @@ export function callbackMessageBlock(ctx: Pick<CallbackContext, 'from' | 'messag
   return `――${ctx.from ? `${ctx.from}さんからの` : ''}伝言――\n${ctx.message}`;
 }
 
-/** 折り返し電話のやり取りを事件の記録（電話）に残し、タスクを事件に紐付ける（完了にもできる） */
+/**
+ * 誰の事件かまだ分からない電話のために、「氏名未確認」の依頼者と相談の事件を作る。
+ * 依頼者ページで氏名を確定するか、既存の依頼者に統合すれば、記録もそちらに付く
+ */
+function createProvisionalCallbackCase(ctx: CallbackContext, label: string | null) {
+  const name = provisionalClientName(label, null);
+  const client = db()
+    .insert(schema.clients)
+    .values({ name, provisional: true, phones: ctx.callerPhone ? [ctx.callerPhone] : [], notes: '折り返し電話の記録から作りました（誰の事件か未確定）' })
+    .returning()
+    .get();
+  const d = new Date(ctx.receivedAt);
+  const md = new Intl.DateTimeFormat('ja-JP', { timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric' }).format(Number.isNaN(d.getTime()) ? new Date() : d);
+  return createCase({ clientId: client.id, title: `電話相談（${md}）`, status: 'consultation', courtName: null, caseNumber: null });
+}
+
+/**
+ * 折り返し電話のやり取りを事件の記録（電話）に残し、タスクを事件に紐付ける（完了にもできる）。
+ * provisional を渡すと、誰の事件か未確定の電話として「氏名未確認」の相談を作ってそこに記録する
+ */
 export async function saveCallbackNote(
   taskId: number,
-  input: Omit<CaseNoteInput, 'kind'>,
-  opts: { completeTask?: boolean; createTasks?: boolean | 'each' | 'single'; taskIndexes?: number[] } = {},
+  input: Omit<CaseNoteInput, 'kind' | 'caseId'> & { caseId?: number | null },
+  opts: { completeTask?: boolean; createTasks?: boolean | 'each' | 'single'; taskIndexes?: number[]; provisional?: { label: string | null } | null } = {},
 ) {
   const ctx = callbackContext(taskId);
   const memo = input.rawText.trim();
   if (!memo) throw new Error('通話の内容を入力してください');
-  const kase = db().select().from(schema.cases).where(eq(schema.cases.id, input.caseId)).get();
+  const kase = opts.provisional ? createProvisionalCallbackCase(ctx, opts.provisional.label) : input.caseId ? db().select().from(schema.cases).where(eq(schema.cases.id, input.caseId)).get() : undefined;
   if (!kase) throw new Error('事件を選んでください');
   const note = await addCaseNote(
-    { ...input, kind: 'phone', rawText: `${memo}\n\n${callbackMessageBlock(ctx)}` },
+    { ...input, caseId: kase.id, kind: 'phone', rawText: `${memo}\n\n${callbackMessageBlock(ctx)}` },
     { createTasks: opts.createTasks, taskIndexes: opts.taskIndexes },
   );
   // タスクにも、どの事件の話だったかを付けておく（一覧で事件が分かるように）
@@ -162,6 +181,6 @@ export async function saveCallbackNote(
   if (Object.keys(patch).length) db().update(schema.tasks).set({ ...patch, updatedAt: new Date().toISOString() }).where(eq(schema.tasks.id, taskId)).run();
   let status = t.status;
   if (opts.completeTask && t.status !== 'done') status = updateTask(taskId, { status: 'done' }).status;
-  logger.info({ taskId, noteId: note.id, caseId: kase.id, completed: status === 'done' }, '折り返し電話を記録しました');
-  return { note, taskStatus: status };
+  logger.info({ taskId, noteId: note.id, caseId: kase.id, provisional: !!opts.provisional, completed: status === 'done' }, '折り返し電話を記録しました');
+  return { note, taskStatus: status, caseId: kase.id };
 }
