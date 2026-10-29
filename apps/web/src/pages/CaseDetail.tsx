@@ -24,9 +24,12 @@ import { CopyButton } from '../lib/copy';
 import { CaseContactSummary, type SummaryClient } from '../lib/CaseContactSummary';
 import type { ClientPerson } from '../lib/ClientPersons';
 import { ClientContactSetup, unreachableClientId } from '../lib/ClientContactSetup';
+import { useLocalUploads, LocalFileButton, LocalFileBadges, fileDropProps } from '../lib/LocalFileAttach';
+import { ContactSuggestions } from '../lib/ContactSuggestions';
 
 interface Note {
   id: number;
+  caseId?: number;
   kind: string;
   occurredAt: string;
   counterpart: string | null;
@@ -1336,6 +1339,8 @@ function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClo
   const [text, setText] = useState('');
   // 添付に選んだファイル（候補からでも、フォルダから探した分でも同じ入れ物に入れる）
   const [picked, setPicked] = useState<Map<string, DriveDoc>>(new Map());
+  // パソコンから選んだファイル
+  const uploads = useLocalUploads();
   const [browse, setBrowse] = useState(false);
   const [msg, setMsg] = useState('');
   const prep = useQuery({
@@ -1367,11 +1372,13 @@ function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClo
         text,
         attachmentIds: [],
         driveFiles: [...picked.values()].map((d) => ({ itemId: d.itemId, name: d.name, path: d.path })),
+        uploadIds: uploads.ids,
         draftId: n!.draftId,
         createWaitingTask: false,
       }),
     onSuccess: (r) => {
       noticeDraft.clear();
+      uploads.clear();
       setMsg(`${n!.channelLabel} で送信しました${r.note ? `（${r.note}）` : ''}${r.links.length ? `。${r.links.length} 件はリンクで送付` : ''}${r.manualFiles.length ? `。${r.manualFiles.join('、')} は手動送付が必要です` : ''}`);
       setTimeout(onSent, 1500);
     },
@@ -1420,7 +1427,7 @@ function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClo
         ))}
       {n && (
         <>
-          <textarea className="input min-h-44 text-sm" value={text} onChange={(e) => setText(e.target.value)} disabled={prep.isFetching} />
+          <textarea className="input min-h-44 text-sm" value={text} onChange={(e) => setText(e.target.value)} disabled={prep.isFetching} {...fileDropProps(uploads)} />
           <DraftHint handle={noticeDraft} />
           <div className="text-sm">
             <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
@@ -1431,6 +1438,7 @@ function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClo
               <button type="button" className="btn btn-sm ml-auto" onClick={() => setBrowse(!browse)}>
                 {browse ? 'フォルダを閉じる' : '📁 フォルダから選ぶ'}
               </button>
+              <LocalFileButton uploads={uploads} />
             </div>
             {n.docs.length > 0 ? (
               <div className="flex flex-wrap gap-2">
@@ -1465,9 +1473,10 @@ function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClo
                 ))}
               </div>
             )}
+            <LocalFileBadges uploads={uploads} className="mt-2" />
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <button className="btn btn-primary" onClick={() => send.mutate()} disabled={send.isPending || prep.isFetching || !text.trim()}>
+            <button className="btn btn-primary" onClick={() => send.mutate()} disabled={send.isPending || prep.isFetching || !text.trim() || uploads.uploading.length > 0}>
               {send.isPending ? '送信中…' : `${n.channelLabel} で送信`}
             </button>
             <Link to={`/inbox/${n.conversationId}`} className="btn btn-sm">
@@ -1606,6 +1615,15 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
           ))}
         </select>
       </div>
+      <ContactSuggestions
+        caseId={n.caseId ?? null}
+        name={counterpart}
+        phone={kind === 'phone' ? phone : ''}
+        onPick={(s) => {
+          if (s.name) setCounterpart(s.name);
+          if (s.phone && kind === 'phone') setPhone(s.phone);
+        }}
+      />
       <div>
         <label className="label">要旨</label>
         <textarea className="input min-h-16 text-sm" value={gist} onChange={(e) => setGist(e.target.value)} placeholder="空なら元メモがそのまま表示されます" />

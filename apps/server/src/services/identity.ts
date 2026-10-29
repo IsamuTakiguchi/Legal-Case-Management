@@ -114,7 +114,7 @@ function buildUnlinkedAlert(conversationId: number, id: IdentityHint, displayNam
   const lines = [
     preview ? `「${preview}」` : '（本文なし）',
     count > 1 ? `この相手からの受信 ${count} 件（最新: ${msg.sentAt ? fmtJst(msg.sentAt) : '不明'}）` : msg.sentAt ? `受信: ${fmtJst(msg.sentAt)}` : '',
-    '依頼者か事件の関係者に紐付けると、以後の受信と添付ファイルが自動で振り分けられます。',
+    '依頼者（ご家族・窓口を含む）か事件の関係者に紐付けると、以後の受信と添付ファイルが自動で振り分けられます。',
   ].filter(Boolean);
   return {
     title: `${CHANNEL_LABEL[id.channel] ?? id.channel}: ${who}${msg.subject && id.channel === 'gmail' ? `「${msg.subject}」` : ''}`,

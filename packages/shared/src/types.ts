@@ -190,6 +190,8 @@ export const sendMessageSchema = z.object({
   driveFiles: z
     .array(z.object({ itemId: z.string(), name: z.string(), path: z.string().optional() }))
     .default([]),
+  /** パソコンから選んで一時置き場に上げたファイル（/outbound-uploads で受け取った ID） */
+  uploadIds: z.array(z.string().uuid()).max(20).default([]),
   draftId: z.number().int().optional().nullable(),
   createWaitingTask: z.boolean().default(false),
   /** このメッセージへの返信として送る（Chatwork は [rp] タグ、ほかは表示上の結び付き） */
