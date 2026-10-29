@@ -6,7 +6,7 @@ import { mergedLabel, type MergeRef } from '../lib/mergedAttachment';
 import { api } from '../lib/api';
 import { useDraft, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
-import { ContactLinkForm } from '../lib/ContactLinkForm';
+import { ConversationLinkForm } from '../lib/ConversationLinkForm';
 import { ConversationTaskPanel } from '../lib/ConversationTaskPanel';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { MemoBadge, MemoPanel, MemoSuggestionCard, type MemoSuggestion } from '../lib/Memo';
@@ -174,7 +174,6 @@ export default function Conversation() {
   // 会話からタスクを登録するパネル
   const [showTasks, setShowTasks] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
-  const [linkClientId, setLinkClientId] = useState('');
 
   // 自分が別の手段で送ったものが「受信」で入ったときに、向きを直す
   const fixDirection = useMutation({
@@ -285,14 +284,6 @@ export default function Conversation() {
     },
   });
 
-  const link = useMutation({
-    mutationFn: (clientId: number) => api.post(`/conversations/${id}/link`, { clientId }),
-    onSuccess: () => {
-      setMsg({ kind: 'ok', text: '依頼者に紐付けました' });
-      invalidate();
-      qc.invalidateQueries({ queryKey: ['alerts'] });
-    },
-  });
   const unlink = useMutation({
     mutationFn: () => api.post(`/conversations/${id}/unlink`),
     onSuccess: () => {
@@ -301,7 +292,6 @@ export default function Conversation() {
     },
     onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
   });
-  const [linkMode, setLinkMode] = useState<'client' | 'contact'>('client');
 
   const toggle = useMutation({
     mutationFn: (v: { needsReply?: boolean; archived?: boolean }) => (v.needsReply !== undefined ? api.post(`/conversations/${id}/needs-reply`, v) : api.post(`/conversations/${id}/archive`, v)),
@@ -350,10 +340,6 @@ export default function Conversation() {
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   };
 
-  useEffect(() => {
-    if (c && !c.clientId && c.suggestions[0]) setLinkClientId(String(c.suggestions[0].id));
-  }, [c]);
-
   if (!c) return <div className="loading-text text-slate-500">読み込み中…</div>;
 
   // Chatwork のグループチャットは相手個人ではなくルーム（件名に保持）を会話名にする
@@ -398,10 +384,11 @@ export default function Conversation() {
           {c.client && !c.contact && (c.client.entityType === 'corporation' || (c.clientPersons?.length ?? 0) > 0 || otherThanClient(c.channel, c.counterpartName, c.client.name)) && (
             <ConversationPersonPicker
               corporate={c.client.entityType === 'corporation'}
+              group={!!c.lineGroup}
               conversationId={c.id}
               current={c.clientPerson ?? null}
               persons={c.clientPersons ?? []}
-              defaultName={c.counterpartName ?? ''}
+              defaultName={c.lineGroup ? '' : (c.counterpartName ?? '')}
               onDone={(text) => {
                 setMsg({ kind: 'ok', text });
                 invalidate();
@@ -454,36 +441,19 @@ export default function Conversation() {
         )}
         {!c.clientId && !c.staff && (
           <div className="card border-orange-200 bg-orange-50">
-            <div className="mb-2 flex flex-wrap items-center gap-3 text-sm">
-              <span className="font-semibold text-orange-800">この連絡先はまだ紐付いていません</span>
-              <label className="flex items-center gap-1">
-                <input type="radio" name="linkMode" checked={linkMode === 'client'} onChange={() => setLinkMode('client')} /> 依頼者本人
-              </label>
-              <label className="flex items-center gap-1" title="相手方・相手方代理人・裁判所・保険会社など、依頼者以外の相手">
-                <input type="radio" name="linkMode" checked={linkMode === 'contact'} onChange={() => setLinkMode('contact')} /> 事件の関係者（相手方・相手方代理人など）
-              </label>
-            </div>
-            {linkMode === 'client' ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <ClientPicker value={linkClientId} onChange={setLinkClientId} suggestions={c.suggestions} />
-                <button className="btn btn-primary btn-sm" disabled={!linkClientId} onClick={() => link.mutate(Number(linkClientId))}>
-                  紐付ける
-                </button>
-                <Link to={`/clients?new=${encodeURIComponent(c.counterpartName ?? '')}&email=${encodeURIComponent(c.channel === 'gmail' ? c.counterpartAddress ?? '' : '')}`} className="btn btn-sm">
-                  新規依頼者として登録
-                </Link>
-              </div>
-            ) : (
-              <ContactLinkForm
-                conversationId={c.id}
-                defaultName={c.counterpartName ?? ''}
-                onDone={() => {
-                  setMsg({ kind: 'ok', text: '関係者として紐付けました' });
-                  invalidate();
-                  qc.invalidateQueries({ queryKey: ['alerts'] });
-                }}
-              />
-            )}
+            <div className="mb-2 text-sm font-semibold text-orange-800">{c.lineGroup ? 'この LINE グループはまだ紐付いていません' : 'この連絡先はまだ紐付いていません'}</div>
+            <ConversationLinkForm
+              conversationId={c.id}
+              group={!!c.lineGroup}
+              defaultName={c.counterpartName ?? ''}
+              suggestions={c.suggestions}
+              newClientHref={`/clients?new=${encodeURIComponent(c.lineGroup ? '' : (c.counterpartName ?? ''))}&email=${encodeURIComponent(c.channel === 'gmail' ? (c.counterpartAddress ?? '') : '')}`}
+              onDone={(text) => {
+                setMsg({ kind: 'ok', text });
+                invalidate();
+                qc.invalidateQueries({ queryKey: ['alerts'] });
+              }}
+            />
           </div>
         )}
 
@@ -2116,6 +2086,7 @@ function otherThanClient(channel: string, counterpart: string | null | undefined
  */
 function ConversationPersonPicker({
   corporate,
+  group,
   conversationId,
   current,
   persons,
@@ -2124,6 +2095,8 @@ function ConversationPersonPicker({
   onError,
 }: {
   corporate: boolean;
+  /** LINE のグループ（1 人の相手ではないので「〜とのグループ」と言う） */
+  group: boolean;
   conversationId: number;
   current: { id: number; name: string; title: string | null } | null;
   persons: { id: number; name: string; title: string | null }[];
@@ -2158,8 +2131,11 @@ function ConversationPersonPicker({
     );
   }
   return (
-    <label className="inline-flex items-center gap-1 text-sm text-slate-600" title={corporate ? '法人の依頼者の、どの担当者とのやり取りか' : 'ご本人とのやり取りか、ご家族など窓口の方とのやり取りか'}>
-      相手:
+    <label
+      className="inline-flex items-center gap-1 text-sm text-slate-600"
+      title={group ? '依頼者本人が入っているグループか、ご家族など窓口の方（法人なら担当者）とのグループか' : corporate ? '法人の依頼者の、どの担当者とのやり取りか' : 'ご本人とのやり取りか、ご家族など窓口の方とのやり取りか'}
+    >
+      {group ? 'グループ:' : '相手:'}
       <select
         className="input w-auto py-0.5 text-sm"
         value={current ? String(current.id) : ''}
@@ -2171,11 +2147,12 @@ function ConversationPersonPicker({
         }}
         aria-label={corporate ? '会話の相手（担当者）' : '会話の相手（窓口）'}
       >
-        <option value="">{corporate ? '会社・代表' : 'ご本人'}</option>
+        <option value="">{group ? (corporate ? '会社・代表とのグループ' : '依頼者とのグループ') : corporate ? '会社・代表' : 'ご本人'}</option>
         {persons.map((p) => (
           <option key={p.id} value={p.id}>
             {corporate ? '担当' : '窓口'} {p.name}
             {p.title ? `（${p.title}）` : ''}
+            {group ? 'とのグループ' : ''}
           </option>
         ))}
         <option value="new">{corporate ? '＋ 新しい担当者として登録…' : '＋ 窓口の方（ご家族など）として登録…'}</option>

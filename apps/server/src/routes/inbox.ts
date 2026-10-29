@@ -125,12 +125,25 @@ inboxRoutes.get('/conversations/:id', (c) => {
   return c.json({ ...conv, drafts, suggestions, scheduled, reactions, pendingHolds, memoSuggestions, memos, clientPerson: clientPerson ? { id: clientPerson.id, name: clientPerson.name, title: clientPerson.title } : null, clientPersons });
 });
 
+/**
+ * 依頼者に紐付ける。personId / newPerson を付けると、相手を依頼者のご家族・窓口（法人なら担当者）として紐付ける
+ * （ご本人ではなく、ご家族が連絡してくる場合など）
+ */
 inboxRoutes.post('/conversations/:id/link', async (c) => {
   const id = Number(c.req.param('id'));
-  const body = z.object({ clientId: z.number().int() }).parse(await c.req.json());
+  const body = z
+    .object({
+      clientId: z.number().int(),
+      personId: z.number().int().nullable().optional(),
+      newPerson: z.object({ name: z.string().trim().min(1).max(100), title: z.string().trim().max(100).nullable().optional() }).nullable().optional(),
+    })
+    .parse(await c.req.json());
+  // 紐付けてから担当者で失敗しないよう、先に確かめる
+  if (body.personId && getClientPerson(body.personId)?.clientId !== body.clientId) return c.json({ error: 'この依頼者の窓口・担当者ではありません' }, 400);
   linkConversationToClient(id, body.clientId);
+  const person = body.personId || body.newPerson ? setConversationPerson(id, { personId: body.personId ?? null, newPerson: body.newPerson ?? null }).person : null;
   const moved = await assignConversationAttachments(id, body.clientId);
-  return c.json({ ok: true, movedAttachments: moved });
+  return c.json({ ok: true, movedAttachments: moved, person: person ? { id: person.id, name: person.name, title: person.title } : null });
 });
 
 /** 会話の相手を法人の担当者に決める（既存の担当者・新しい担当者・会社/代表として） */

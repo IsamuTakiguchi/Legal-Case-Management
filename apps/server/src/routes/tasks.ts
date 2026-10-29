@@ -8,6 +8,7 @@ import { replyToChatworkTask } from '../services/taskReply.js';
 import { callbackContext, saveCallbackNote } from '../services/taskCallback.js';
 import { createMemo, detectMemos, memoInputSchema, snoozeMemo } from '../services/memos.js';
 import { isConfigured } from '../config.js';
+import { isLineGroupThread } from '../channels/line.js';
 import { db, schema } from '../db/index.js';
 import { eq, desc } from 'drizzle-orm';
 
@@ -110,9 +111,19 @@ taskRoutes.post('/tasks/:id/memo-snooze', async (c) => {
 // ---- アラート ----
 taskRoutes.get('/alerts', (c) => {
   const status = c.req.query('status') ?? 'open';
-  if (status === 'open') return c.json(openAlerts(c.req.query('type') || undefined));
+  if (status === 'open') return c.json(withLineGroup(openAlerts(c.req.query('type') || undefined)));
   return c.json(db().select().from(schema.alerts).where(eq(schema.alerts.status, status)).orderBy(desc(schema.alerts.createdAt)).limit(100).all());
 });
+
+/** 未紐付けの LINE がグループか（紐付けの選択肢を「〜とのグループ」にする） */
+function withLineGroup<T extends { type: string; payload: unknown }>(alerts: T[]): T[] {
+  return alerts.map((a) => {
+    const p = a.payload as { channel?: string; conversationId?: number };
+    if (a.type !== 'unlinked_contact' || p.channel !== 'line' || !p.conversationId) return a;
+    const conv = db().select({ externalThreadId: schema.conversations.externalThreadId }).from(schema.conversations).where(eq(schema.conversations.id, p.conversationId)).get();
+    return { ...a, payload: { ...p, lineGroup: !!conv && isLineGroupThread(conv.externalThreadId) } };
+  });
+}
 
 taskRoutes.post('/alerts/:id/resolve', async (c) => {
   const body = z.object({ status: z.enum(['resolved', 'dismissed']).default('resolved') }).parse(await c.req.json().catch(() => ({})));
