@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
+import { CASE_DELETE_NOTE } from '../lib/caseDelete';
 import { ClientPicker } from '../lib/ClientPicker';
 import { fmtDateTime, fmtRelative } from '../lib/format';
 import { CASE_STATUSES, CASE_STATUS_LABEL, type CaseStatus } from '@lcm/shared';
@@ -368,7 +369,19 @@ function CaseBulkBar({ ids, onClear, onDone }: { ids: number[]; onClear: () => v
     },
     onError: (e) => setErr((e as Error).message),
   });
-  if (!ids.length) return <div className="text-xs text-slate-400">チェックを付けると、まとめて区分・担当事務局・事件類型を変えられます</div>;
+  const remove = useMutation({
+    mutationFn: () => api.post<{ deleted: number }>('/cases/bulk-delete', { ids }),
+    onSuccess: (r) => {
+      setErr('');
+      qc.invalidateQueries({ queryKey: ['cases'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['client'] });
+      onDone(`${r.deleted} 件の事件を削除しました`);
+    },
+    onError: (e) => setErr((e as Error).message),
+  });
+  const busy = run.isPending || remove.isPending;
+  if (!ids.length) return <div className="text-xs text-slate-400">チェックを付けると、まとめて区分・担当事務局・事件類型を変えたり、削除したりできます</div>;
   const setStatusTo = (st: CaseStatus) => {
     if (st === 'closed' && !confirm(`${ids.length} 件を「終了事件」にしますか？（区分フォルダで管理していれば、依頼者フォルダも終了事件のフォルダへ移ります）`)) return;
     run.mutate({ patch: { status: st }, label: `「${CASE_STATUS_LABEL[st]}」にしました` });
@@ -379,7 +392,7 @@ function CaseBulkBar({ ids, onClear, onDone }: { ids: number[]; onClear: () => v
       <span className="font-medium text-slate-700">{ids.length} 件を選択中</span>
       <span className="text-xs text-slate-500">区分:</span>
       {CASE_STATUSES.map((st) => (
-        <button key={st} type="button" className="btn btn-sm" onClick={() => setStatusTo(st)} disabled={run.isPending}>
+        <button key={st} type="button" className="btn btn-sm" onClick={() => setStatusTo(st)} disabled={busy}>
           {CASE_STATUS_LABEL[st]}
         </button>
       ))}
@@ -393,7 +406,7 @@ function CaseBulkBar({ ids, onClear, onDone }: { ids: number[]; onClear: () => v
           const name = staffId ? staff.data?.find((x) => x.id === staffId)?.name : null;
           run.mutate({ patch: { staffId }, label: name ? `担当事務局「${name}」にしました` : '担当事務局なしにしました' });
         }}
-        disabled={run.isPending}
+        disabled={busy}
         aria-label="担当事務局をまとめて設定"
       >
         <option value="">担当事務局を設定…</option>
@@ -413,7 +426,7 @@ function CaseBulkBar({ ids, onClear, onDone }: { ids: number[]; onClear: () => v
           const label = types.data?.find((t) => t.key === key)?.label ?? key;
           run.mutate({ patch: { caseType: key }, label: `事件類型「${label}」にしました` });
         }}
-        disabled={run.isPending}
+        disabled={busy}
         aria-label="事件類型をまとめて変更"
       >
         <option value="">事件類型を変更…</option>
@@ -423,10 +436,22 @@ function CaseBulkBar({ ids, onClear, onDone }: { ids: number[]; onClear: () => v
           </option>
         ))}
       </select>
+      <button
+        type="button"
+        className="btn btn-sm text-red-600"
+        onClick={() => {
+          if (confirm(`選択した ${ids.length} 件の事件を削除します。${CASE_DELETE_NOTE}`)) remove.mutate();
+        }}
+        disabled={busy}
+        title="誤って登録した事件を削除します。終わった事件は削除せず、区分を「終了事件」にしてください"
+      >
+        削除
+      </button>
       <button type="button" className="btn btn-sm text-slate-500" onClick={onClear}>
         選択解除
       </button>
       {run.isPending && <span className="loading-text text-xs text-slate-500">変更中…</span>}
+      {remove.isPending && <span className="loading-text text-xs text-slate-500">削除中…</span>}
       {err && <span className="text-xs text-red-600">{err}</span>}
     </div>
   );

@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { deleteCase } from '../services/caseDelete.js';
 import { noteContactSuggestions } from '../services/noteContacts.js';
 import { listStaff, createStaff, updateStaff, deleteStaff, listChatworkAccounts, staffRooms } from '../services/staff.js';
 import { listRooms } from '../channels/chatwork.js';
@@ -422,6 +423,17 @@ clientRoutes.post('/cases/bulk', async (c) => {
     .parse(await c.req.json());
   const { ids, ...patch } = body;
   return c.json(bulkUpdateCases(ids, patch));
+});
+
+/** 事件を削除する（記録・タスク・債権者・関係者も削除。会話・予定は残して紐付けだけ外す。フォルダには触らない） */
+clientRoutes.delete('/cases/:id', (c) => (deleteCase(Number(c.req.param('id'))) ? c.json({ ok: true }) : c.json({ error: 'not found' }, 404)));
+
+/** 一覧でチェックした事件をまとめて削除する */
+clientRoutes.post('/cases/bulk-delete', async (c) => {
+  const body = z.object({ ids: z.array(z.number().int()).min(1).max(500) }).parse(await c.req.json());
+  let deleted = 0;
+  for (const id of body.ids) if (deleteCase(id)) deleted++;
+  return c.json({ deleted });
 });
 
 clientRoutes.put('/cases/:id', async (c) => {

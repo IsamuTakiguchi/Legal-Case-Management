@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { InstructionBox } from '../lib/InstructionBox';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useSpotlight } from '../lib/spotlight';
 import { useDraftRecord, useDraftGroup, useDraft, DraftHint } from '../lib/draft';
 import { RoomPicker } from '../lib/RoomPicker';
+import { CASE_DELETE_NOTE } from '../lib/caseDelete';
 import { ClientPicker } from '../lib/ClientPicker';
 import { HoldForm, HoldLocationEditor, HoldAddCandidates, fmtEventRange, type RescheduleTarget } from '../lib/HoldForm';
 import { LongText } from '../lib/LongText';
@@ -171,6 +172,18 @@ export default function CaseDetail() {
     },
   });
   const summary = useMutation({ mutationFn: () => api.post(`/cases/${id}/summary`), onSuccess: () => qc.invalidateQueries({ queryKey: ['case', id] }) });
+  const nav = useNavigate();
+  // 誤って登録した事件の削除
+  const remove = useMutation({
+    mutationFn: () => api.del(`/cases/${id}`),
+    onSuccess: () => {
+      caseDraft.clear();
+      qc.invalidateQueries({ queryKey: ['cases'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      if (c?.client) qc.invalidateQueries({ queryKey: ['client', String(c.client.id)] });
+      nav('/cases');
+    },
+  });
   if (!c) return <div className="loading-text text-slate-500">読み込み中…</div>;
   return (
     <div className="space-y-4">
@@ -301,6 +314,18 @@ export default function CaseDetail() {
                 保存
               </button>
               {save.error && <div className="fade-in text-xs text-red-600">{(save.error as Error).message}</div>}
+              <button
+                type="button"
+                className="w-full text-center text-xs text-slate-400 hover:text-red-600 hover:underline"
+                onClick={() => {
+                  if (confirm(`「${c.title}」を削除します。${CASE_DELETE_NOTE}`)) remove.mutate();
+                }}
+                disabled={remove.isPending}
+                title="誤って登録した事件を削除します。終わった事件は削除せず、区分を「終了事件」にしてください"
+              >
+                {remove.isPending ? '削除中…' : 'この事件を削除'}
+              </button>
+              {remove.error && <div className="fade-in text-xs text-red-600">{(remove.error as Error).message}</div>}
             </section>
             <section className="card text-sm">
               <div className="mb-2 flex items-center">
