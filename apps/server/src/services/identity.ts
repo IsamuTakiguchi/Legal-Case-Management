@@ -5,6 +5,7 @@ import { isLineGroupThread } from '../channels/line.js';
 import type { IdentityHint } from '../channels/types.js';
 import { upsertAlert } from './alerts.js';
 import { findPersonByIdentity } from './clientPersons.js';
+import { detachConversationIdentity } from './relink.js';
 
 export type ClientRow = typeof schema.clients.$inferSelect;
 
@@ -193,8 +194,23 @@ export function linkConversationToClient(conversationId: number, clientId: numbe
   if (!conv) throw new Error('会話が見つかりません');
   const client = db().select().from(schema.clients).where(eq(schema.clients.id, clientId)).get();
   if (!client) throw new Error('依頼者が見つかりません');
-  // 別の依頼者に付け替えたら、前の依頼者の担当者の紐付けは外す
-  db().update(schema.conversations).set({ clientId, ...(conv.clientId !== clientId ? { clientPersonId: null } : {}) }).where(eq(schema.conversations.id, conversationId)).run();
+  // 関係者や別の依頼者から付け替えるなら、前の相手からこの会話のアドレスを外す（次の連絡が前の相手に紐付かないように）
+  if (conv.contactId || (conv.clientId && conv.clientId !== clientId)) detachConversationIdentity(conv, { clientId });
+  // 事件は、この依頼者の事件のときだけ残す（関係者として付いていた事件は、別の依頼者のものかもしれない）
+  const keepCase = conv.caseId ? db().select({ clientId: schema.cases.clientId }).from(schema.cases).where(eq(schema.cases.id, conv.caseId)).get()?.clientId === clientId : false;
+  // 別の依頼者に付け替えたら、前の依頼者の担当者の紐付けは外す。関係者としての紐付けも外す
+  db()
+    .update(schema.conversations)
+    .set({ clientId, contactId: null, caseId: keepCase ? conv.caseId : null, ...(conv.clientId !== clientId ? { clientPersonId: null } : {}) })
+    .where(eq(schema.conversations.id, conversationId))
+    .run();
+  if (conv.contactId || conv.clientId !== clientId) {
+    // メッセージも新しい依頼者に。事件はこの依頼者のものだけ残す
+    for (const m of db().select({ id: schema.messages.id, caseId: schema.messages.caseId }).from(schema.messages).where(eq(schema.messages.conversationId, conversationId)).all()) {
+      const ok = m.caseId ? db().select({ clientId: schema.cases.clientId }).from(schema.cases).where(eq(schema.cases.id, m.caseId)).get()?.clientId === clientId : false;
+      db().update(schema.messages).set({ clientId, caseId: ok ? m.caseId : null }).where(eq(schema.messages.id, m.id)).run();
+    }
+  }
   const patch: Partial<typeof schema.clients.$inferInsert> = {};
   if (conv.channel === 'gmail' && conv.counterpartAddress && !client.emails.includes(conv.counterpartAddress)) {
     patch.emails = [...client.emails, conv.counterpartAddress];
