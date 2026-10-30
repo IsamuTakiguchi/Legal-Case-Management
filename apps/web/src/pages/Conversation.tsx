@@ -11,6 +11,7 @@ import { ConversationTaskPanel } from '../lib/ConversationTaskPanel';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { MemoBadge, MemoPanel, MemoSuggestionCard, type MemoSuggestion } from '../lib/Memo';
 import { ClientConfirmPanel } from '../lib/ClientConfirmPanel';
+import { RelayPanel } from '../lib/RelayPanel';
 import { channelBadge, channelLabel, fmtDateTime, fmtBytes, fromLocalInput, toLocalInput, todayLocalInput, fmtEventTime } from '../lib/format';
 import { Icon } from '../lib/icons';
 import { useSpotlight } from '../lib/spotlight';
@@ -53,6 +54,8 @@ interface Message {
   replyTo?: { id: number; senderName: string | null; direction: string; excerpt: string } | null;
   /** Chatwork: なぜ受信箱に入ったか（取込範囲の確認用） */
   scopeReason?: string | null;
+  /** 依頼者からの連絡を相手方代理人などに／相手方代理人などからの連絡を依頼者に伝えた記録 */
+  relays?: { direction: string; recipient: string; channel: string; conversationId: number | null; messageId: number | null; at: string }[];
   /** 事務局の質問から依頼者に確認を送った記録 */
   clientConfirms?: { channel: string; conversationId: number; messageId?: number | null; at: string; scheduledAt?: string | null }[];
   clientId?: number | null;
@@ -153,6 +156,8 @@ export default function Conversation() {
   const [reactFor, setReactFor] = useState<number | null>(null);
   // 事務局の質問を依頼者に確認する（Gmail・LINE）パネルを開いているメッセージ
   const [confirmFor, setConfirmFor] = useState<number | null>(null);
+  // 依頼者からの連絡を相手方代理人などに／相手方代理人などからの連絡を依頼者に伝えるパネルを開いているメッセージ
+  const [relayFor, setRelayFor] = useState<number | null>(null);
   const [quoteOf, setQuoteOf] = useState<Message | null>(null);
   const [showTimer, setShowTimer] = useState(false);
   // LINE アプリで送った分を記録する欄（送った時刻）
@@ -494,6 +499,18 @@ export default function Conversation() {
                       {m.clientConfirms!.at(-1)!.scheduledAt ? '⏰ 依頼者への確認を予約' : '✓ 依頼者に確認済み'}（{({ gmail: 'Gmail', line: 'LINE', chatwork: 'Chatwork' } as Record<string, string>)[m.clientConfirms!.at(-1)!.channel] ?? m.clientConfirms!.at(-1)!.channel}・{fmtDateTime(m.clientConfirms!.at(-1)!.scheduledAt ?? m.clientConfirms!.at(-1)!.at)}）
                     </Link>
                   )}
+                  {(m.relays?.length ?? 0) > 0 &&
+                    (() => {
+                      const r = m.relays!.at(-1)!;
+                      const label = `✓ ${r.recipient}さんに伝え済み（${({ gmail: 'Gmail', line: 'LINE', chatwork: 'Chatwork', manual: 'FAX・郵送など' } as Record<string, string>)[r.channel] ?? r.channel}・${fmtDateTime(r.at)}）`;
+                      return r.conversationId ? (
+                        <Link to={messageLink(r.conversationId, r.messageId)} className="ml-1 rounded bg-green-100 px-1 text-[10px] text-green-800 hover:underline" title="伝えたやり取りを開きます">
+                          {label}
+                        </Link>
+                      ) : (
+                        <span className="ml-1 rounded bg-green-100 px-1 text-[10px] text-green-800">{label}</span>
+                      );
+                    })()}
                 </div>
                 {m.replyTo && (
                   <button
@@ -530,6 +547,20 @@ export default function Conversation() {
                       title="この質問を、自分から依頼者に確認する文に書き直して、Gmail・LINE・Chatwork で依頼者に送ります"
                     >
                       📨 依頼者に確認
+                    </button>
+                  )}
+                  {m.direction === 'in' && (c.contact || (c.client && !c.staff)) && (
+                    <button
+                      type="button"
+                      className="font-medium text-blue-700 hover:underline"
+                      onClick={() => setRelayFor(relayFor === m.id ? null : m.id)}
+                      title={
+                        c.contact
+                          ? 'この連絡・質問を、依頼者に伝える文に書き直して送ります'
+                          : 'この連絡・質問を、相手方代理人など事件の関係者への連絡に書き直して送ります（伝えるべきでないことは外します）'
+                      }
+                    >
+                      {c.contact ? '📨 依頼者に伝える' : '📤 相手方代理人に伝える'}
                     </button>
                   )}
                   <button type="button" className="hover:underline" onClick={() => setQuoteOf(m)} title={c.channel === 'chatwork' ? 'Chatwork の引用として本文に付けます' : '「> 」付きの引用文として本文に付けます'}>
@@ -612,6 +643,7 @@ export default function Conversation() {
                 onSent={invalidate}
               />
             )}
+            {relayFor === m.id && <RelayPanel messageId={m.id} onClose={() => setRelayFor(null)} onSent={invalidate} />}
             </Fragment>
           ))}
           {c.messages.length === 0 && <div className="text-sm text-slate-500">まだやり取りはありません。下の欄で書いて送ると、ここに残ります。</div>}
