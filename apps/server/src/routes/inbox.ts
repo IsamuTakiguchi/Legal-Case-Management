@@ -9,6 +9,7 @@ import { linkConversationToClient, suggestClients } from '../services/identity.j
 import { linkConversationToContact, unlinkConversation, createContact, getContact } from '../services/contacts.js';
 import { assignConversationAttachments } from '../services/attachments.js';
 import { sendToConversation } from '../services/send.js';
+import { relayContext, draftRelay, sendRelay } from '../services/relay.js';
 import { saveOutboundUpload, removeOutboundUploads } from '../services/outboundUploads.js';
 import { staffAskContext, draftStaffAsk, sendStaffAsk, type StaffAskSource } from '../services/staffAsk.js';
 import { clientConfirmContext, draftClientConfirm, sendClientConfirm, CONFIRM_CHANNELS } from '../services/clientConfirm.js';
@@ -283,6 +284,30 @@ inboxRoutes.post('/conversations/:id/staff-ask/draft', async (c) => {
 inboxRoutes.post('/conversations/:id/staff-ask', async (c) => {
   const body = staffAskSendSchema.parse(await c.req.json());
   return c.json(await sendStaffAsk(convSource(c, body.messageId), body));
+});
+
+// ---- 連絡の取次ぎ: 依頼者からの連絡を相手方代理人などに、相手方代理人などからの連絡を依頼者に伝える ----
+
+inboxRoutes.get('/messages/:messageId/relay', (c) => c.json(relayContext(Number(c.req.param('messageId')), { caseId: c.req.query('caseId') ? Number(c.req.query('caseId')) : null })));
+
+inboxRoutes.post('/messages/:messageId/relay/draft', async (c) => {
+  const body = z.object({ caseId: z.number().int().nullable().optional(), targetKey: z.string().min(1), instruction: z.string().max(2000).nullable().optional() }).parse(await c.req.json());
+  return c.json(await draftRelay(Number(c.req.param('messageId')), body));
+});
+
+inboxRoutes.post('/messages/:messageId/relay', async (c) => {
+  const body = z
+    .object({
+      caseId: z.number().int().nullable().optional(),
+      targetKey: z.string().min(1),
+      text: z.string().min(1),
+      subject: z.string().max(200).nullable().optional(),
+      createWaitingTask: z.boolean().optional(),
+      followUpAt: z.string().datetime({ offset: true }).nullable().optional(),
+      manual: z.boolean().optional(),
+    })
+    .parse(await c.req.json());
+  return c.json(await sendRelay(Number(c.req.param('messageId')), body));
 });
 
 /**
