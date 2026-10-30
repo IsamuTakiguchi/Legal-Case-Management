@@ -156,6 +156,8 @@ export default function Conversation() {
   const [reactFor, setReactFor] = useState<number | null>(null);
   // 事務局の質問を依頼者に確認する（Gmail・LINE）パネルを開いているメッセージ
   const [confirmFor, setConfirmFor] = useState<number | null>(null);
+  // 紐付けを変更する欄を開いているか
+  const [relinking, setRelinking] = useState(false);
   // 依頼者からの連絡を相手方代理人などに／相手方代理人などからの連絡を依頼者に伝えるパネルを開いているメッセージ
   const [relayFor, setRelayFor] = useState<number | null>(null);
   const [quoteOf, setQuoteOf] = useState<Message | null>(null);
@@ -405,14 +407,12 @@ export default function Conversation() {
           {(c.clientId || c.contactId) && (
             <button
               type="button"
-              className="text-xs text-slate-400 hover:text-red-600 hover:underline"
-              onClick={() => {
-                if (confirm('この会話の依頼者・事件・関係者への紐付けを外します。依頼者や関係者の連絡先は変更しません。よろしいですか？')) unlink.mutate();
-              }}
-              disabled={unlink.isPending}
-              title="間違って紐付けたときに外します"
+              className={`btn btn-sm ${relinking ? 'text-[var(--accent)]' : ''}`}
+              onClick={() => setRelinking(!relinking)}
+              aria-expanded={relinking}
+              title="この会話の相手を、別の依頼者・ご家族や窓口・事件の関係者（相手方代理人など）に付け替えます"
             >
-              紐付けを外す
+              紐付けを変更
             </button>
           )}
           {c.subject && !(c.channel === 'chatwork' && !c.client) && <span className="text-sm text-slate-500">件名: {c.subject}</span>}
@@ -426,6 +426,55 @@ export default function Conversation() {
           </div>
         </div>
 
+        {relinking && (c.clientId || c.contactId) && (
+          <div className="card space-y-2 border-blue-200">
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="font-semibold">紐付けを変更</span>
+              <span className="text-xs text-slate-500">
+                いま:{' '}
+                {c.contact
+                  ? `${c.contact.roleLabel} ${c.contact.name}（${c.client?.name ?? ''}／${c.contact.caseTitle}）`
+                  : c.clientPerson
+                    ? `${c.client?.name ?? ''} の${c.clientPerson.title ? `${c.clientPerson.title}・` : ''}${c.clientPerson.name}`
+                    : `依頼者 ${c.client?.name ?? ''}`}
+              </span>
+              <button className="btn btn-sm ml-auto" onClick={() => setRelinking(false)}>
+                閉じる
+              </button>
+            </div>
+            <ConversationLinkForm
+              conversationId={c.id}
+              group={!!c.lineGroup}
+              defaultName={c.counterpartName ?? ''}
+              current={{ clientId: c.clientId, caseId: c.caseId ?? null, contactId: c.contactId ?? null, personId: c.clientPerson?.id ?? null }}
+              newClientHref={`/clients?new=${encodeURIComponent(c.lineGroup ? '' : (c.counterpartName ?? ''))}&email=${encodeURIComponent(c.channel === 'gmail' ? (c.counterpartAddress ?? '') : '')}`}
+              onDone={(text) => {
+                setRelinking(false);
+                setMsg({ kind: 'ok', text: text.replace(/紐付けました/, '付け替えました') });
+                invalidate();
+                qc.invalidateQueries({ queryKey: ['alerts'] });
+              }}
+            />
+            <div className="flex flex-wrap items-center gap-3 border-t border-slate-100 pt-2 text-xs">
+              {c.contact && (
+                <Link to={`/cases/${c.contact.caseId}#contacts`} className="text-blue-700 hover:underline" title="関係者の名前・役割・所属・メールアドレス・電話などは、事件ページの「関係者」で直します">
+                  {c.contact.name}さんの登録内容（名前・役割・連絡先）を直す
+                </Link>
+              )}
+              <button
+                type="button"
+                className="text-slate-400 hover:text-red-600 hover:underline"
+                onClick={() => {
+                  if (confirm('この会話の依頼者・事件・関係者への紐付けを外します。依頼者や関係者の連絡先は変更しません。よろしいですか？')) unlink.mutate();
+                }}
+                disabled={unlink.isPending}
+                title="間違って紐付けたときに外します（付け替え先が決まっていないとき）"
+              >
+                紐付けを外す（どこにも付けない）
+              </button>
+            </div>
+          </div>
+        )}
         {c.staff && !c.clientId && (
           <div className="card border-slate-200 bg-slate-50 text-sm text-slate-600">
             <span className="badge badge-gray mr-2">事務局</span>

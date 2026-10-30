@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { api } from './api';
@@ -40,6 +40,7 @@ export function ConversationLinkForm({
   suggestions = [],
   newClientHref,
   extra,
+  current = null,
   onDone,
 }: {
   conversationId: number;
@@ -52,12 +53,14 @@ export function ConversationLinkForm({
   newClientHref: string;
   /** 分類の横に出すもの（「会話を開く」など） */
   extra?: ReactNode;
+  /** いまの紐付け（紐付けを変えるとき。いまの状態を選んだところから始める） */
+  current?: { clientId: number | null; caseId: number | null; contactId: number | null; personId: number | null } | null;
   onDone: (text: string) => void;
 }) {
-  const [mode, setMode] = useState<LinkMode>('client');
-  // 名前の似ている依頼者がいれば、はじめから選んでおく
-  const [clientId, setClientId] = useState(suggestions[0] ? String(suggestions[0].id) : '');
-  const [personId, setPersonId] = useState('');
+  const [mode, setMode] = useState<LinkMode>(current?.contactId ? 'contact' : current?.personId ? 'person' : 'client');
+  // いまの依頼者、または名前の似ている依頼者を、はじめから選んでおく
+  const [clientId, setClientId] = useState(current?.clientId ? String(current.clientId) : suggestions[0] ? String(suggestions[0].id) : '');
+  const [personId, setPersonId] = useState(current?.personId ? String(current.personId) : '');
   // グループは名前がグループ名なので、窓口の名前には入れない
   const [name, setName] = useState(group ? '' : defaultName);
   const [title, setTitle] = useState('');
@@ -66,7 +69,15 @@ export function ConversationLinkForm({
   const { data: clients } = useClients();
   const corporate = (clients as (ClientOption & { entityType?: string })[] | undefined)?.find((c) => String(c.id) === clientId)?.entityType === 'corporation';
   const persons = useQuery({ queryKey: ['client-persons', clientId], queryFn: () => api.get<Person[]>(`/clients/${clientId}/persons`), enabled: mode === 'person' && !!clientId });
-  useEffect(() => setPersonId(''), [clientId]);
+  // 依頼者を選び直したら窓口も選び直す（はじめに入れた値は残す）
+  const firstClient = useRef(true);
+  useEffect(() => {
+    if (firstClient.current) {
+      firstClient.current = false;
+      return;
+    }
+    setPersonId('');
+  }, [clientId]);
   const link = useMutation({
     mutationFn: () =>
       api.post<{ person: Person | null }>(`/conversations/${conversationId}/link`, {
@@ -94,7 +105,12 @@ export function ConversationLinkForm({
         {extra}
       </div>
       {mode === 'contact' ? (
-        <ContactLinkForm conversationId={conversationId} defaultName={group ? '' : defaultName} onDone={() => onDone('関係者として紐付けました')} />
+        <ContactLinkForm
+          conversationId={conversationId}
+          defaultName={group ? '' : defaultName}
+          initial={current ? { clientId: current.clientId, caseId: current.contactId ? current.caseId : null, contactId: current.contactId } : null}
+          onDone={() => onDone('関係者として紐付けました')}
+        />
       ) : (
         <div className="flex flex-wrap items-center gap-2">
           <ClientPicker value={clientId} onChange={setClientId} suggestions={suggestions} emptyLabel={mode === 'person' ? 'どの依頼者のご家族・窓口か…' : '依頼者を選択…'} />

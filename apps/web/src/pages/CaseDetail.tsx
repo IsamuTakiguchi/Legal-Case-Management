@@ -138,12 +138,12 @@ export default function CaseDetail() {
   // 中身（タスク名・メモ）を直している未了タスク
   const [editingTask, setEditingTask] = useState<number | null>(null);
   const d = useQuery({ queryKey: ['case', id], queryFn: () => api.get<CaseData>(`/cases/${id}`) });
-  // ダッシュボードの「最近の動き」から #note-ID で開かれたら、その記録まで運ぶ
+  // ダッシュボードの「最近の動き」から #note-ID で開かれたら、その記録まで運ぶ。会話の画面から #contacts で来たら関係者の欄へ
   const loaded = !!d.data;
   useEffect(() => {
     const hash = location.hash;
-    if (!loaded || !/^#note-\d+$/.test(hash)) return;
-    const t = setTimeout(() => document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80);
+    if (!loaded || !/^#(note-\d+|contacts)$/.test(hash)) return;
+    const t = setTimeout(() => document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: 'smooth', block: hash === '#contacts' ? 'start' : 'center' }), 80);
     return () => clearTimeout(t);
   }, [loaded]);
   // 期日の記録を保存した直後（または記録の「依頼者に期日連絡」）に開く連絡パネル
@@ -1183,7 +1183,7 @@ function ContactsSection({ caseId, traffic }: { caseId: number; traffic: boolean
     setForm({ role: x.role, name: x.name, organization: x.organization ?? '', department: x.department ?? '', emails: x.emails.join(', '), phone: x.phone ?? '', fax: x.fax ?? '', note: x.note ?? '' });
   };
   return (
-    <section className="card text-sm">
+    <section id="contacts" className="card scroll-mt-4 text-sm">
       <div className="mb-2 flex items-center gap-2">
         <h2 className="font-semibold">{traffic ? '関係者（保険会社・相手方など）' : '関係者（相手方・代理人など）'}</h2>
         <button className="btn btn-sm ml-auto" onClick={() => setPasting((v) => !v)} title="メモ（事故日・担当者・電話・FAX）を貼り付けてまとめて登録">

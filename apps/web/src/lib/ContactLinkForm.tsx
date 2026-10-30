@@ -1,14 +1,27 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { api } from './api';
 import { ClientPicker } from './ClientPicker';
 import { CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL } from '@lcm/shared';
 
-/** 未紐付けの会話を、事件の関係者（相手方・相手方代理人など）として紐付ける */
-export function ContactLinkForm({ conversationId, defaultName, onDone }: { conversationId: number; defaultName: string; onDone: () => void }) {
-  const [clientId, setClientId] = useState('');
-  const [caseId, setCaseId] = useState('');
-  const [contactId, setContactId] = useState('');
+/**
+ * 会話を、事件の関係者（相手方・相手方代理人など）として紐付ける。
+ * initial を渡すと、いまの紐付け（依頼者・事件・関係者）を選んだ状態から始める（紐付けの変更）
+ */
+export function ContactLinkForm({
+  conversationId,
+  defaultName,
+  initial,
+  onDone,
+}: {
+  conversationId: number;
+  defaultName: string;
+  initial?: { clientId: number | null; caseId: number | null; contactId: number | null } | null;
+  onDone: () => void;
+}) {
+  const [clientId, setClientId] = useState(initial?.clientId ? String(initial.clientId) : '');
+  const [caseId, setCaseId] = useState(initial?.caseId ? String(initial.caseId) : '');
+  const [contactId, setContactId] = useState(initial?.contactId ? String(initial.contactId) : '');
   const [role, setRole] = useState<string>('opponent_counsel');
   const [name, setName] = useState(defaultName);
   const [organization, setOrganization] = useState('');
@@ -21,7 +34,13 @@ export function ContactLinkForm({ conversationId, defaultName, onDone }: { conve
   }, [conv.data]);
   const cases = useQuery({ queryKey: ['cases', 'client', clientId], queryFn: () => api.get<{ id: number; title: string; status: string }[]>(`/cases?clientId=${clientId}`), enabled: !!clientId });
   const contacts = useQuery({ queryKey: ['contacts', caseId], queryFn: () => api.get<{ id: number; name: string; role: string; organization: string | null }[]>(`/cases/${caseId}/contacts`), enabled: !!caseId });
+  // 依頼者を選び直したら、事件・関係者も選び直す（はじめに入れた値は残す）
+  const firstClient = useRef(true);
   useEffect(() => {
+    if (firstClient.current) {
+      firstClient.current = false;
+      return;
+    }
     setCaseId('');
     setContactId('');
   }, [clientId]);
@@ -93,13 +112,15 @@ export function ContactLinkForm({ conversationId, defaultName, onDone }: { conve
               </div>
             </>
           )}
-          <button className="btn btn-primary btn-sm" disabled={!ready || submit.isPending} onClick={() => submit.mutate()}>
-            関係者として紐付ける
+          <button className="btn btn-primary btn-sm" disabled={!ready || submit.isPending || (!!initial?.contactId && String(initial.contactId) === contactId)} onClick={() => submit.mutate()}>
+            {initial?.contactId && String(initial.contactId) === contactId ? 'いまの関係者のまま' : '関係者として紐付ける'}
           </button>
         </div>
       )}
       {err && <div className="fade-in text-red-600">{err}</div>}
-      <div className="text-xs text-slate-500">この会話の相手のメールアドレス・LINE は関係者側に登録され、依頼者の連絡先は変わりません。以後この相手からの連絡は自動でこの事件に紐付きます。</div>
+      <div className="text-xs text-slate-500">
+        この会話の相手のメールアドレス・LINE は関係者側に登録されます（前に別の相手に紐付いていたら、その相手からは外します）。以後この相手からの連絡は自動でこの事件に紐付きます。
+      </div>
     </div>
   );
 }

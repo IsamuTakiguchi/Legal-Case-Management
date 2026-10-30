@@ -1,5 +1,6 @@
 import { eq, and, inArray, isNull } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
+import { detachConversationIdentity } from './relink.js';
 import type { IdentityHint } from '../channels/types.js';
 import { CASE_CONTACT_ROLE_LABEL, type CaseContactInput, type CaseContactRole } from '@lcm/shared';
 
@@ -100,7 +101,9 @@ export function linkConversationToContact(conversationId: number, contactId: num
   if (!contact) throw new Error('関係者が見つかりません');
   const kase = d.select().from(schema.cases).where(eq(schema.cases.id, contact.caseId)).get();
   if (!kase) throw new Error('事件が見つかりません');
-  d.update(schema.conversations).set({ contactId: contact.id, caseId: kase.id, clientId: kase.clientId }).where(eq(schema.conversations.id, conversationId)).run();
+  // 別の相手から付け替えるなら、前の相手からこの会話のアドレスを外す（次の連絡が前の相手に紐付かないように）
+  detachConversationIdentity(conv, { contactId: contact.id });
+  d.update(schema.conversations).set({ contactId: contact.id, caseId: kase.id, clientId: kase.clientId, clientPersonId: null }).where(eq(schema.conversations.id, conversationId)).run();
   const patch: Partial<typeof schema.caseContacts.$inferInsert> = {};
   if (conv.channel === 'gmail' && conv.counterpartAddress) {
     const e = conv.counterpartAddress.toLowerCase();
