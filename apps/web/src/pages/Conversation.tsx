@@ -21,7 +21,7 @@ import { dateOnlyDeadline, SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply,
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 import { AttachmentImage, canPreviewImage } from '../lib/AttachmentImage';
 import { WindowConfirm, isHoldWindow } from '../lib/HoldForm';
-import { useLocalUploads, LocalFileButton, LocalFileBadges, fileDropProps } from '../lib/LocalFileAttach';
+import { useLocalUploads, LocalFileButton, LocalFileBadges, FileDropZone } from '../lib/LocalFileAttach';
 import { CcField, EMPTY_CC, ccPayload, type CcValue } from '../lib/CcField';
 
 /** Chatwork の取込理由の表示名（設定画面の診断と同じ） */
@@ -713,7 +713,7 @@ export default function Conversation() {
 
         {c.scheduled.length > 0 && <ScheduledList items={c.scheduled} onChanged={invalidate} />}
 
-        <div className="card space-y-3">
+        <FileDropZone uploads={uploads} className="card space-y-3">
           {/* 送り先を、書く前に分かるように出す（こちらから新しく送るときに特に） */}
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-600">
             <span className="font-medium text-slate-700">宛先:</span>
@@ -779,7 +779,7 @@ export default function Conversation() {
               この相手は LINE公式アカウントをブロック（または友だち解除・退会）しています。LINE で送っても届きません。Gmail や電話など別の方法で連絡してください。
             </div>
           )}
-          <textarea className="input min-h-40 font-mono text-sm" value={text} onChange={(e) => setText(e.target.value)} placeholder="返信本文（AI 下書きを編集して送信。ファイルをここにドラッグ＆ドロップすると添付できます）" {...fileDropProps(uploads)} />
+          <textarea className="input min-h-40 font-mono text-sm" value={text} onChange={(e) => setText(e.target.value)} placeholder="返信本文（AI 下書きを編集して送信。ファイルはこの欄のどこにドラッグ＆ドロップしても添付できます）" />
           <DraftHint handle={textDraft} />
           {(selectedAtt.length > 0 || driveFiles.length > 0) && (
             <div className="flex flex-wrap gap-1 text-xs">
@@ -953,7 +953,7 @@ export default function Conversation() {
           {showExtract && (
             <ExtractSchedulePanel conversationId={c.id} cases={c.cases} onText={(t) => setText((prev) => (prev ? `${prev}\n\n${t}` : t))} onDone={invalidate} />
           )}
-        </div>
+        </FileDropZone>
       </div>
 
       <aside className="space-y-4">

@@ -25,7 +25,7 @@ import { CopyButton } from '../lib/copy';
 import { CaseContactSummary, type SummaryClient } from '../lib/CaseContactSummary';
 import type { ClientPerson } from '../lib/ClientPersons';
 import { ClientContactSetup, unreachableClientId } from '../lib/ClientContactSetup';
-import { useLocalUploads, LocalFileButton, LocalFileBadges, fileDropProps } from '../lib/LocalFileAttach';
+import { useLocalUploads, LocalFileButton, LocalFileBadges, FileDropZone } from '../lib/LocalFileAttach';
 import { CcField, EMPTY_CC, ccPayload, type CcValue } from '../lib/CcField';
 import { ContactSuggestions } from '../lib/ContactSuggestions';
 
@@ -1479,7 +1479,7 @@ function NoteNoticePanel({ noteId, kind, onClose, onSent }: { noteId: number; ki
     onError: (e) => setMsg((e as Error).message),
   });
   return (
-    <section className="card space-y-2 border-blue-200 bg-blue-50/40">
+    <FileDropZone uploads={uploads} disabled={!n} className="card space-y-2 border-blue-200 bg-blue-50/40">
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="font-semibold">{isMeeting ? '依頼者に打合せの連絡' : '依頼者に期日連絡'}</h2>
         {n && (
@@ -1566,12 +1566,12 @@ function NoteNoticePanel({ noteId, kind, onClose, onSent }: { noteId: number; ki
             </div>
           )}
           {n.channel === 'gmail' && <CcField source={{ conversationId: n.conversationId }} value={ccv} onChange={setCcv} disabled={send.isPending || prep.isFetching} />}
-          <textarea className="input min-h-44 text-sm" value={text} onChange={(e) => setText(e.target.value)} disabled={prep.isFetching} {...fileDropProps(uploads)} />
+          <textarea className="input min-h-44 text-sm" value={text} onChange={(e) => setText(e.target.value)} disabled={prep.isFetching} />
           <DraftHint handle={noticeDraft} />
           <div className="text-sm">
             <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
               <span>
-                添付するファイル
+                添付するファイル（パソコンのファイルは、この欄にドラッグ＆ドロップしても添付できます）
                 {n.channel === 'line' && '（LINE にはファイルを直接送れないため、共有リンクまたは手動送付になります）'}
               </span>
               <button type="button" className="btn btn-sm ml-auto" onClick={() => setBrowse(!browse)}>
@@ -1628,7 +1628,7 @@ function NoteNoticePanel({ noteId, kind, onClose, onSent }: { noteId: number; ki
           </div>
         </>
       )}
-    </section>
+    </FileDropZone>
   );
 }
 

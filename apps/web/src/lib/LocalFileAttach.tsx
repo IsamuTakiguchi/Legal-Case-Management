@@ -1,4 +1,4 @@
-import { useRef, useState, type DragEvent } from 'react';
+import { useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { api } from './api';
 import { fmtBytes } from './format';
 
@@ -63,7 +63,7 @@ export function LocalFileButton({ uploads, disabled }: { uploads: LocalUploads; 
   const input = useRef<HTMLInputElement>(null);
   return (
     <>
-      <button type="button" className="btn btn-sm" onClick={() => input.current?.click()} disabled={disabled || uploads.uploading.length > 0} title="パソコンにあるファイルを選んで添付します（入力欄にドラッグ＆ドロップでも添付できます）">
+      <button type="button" className="btn btn-sm" onClick={() => input.current?.click()} disabled={disabled || uploads.uploading.length > 0} title="パソコンにあるファイルを選んで添付します（この欄にファイルをドラッグ＆ドロップしても添付できます）">
         {uploads.uploading.length > 0 ? '📎 読み込み中…' : '📎 パソコンのファイルを添付'}
       </button>
       <input
@@ -107,16 +107,79 @@ export function LocalFileBadges({ uploads, className = '' }: { uploads: LocalUpl
   );
 }
 
-/** 入力欄などにファイルをドラッグ＆ドロップしたら添付する */
-export function fileDropProps(uploads: LocalUploads) {
-  return {
-    onDragOver: (e: DragEvent) => {
-      if (e.dataTransfer.types.includes('Files')) e.preventDefault();
-    },
-    onDrop: (e: DragEvent) => {
-      if (!e.dataTransfer.files.length) return;
-      e.preventDefault();
-      void uploads.add(e.dataTransfer.files);
-    },
+/** ドラッグしているのがファイルか（文字や画面内の要素のドラッグは対象にしない） */
+export function isFileDrag(e: { dataTransfer: DataTransfer | null }): boolean {
+  return !!e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files');
+}
+
+/**
+ * ファイルをドラッグ＆ドロップして添付できる範囲。
+ * 送信欄全体をこれで包むと、欄のどこに落としても添付になる。ドラッグ中は「ここにドロップ」と表示する
+ */
+export function FileDropZone({ uploads, children, className = '', disabled }: { uploads: LocalUploads; children: ReactNode; className?: string; disabled?: boolean }) {
+  // 子要素の上を通るたびに enter / leave が来るので、数えて出入りを判定する
+  const depth = useRef(0);
+  const [over, setOver] = useState(false);
+  const reset = () => {
+    depth.current = 0;
+    setOver(false);
+  };
+  return (
+    <div
+      className={`relative ${className}`}
+      onDragEnter={(e) => {
+        if (disabled || !isFileDrag(e)) return;
+        e.preventDefault();
+        depth.current += 1;
+        setOver(true);
+      }}
+      onDragOver={(e) => {
+        if (disabled || !isFileDrag(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+      }}
+      onDragLeave={(e) => {
+        if (disabled || !isFileDrag(e)) return;
+        depth.current = Math.max(0, depth.current - 1);
+        if (depth.current === 0) setOver(false);
+      }}
+      onDrop={(e) => {
+        if (disabled || !e.dataTransfer.files.length) return;
+        e.preventDefault();
+        reset();
+        void uploads.add(e.dataTransfer.files);
+      }}
+    >
+      {children}
+      {over && (
+        // 親の space-y-* の余白で枠がずれないよう、余白は 0 に固定する
+        <div style={{ margin: 0 }} className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[inherit] border-2 border-dashed border-blue-400 bg-blue-50/80 text-sm font-semibold text-blue-700">
+          ここにドロップすると添付します
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 添付できる欄の外にファイルを落としたとき、ブラウザがそのファイルを開いて画面（書きかけの文）が消えないようにする。
+ * アプリ全体で一度だけ登録する。ファイル選択の欄（input type=file）へのドロップはそのまま通す
+ */
+export function preventStrayFileDrops(): () => void {
+  const isFileInput = (t: EventTarget | null) => t instanceof HTMLInputElement && t.type === 'file';
+  const onDragOver = (e: globalThis.DragEvent) => {
+    if (!isFileDrag(e) || e.defaultPrevented || isFileInput(e.target)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'none';
+  };
+  const onDrop = (e: globalThis.DragEvent) => {
+    if (!isFileDrag(e) || e.defaultPrevented || isFileInput(e.target)) return;
+    e.preventDefault();
+  };
+  window.addEventListener('dragover', onDragOver);
+  window.addEventListener('drop', onDrop);
+  return () => {
+    window.removeEventListener('dragover', onDragOver);
+    window.removeEventListener('drop', onDrop);
   };
 }
