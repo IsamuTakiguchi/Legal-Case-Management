@@ -116,6 +116,8 @@ function encodeRfc2047(s: string): string {
 export function buildMime(opts: {
   from: string;
   to: string;
+  cc?: string[];
+  bcc?: string[];
   subject: string;
   text: string;
   inReplyTo?: string | null;
@@ -125,6 +127,9 @@ export function buildMime(opts: {
   const lines: string[] = [];
   lines.push(`From: ${opts.from}`);
   lines.push(`To: ${opts.to}`);
+  if (opts.cc?.length) lines.push(`Cc: ${opts.cc.join(', ')}`);
+  // Bcc は Gmail が送るときに取り除く（相手には見えない。送信済みの控えにだけ残る）
+  if (opts.bcc?.length) lines.push(`Bcc: ${opts.bcc.join(', ')}`);
   lines.push(`Subject: ${encodeRfc2047(opts.subject)}`);
   lines.push('MIME-Version: 1.0');
   if (opts.inReplyTo) lines.push(`In-Reply-To: ${opts.inReplyTo}`);
@@ -180,6 +185,8 @@ export const gmailAdapter: ChannelAdapter = {
     const raw = buildMime({
       from,
       to: opts.to,
+      cc: opts.cc,
+      bcc: opts.bcc,
       subject,
       text,
       inReplyTo: reply.messageId ?? null,

@@ -43,6 +43,10 @@ export async function sendToConversation(conversationId: number, input: Omit<Sen
   const adapter = adapterFor(channel);
   if (!adapter.isConfigured()) throw new Error(`${channel} が未設定です`);
   const client = conv.clientId ? d.select().from(schema.clients).where(eq(schema.clients.id, conv.clientId)).get() : null;
+  // CC・BCC は Gmail だけ。宛先（To）と同じアドレスや重複は除く
+  const cc = cleanAddresses(input.cc, [conv.counterpartAddress]);
+  const bcc = cleanAddresses(input.bcc, [conv.counterpartAddress, ...cc]);
+  if ((cc.length || bcc.length) && channel !== 'gmail') throw new Error('CC・BCC を付けられるのは Gmail だけです（LINE・Chatwork には CC の仕組みがありません）');
 
   // ファイルの収集（保存先にあるファイルは、共有リンクにするときその場所を使う）
   const files: { file: OutboundFile; stored: StoredRef | null }[] = [];
@@ -122,6 +126,8 @@ export async function sendToConversation(conversationId: number, input: Omit<Sen
     files: direct,
     fileLinks: links,
     inReplyTo: reply,
+    ...(cc.length ? { cc } : {}),
+    ...(bcc.length ? { bcc } : {}),
   });
   if (channel === 'line') recordLinePush(1);
   // 仮の ID（new:…）で作った Gmail の会話は、初回送信で決まった実際のスレッド ID に置き換える
@@ -144,6 +150,9 @@ export async function sendToConversation(conversationId: number, input: Omit<Sen
         replyToMessageId: replyTarget?.id ?? null,
         quoteMessageId: quoteTarget?.id ?? null,
         providerRequestId: result.requestId ?? null,
+        // CC・BCC（会話の画面に出し、次に同じ相手へ送るときの既定にする）
+        ...(cc.length ? { cc } : {}),
+        ...(bcc.length ? { bcc } : {}),
         // 何を添付したか（会話の画面に出す）。リンクで送った・手動送付にしたものも含める
         ...(files.length ? { sentFiles: files.map((f) => f.file.filename) } : {}),
       },
@@ -190,6 +199,22 @@ export async function sendToConversation(conversationId: number, input: Omit<Sen
   }
   logger.info({ conversationId, channel, files: direct.length, links: links.length, requestId: result.requestId ?? null }, '送信しました');
   return { messageId: message.id, note: result.note, links, manualFiles };
+}
+
+/** CC・BCC のアドレスを整える（空白・重複・除外するアドレスを除く。大文字小文字は区別しない） */
+function cleanAddresses(list: string[] | undefined, exclude: (string | null | undefined)[]): string[] {
+  const seen = new Set(exclude.filter(Boolean).map((x) => x!.trim().toLowerCase()));
+  const out: string[] = [];
+  for (const raw of list ?? []) {
+    const a = raw.trim();
+    if (!a) continue;
+    // メールのヘッダーに入れるので、改行や区切り文字の入ったものは受け付けない
+    if (/[\r\n,;<>]/.test(a) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a)) throw new Error(`CC・BCC のメールアドレスが正しくありません: ${a}`);
+    if (seen.has(a.toLowerCase())) continue;
+    seen.add(a.toLowerCase());
+    out.push(a);
+  }
+  return out;
 }
 
 type StoredRef = { itemId?: string | null; path: string };
