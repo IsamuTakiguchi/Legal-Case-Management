@@ -4,6 +4,7 @@ import { MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import { pruneDrafts } from './lib/draft';
+import { preventStrayFileDrops } from './lib/LocalFileAttach';
 import './index.css';
 
 // PWA: 本番ビルドでのみサービスワーカーを登録（ホーム画面追加・インストールに必要）
@@ -12,6 +13,9 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => undefined);
   });
 }
+
+// 添付できる欄の外にファイルを落としても、ブラウザがファイルを開いて書きかけが消えないようにする
+preventStrayFileDrops();
 
 // 期限切れの入力途中の下書きを片付ける
 pruneDrafts();
