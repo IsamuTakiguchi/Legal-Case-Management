@@ -22,6 +22,7 @@ import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 import { AttachmentImage, canPreviewImage } from '../lib/AttachmentImage';
 import { WindowConfirm, isHoldWindow } from '../lib/HoldForm';
 import { useLocalUploads, LocalFileButton, LocalFileBadges, fileDropProps } from '../lib/LocalFileAttach';
+import { CcField, EMPTY_CC, ccPayload, type CcValue } from '../lib/CcField';
 
 /** Chatwork の取込理由の表示名（設定画面の診断と同じ） */
 const SCOPE_REASON_LABEL: Record<string, string> = {
@@ -66,6 +67,9 @@ interface Message {
   manual?: boolean;
   /** 自分の送信に添付したファイルの名前 */
   sentFiles?: string[];
+  /** メールの CC・BCC */
+  cc?: string[];
+  bcc?: string[];
 }
 interface Conv {
   id: number;
@@ -245,6 +249,8 @@ export default function Conversation() {
     onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
   });
 
+  // Gmail のときの CC・BCC（この宛先に前回送ったときの CC がはじめから入る）
+  const [ccv, setCcv] = useState<CcValue>(EMPTY_CC);
   const send = useMutation({
     mutationFn: (scheduledAt?: string) =>
       api.post<{ note?: string; links: { name: string }[]; manualFiles: string[]; scheduled?: Scheduled }>(`/conversations/${id}/send`, {
@@ -258,6 +264,7 @@ export default function Conversation() {
         replyToMessageId: replyTo?.id ?? null,
         quoteMessageId: quoteOf?.id ?? null,
         scheduledAt: scheduledAt ?? null,
+        ...(conv.data?.channel === 'gmail' ? ccPayload(ccv) : {}),
       }),
     onSuccess: (r) => {
       setText('');
@@ -638,6 +645,12 @@ export default function Conversation() {
                 )}
                 {c.cases.length >= 2 && !c.contact && <CaseTag m={m} cases={c.cases} out={m.direction === 'out'} onChanged={invalidate} />}
                 {c.channel === 'chatwork' && m.direction === 'in' && <MessageTools m={m} onChanged={invalidate} />}
+                {((m.cc?.length ?? 0) > 0 || (m.bcc?.length ?? 0) > 0) && (
+                  <div className={`mt-1 text-xs ${m.direction === 'out' ? 'text-blue-100' : 'text-slate-500'}`}>
+                    {(m.cc?.length ?? 0) > 0 && <div>CC: {m.cc!.join(', ')}</div>}
+                    {(m.bcc?.length ?? 0) > 0 && <div>BCC: {m.bcc!.join(', ')}</div>}
+                  </div>
+                )}
                 {m.direction === 'out' && (m.sentFiles?.length ?? 0) > 0 && (
                   <ul className="mt-1 space-y-0.5">
                     {m.sentFiles!.map((name, i) => (
@@ -711,6 +724,7 @@ export default function Conversation() {
             {c.channel === 'gmail' && c.counterpartAddress && <span className="text-slate-500">{c.counterpartAddress}</span>}
             {c.channel === 'gmail' && <span className="text-slate-500">件名: {c.subject || '（なし）'}</span>}
           </div>
+          {c.channel === 'gmail' && <CcField source={{ conversationId: c.id }} value={ccv} onChange={setCcv} disabled={send.isPending} />}
           {(replyTo || quoteOf) && (
             <div className="fade-in space-y-1 text-xs">
               {replyTo && (

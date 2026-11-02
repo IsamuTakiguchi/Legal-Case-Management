@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { InstructionBox } from './InstructionBox';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
+import { CcField, EMPTY_CC, ccPayload, type CcValue } from './CcField';
 import { api } from './api';
 import { useDraft, DraftHint } from './draft';
 import { ClientPicker } from './ClientPicker';
@@ -74,6 +75,8 @@ export function ClientConfirmPanel({
   const [sel, setSel] = useState('');
   const keyOf = (c: { channel: string; personId?: number | null }) => `${c.channel}:${c.personId ?? ''}`;
   const [subject, setSubject] = useState('');
+  // Gmail のときの CC・BCC
+  const [ccv, setCcv] = useState<CcValue>(EMPTY_CC);
   const [text, setText] = useState('');
   const [instruction, setInstruction] = useState('');
   const [waiting, setWaiting] = useState(waitingTaskDefault);
@@ -149,6 +152,7 @@ export function ClientConfirmPanel({
         notifyStaff,
         staffReplyText: notifyStaff ? staffText : null,
         scheduledAt: scheduledIso,
+        ...(channel === 'gmail' ? ccPayload(ccv) : {}),
       }),
     onSuccess: (r) => {
       textDraft.clear();
@@ -261,6 +265,7 @@ export function ClientConfirmPanel({
                   </label>
                 ))}
               </div>
+              {channel === 'gmail' && ch && d.clientId && <CcField source={{ clientId: d.clientId, to: ch.to }} value={ccv} onChange={setCcv} disabled={send.isPending} />}
               {newGmail && (
                 <label className="block">
                   <span className="label">件名</span>

@@ -26,6 +26,7 @@ import { CaseContactSummary, type SummaryClient } from '../lib/CaseContactSummar
 import type { ClientPerson } from '../lib/ClientPersons';
 import { ClientContactSetup, unreachableClientId } from '../lib/ClientContactSetup';
 import { useLocalUploads, LocalFileButton, LocalFileBadges, fileDropProps } from '../lib/LocalFileAttach';
+import { CcField, EMPTY_CC, ccPayload, type CcValue } from '../lib/CcField';
 import { ContactSuggestions } from '../lib/ContactSuggestions';
 
 interface Note {
@@ -1423,6 +1424,8 @@ function NoteNoticePanel({ noteId, kind, onClose, onSent }: { noteId: number; ki
   const [target, setTarget] = useState<{ channel: string; personId: number | null } | undefined>(undefined);
   // 打合せ: 案内する次回の打合せ（未選択ならいちばん近いもの。null は「案内を入れない」）
   const [eventId, setEventId] = useState<number | null | undefined>(undefined);
+  // Gmail のときの CC・BCC（この宛先に前回送ったときの CC がはじめから入る）
+  const [ccv, setCcv] = useState<CcValue>(EMPTY_CC);
   const [text, setText] = useState('');
   // 添付に選んだファイル（候補からでも、フォルダから探した分でも同じ入れ物に入れる）
   const [picked, setPicked] = useState<Map<string, DriveDoc>>(new Map());
@@ -1465,6 +1468,7 @@ function NoteNoticePanel({ noteId, kind, onClose, onSent }: { noteId: number; ki
         uploadIds: uploads.ids,
         draftId: n!.draftId,
         createWaitingTask: false,
+        ...(n!.channel === 'gmail' ? ccPayload(ccv) : {}),
       }),
     onSuccess: (r) => {
       noticeDraft.clear();
@@ -1561,6 +1565,7 @@ function NoteNoticePanel({ noteId, kind, onClose, onSent }: { noteId: number; ki
               )}
             </div>
           )}
+          {n.channel === 'gmail' && <CcField source={{ conversationId: n.conversationId }} value={ccv} onChange={setCcv} disabled={send.isPending || prep.isFetching} />}
           <textarea className="input min-h-44 text-sm" value={text} onChange={(e) => setText(e.target.value)} disabled={prep.isFetching} {...fileDropProps(uploads)} />
           <DraftHint handle={noticeDraft} />
           <div className="text-sm">

@@ -271,6 +271,9 @@ export interface ClientConfirmSendInput {
   staffReplyText?: string | null;
   /** 指定すると今は送らず、この時刻（ISO 8601）に送る（送信予約） */
   scheduledAt?: string | null;
+  /** CC・BCC（Gmail だけ） */
+  cc?: string[];
+  bcc?: string[];
 }
 
 /** 依頼者に確認を送る。続けて回答待ちタスクと、事務局への返事 */
@@ -290,7 +293,7 @@ export async function sendClientConfirm(messageId: number, input: ClientConfirmS
     d.update(schema.conversations).set({ subject }).where(eq(schema.conversations.id, conv.id)).run();
   }
   // 送信予約なら今は送らず、予約だけ入れる（時刻が来たら毎分のジョブが送る。受信箱の「送信予約」から取消・変更できる）
-  const payload = { text: input.text, attachmentIds: [], driveFiles: [], createWaitingTask: false };
+  const payload = { text: input.text, attachmentIds: [], driveFiles: [], createWaitingTask: false, ...(input.cc?.length ? { cc: input.cc } : {}), ...(input.bcc?.length ? { bcc: input.bcc } : {}) };
   const scheduled = input.scheduledAt ? scheduleMessage(conv.id, payload, input.scheduledAt) : null;
   const r = scheduled ? null : await sendToConversation(conv.id, payload);
   if (r && ctx.caseId) d.update(schema.messages).set({ caseId: ctx.caseId, clientId: client.id }).where(eq(schema.messages.id, r.messageId)).run();

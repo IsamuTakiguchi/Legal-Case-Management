@@ -1,3 +1,4 @@
+import { parseAddressList } from './ccSuggest.js';
 import { and, eq, desc, gt, sql, inArray, isNull, isNotNull } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import type { InboundMessage } from '../channels/types.js';
@@ -507,6 +508,9 @@ export function getConversation(id: number) {
       manual: !!(m.raw as { manual?: boolean } | null)?.manual,
       // 自分の送信に添付したファイルの名前
       sentFiles: (m.raw as { sentFiles?: string[] } | null)?.sentFiles ?? [],
+      // メールの CC・BCC（BCC は自分が送ったものだけ分かる）
+      cc: conv.channel === 'gmail' ? parseAddressList((m.raw as { cc?: unknown } | null)?.cc) : [],
+      bcc: conv.channel === 'gmail' && m.direction === 'out' ? parseAddressList((m.raw as { bcc?: unknown } | null)?.bcc) : [],
       attachments: atts.filter((a) => a.messageId === m.id),
       clientName: m.clientId ? (msgClients.find((c) => c.id === m.clientId)?.name ?? null) : null,
       caseTitle: m.caseId ? (msgCases.find((c) => c.id === m.caseId)?.title ?? null) : null,

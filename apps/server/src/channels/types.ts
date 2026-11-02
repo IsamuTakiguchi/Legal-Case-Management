@@ -65,5 +65,8 @@ export interface ChannelAdapter {
     files?: OutboundFile[];
     fileLinks?: { name: string; url: string }[];
     inReplyTo?: Record<string, unknown> | null;
+    /** CC・BCC（Gmail だけ） */
+    cc?: string[];
+    bcc?: string[];
   }): Promise<SendResult>;
 }

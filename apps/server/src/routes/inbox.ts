@@ -9,6 +9,7 @@ import { linkConversationToClient, suggestClients } from '../services/identity.j
 import { linkConversationToContact, unlinkConversation, createContact, getContact } from '../services/contacts.js';
 import { assignConversationAttachments } from '../services/attachments.js';
 import { sendToConversation } from '../services/send.js';
+import { ccSuggestions } from '../services/ccSuggest.js';
 import { relayContext, draftRelay, sendRelay } from '../services/relay.js';
 import { saveOutboundUpload, removeOutboundUploads } from '../services/outboundUploads.js';
 import { staffAskContext, draftStaffAsk, sendStaffAsk, type StaffAskSource } from '../services/staffAsk.js';
@@ -347,6 +348,9 @@ inboxRoutes.post('/messages/:messageId/client-confirm', async (c) => {
       // 送信予約（今は送らず、この時刻に送る）
       scheduledAt: z.string().datetime({ offset: true }).nullable().optional(),
       staffReplyText: z.string().max(2000).nullable().optional(),
+      // CC・BCC（Gmail だけ）
+      cc: z.array(z.string().trim().email()).max(20).optional(),
+      bcc: z.array(z.string().trim().email()).max(20).optional(),
     })
     .parse(await c.req.json());
   return c.json(await sendClientConfirm(Number(c.req.param('messageId')), body));
@@ -383,6 +387,17 @@ inboxRoutes.delete('/outbound-uploads/:id', (c) => {
   removeOutboundUploads([c.req.param('id')]);
   return c.json({ ok: true });
 });
+
+/** Gmail で送るときの CC の既定（前回の CC）と候補（依頼者のほかのアドレス・担当者・これまでの CC） */
+inboxRoutes.get('/conversations/:id/cc-suggestions', (c) => {
+  const conv = db().select().from(schema.conversations).where(eq(schema.conversations.id, Number(c.req.param('id')))).get();
+  if (!conv) return c.json({ error: 'not found' }, 404);
+  if (conv.channel !== 'gmail') return c.json({ defaults: [], candidates: [] });
+  return c.json(ccSuggestions({ clientId: conv.clientId, toAddress: conv.counterpartAddress, conversationId: conv.id }));
+});
+
+/** 会話をまだ決めていないとき（依頼者に確認など）の CC の既定と候補。to は送るメールアドレス */
+inboxRoutes.get('/clients/:id/cc-suggestions', (c) => c.json(ccSuggestions({ clientId: Number(c.req.param('id')), toAddress: c.req.query('to') ?? null })));
 
 /** 送信（scheduledAt があれば今は送らず予約する） */
 inboxRoutes.post('/conversations/:id/send', async (c) => {
