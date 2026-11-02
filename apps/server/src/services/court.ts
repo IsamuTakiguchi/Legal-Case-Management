@@ -55,7 +55,8 @@ export async function syncCalendar(): Promise<{ synced: number }> {
       startAt: e.startAt,
       endAt: e.endAt,
       location: e.location ?? null,
-      description: e.description ?? null,
+      // Google Meet の URL は説明欄に入らないので、依頼者への案内に使えるよう説明欄の先頭に残す
+      description: e.meetUrl && !(e.description ?? '').includes(e.meetUrl) ? [`Google Meet: ${e.meetUrl}`, e.description].filter(Boolean).join('\n') : (e.description ?? null),
       status: e.status ?? null,
       syncedAt: now.toISOString(),
     };

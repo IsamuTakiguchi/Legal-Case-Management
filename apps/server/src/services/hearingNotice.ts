@@ -148,7 +148,11 @@ export interface HearingNotice {
  * 期日の記録（案件ノート）から、依頼者への期日連絡の下書きを用意する。
  * 記録の要旨・決定事項・次のアクションと、カレンダー上の次回期日、直近の提出書面をもとに本人の文体で書く。
  */
-export async function prepareHearingNotice(noteId: number, opts: { channel?: Channel; personId?: number | null } = {}): Promise<HearingNotice> {
+/**
+ * 記録から依頼者へ連絡するときの宛先を決める（期日連絡・打合せの連絡で共通）。
+ * 宛先: 画面で選んだもの（チャネル＋担当者） → 希望チャネル → 先頭（主担当がいれば主担当）
+ */
+export function resolveNoteRecipient(noteId: number, opts: { channel?: Channel; personId?: number | null } = {}) {
   const d = db();
   const note = d.select().from(schema.caseNotes).where(eq(schema.caseNotes.id, noteId)).get();
   if (!note) throw new Error('記録が見つかりません');
@@ -159,15 +163,42 @@ export async function prepareHearingNotice(noteId: number, opts: { channel?: Cha
   const channels = availableChannels(client);
   if (channels.length === 0) throw new ClientUnreachableError(client.id, `${client.name}さんの連絡先（メールアドレス・LINE・Chatwork ルーム）が登録されていないか、そのチャネルがアプリに接続されていません`);
   const preferred = client.preferredChannel as Channel | null;
-  // 宛先: 画面で選んだもの（チャネル＋担当者） → 希望チャネル → 先頭（主担当がいれば主担当）
   const chosen =
     (opts.channel ? channels.find((c) => c.channel === opts.channel && (opts.personId === undefined || c.personId === (opts.personId ?? null))) : undefined) ??
     channels.find((c) => c.channel === preferred) ??
     channels[0]!;
-  const { channel, to } = chosen;
-  const conv = ensureClientConversation(client, channel, chosen.personId);
+  const conv = ensureClientConversation(client, chosen.channel, chosen.personId);
   // 担当者宛なら、宛名は担当者（姓）にする
   const addressee = chosen.personId ? (getClientPerson(chosen.personId)?.name ?? client.name) : client.name;
+  // 「様」の前に置く宛名。会社なら「CTF株式会社\n名児耶和峰　」（→「CTF株式会社\n名児耶和峰　様」）のように会社名と氏名にする（「CTF様」にしない）
+  const corporate = client.entityType === 'corporation' || looksLikeCorporation(client.name);
+  const who = chosen.personId ? addressee : representativeLabel(client);
+  // LINE・Chatwork は短く姓だけ
+  const surname = corporate && chosen.channel === 'gmail' ? `${client.name}\n${who ? `${who}　` : 'ご担当者'}` : familyName(chosen.personId ? addressee : (client.representativeName ?? addressee));
+  return { note, kase, client, channels, chosen, conv, addressee, surname };
+}
+
+/** 会話の直近のやり取り（下書きの文脈に渡す） */
+export function recentThread(conversationId: number) {
+  return db()
+    .select()
+    .from(schema.messages)
+    .where(eq(schema.messages.conversationId, conversationId))
+    .orderBy(desc(schema.messages.sentAt))
+    .limit(8)
+    .all()
+    .reverse()
+    .map((m) => ({ direction: m.direction as 'in' | 'out', body: m.body, sentAt: m.sentAt, senderName: m.senderName }));
+}
+
+/**
+ * 期日の記録（案件ノート）から、依頼者への期日連絡の下書きを用意する。
+ * 記録の要旨・決定事項・次のアクションと、カレンダー上の次回期日、直近の提出書面をもとに本人の文体で書く。
+ */
+export async function prepareHearingNotice(noteId: number, opts: { channel?: Channel; personId?: number | null } = {}): Promise<HearingNotice> {
+  const d = db();
+  const { note, kase, client, channels, chosen, conv, addressee, surname } = resolveNoteRecipient(noteId, opts);
+  const { channel, to } = chosen;
 
   // 次回期日: カレンダーの今後の期日 → 事件の次回期日
   const now = new Date().toISOString();
@@ -203,11 +234,6 @@ export async function prepareHearingNotice(noteId: number, opts: { channel?: Cha
   }
   const suggestedCount = docs.filter((d) => d.suggested).length;
 
-  // 「様」の前に置く宛名。会社なら「CTF株式会社\n名児耶和峰　」（→「CTF株式会社\n名児耶和峰　様」）のように会社名と氏名にする（「CTF様」にしない）
-  const corporate = client.entityType === 'corporation' || looksLikeCorporation(client.name);
-  const who = chosen.personId ? addressee : representativeLabel(client);
-  // LINE・Chatwork は短く姓だけ
-  const surname = corporate && channel === 'gmail' ? `${client.name}\n${who ? `${who}　` : 'ご担当者'}` : familyName(chosen.personId ? addressee : (client.representativeName ?? addressee));
   const template = listTemplates().find((t) => t.key === 'hearing_report');
   let text: string;
   let draftId: number | null = null;
@@ -222,7 +248,6 @@ export async function prepareHearingNotice(noteId: number, opts: { channel?: Cha
     .filter(Boolean)
     .join('\n');
   if (isConfigured('anthropic')) {
-    const thread = d.select().from(schema.messages).where(eq(schema.messages.conversationId, conv.id)).orderBy(desc(schema.messages.sentAt)).limit(8).all().reverse();
     text = await draftReply(
       { conversationId: conv.id, instruction, templateKey: template ? 'hearing_report' : null, extra: { 結果: resultText, 次回期日: nextHearingText } },
       {
@@ -230,7 +255,7 @@ export async function prepareHearingNotice(noteId: number, opts: { channel?: Cha
         clientName: client.name,
         counterpartName: chosen.personId ? addressee : conv.counterpartName,
         personName: chosen.personId ? addressee : null,
-        thread: thread.map((m) => ({ direction: m.direction as 'in' | 'out', body: m.body, sentAt: m.sentAt, senderName: m.senderName })),
+        thread: recentThread(conv.id),
         caseSummary: kase.summary ?? null,
         // 過去に送った期日連絡を手本にする（本人が直して送ったものほど優先）
         examples: { label: '期日連絡', texts: pastDraftExamples('hearing_notice', { channel, clientId: client.id }) },

@@ -142,8 +142,8 @@ export default function CaseDetail() {
     const t = setTimeout(() => document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80);
     return () => clearTimeout(t);
   }, [loaded]);
-  // 期日の記録を保存した直後（または記録の「依頼者に期日連絡」）に開く連絡パネル
-  const [noticeNoteId, setNoticeNoteId] = useState<number | null>(null);
+  // 期日の記録を保存した直後（または記録の「依頼者に期日連絡」「依頼者に連絡」）に開く連絡パネル。期日と打合せで中身が変わる
+  const [notice, setNotice] = useState<{ noteId: number; kind: NoticeKind } | null>(null);
   // 「予定」から選んだ、日程変更（リスケ）する予定
   const [rescheduling, setRescheduling] = useState<RescheduleTarget | null>(null);
   const holds = useCaseHolds(id ? Number(id) : null);
@@ -215,15 +215,17 @@ export default function CaseDetail() {
               caseId={c.id}
               onSaved={(note) => {
                 qc.invalidateQueries({ queryKey: ['case', id] });
-                if (note?.kind === 'court') setNoticeNoteId(note.id);
+                if (note?.kind === 'court') setNotice({ noteId: note.id, kind: 'court' });
               }}
             />
-            {noticeNoteId && (
-              <HearingNoticePanel
-                noteId={noticeNoteId}
-                onClose={() => setNoticeNoteId(null)}
+            {notice && (
+              <NoteNoticePanel
+                key={`${notice.kind}:${notice.noteId}`}
+                noteId={notice.noteId}
+                kind={notice.kind}
+                onClose={() => setNotice(null)}
                 onSent={() => {
-                  setNoticeNoteId(null);
+                  setNotice(null);
                   qc.invalidateQueries({ queryKey: ['case', id] });
                   qc.invalidateQueries({ queryKey: ['timeline', c.id] });
                 }}
@@ -243,7 +245,7 @@ export default function CaseDetail() {
                 {c.notes
                   .filter((n) => n.kind !== 'policy')
                   .map((n) => (
-                    <NoteView key={n.id} n={n} onDeleted={() => qc.invalidateQueries({ queryKey: ['case', id] })} onNotice={n.kind === 'court' ? () => setNoticeNoteId(n.id) : undefined} />
+                    <NoteView key={n.id} n={n} onDeleted={() => qc.invalidateQueries({ queryKey: ['case', id] })} onNotice={n.kind === 'court' || n.kind === 'meeting' ? () => setNotice({ noteId: n.id, kind: n.kind as NoticeKind }) : undefined} />
                   ))}
                 {c.notes.length === 0 && <li className="text-sm text-slate-500">記録はまだありません</li>}
               </ul>
@@ -1237,7 +1239,20 @@ function ContactForm({ form, setForm, onSave, onCancel, busy }: { form: typeof E
   );
 }
 
-interface HearingNotice {
+/** 依頼者への連絡を作れる記録の種類（期日 → 期日連絡、打合せ → 内容・確認事項・次回の打合せの連絡） */
+type NoticeKind = 'court' | 'meeting';
+/** 次回の打合せ（カレンダーの予定）と WEB 会議の案内 */
+interface NextMeeting {
+  eventId: number;
+  title: string;
+  startAt: string;
+  location: string | null;
+  url: string | null;
+  provider: string | null;
+  passcode: string | null;
+  text: string;
+}
+interface NoteNotice {
   noteId: number;
   clientId: number;
   caseId?: number;
@@ -1248,9 +1263,15 @@ interface HearingNotice {
   conversationId: number;
   draftId: number | null;
   text: string;
-  hearingAt: string;
-  nextHearingAt: string | null;
-  nextHearingText: string;
+  /** 期日連絡のとき */
+  hearingAt?: string;
+  nextHearingAt?: string | null;
+  nextHearingText?: string;
+  /** 打合せの連絡のとき */
+  meetingAt?: string;
+  nextMeeting?: NextMeeting | null;
+  meetings?: NextMeeting[];
+  confirmItems?: string[];
   docs: DriveDoc[];
   channels: { channel: string; to: string; personId?: number | null; recipient?: string }[];
   /** 法人の担当者宛なら、その担当者 */
@@ -1327,20 +1348,28 @@ function FolderBrowser({ clientId, caseId, isPicked, onToggle }: { clientId: num
 }
 
 /**
- * 期日の記録から依頼者への期日連絡を送る。
- * 記録の要旨・決定事項・次回期日・提出書面をもとに本人の文体で下書きし、確認して送信する
+ * 記録から依頼者へ連絡を送る。
+ * - 期日: 記録の要旨・決定事項・次回期日・提出書面をもとに期日連絡
+ * - 打合せ: 打合せの内容・確認していただきたいこと・次回の打合せ（日時・Zoom の URL・パスコード）
+ * どちらも本人の文体で下書きし、確認して送信する
  */
-function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClose: () => void; onSent: () => void }) {
+function NoteNoticePanel({ noteId, kind, onClose, onSent }: { noteId: number; kind: NoticeKind; onClose: () => void; onSent: () => void }) {
+  const isMeeting = kind === 'meeting';
   // 宛先（チャネル＋担当者）。未選択ならサーバーの既定（主担当 → 希望チャネル）
   const [target, setTarget] = useState<{ channel: string; personId: number | null } | undefined>(undefined);
+  // 打合せ: 案内する次回の打合せ（未選択ならいちばん近いもの。null は「案内を入れない」）
+  const [eventId, setEventId] = useState<number | null | undefined>(undefined);
   const [text, setText] = useState('');
   // 添付に選んだファイル（候補からでも、フォルダから探した分でも同じ入れ物に入れる）
   const [picked, setPicked] = useState<Map<string, DriveDoc>>(new Map());
   const [browse, setBrowse] = useState(false);
   const [msg, setMsg] = useState('');
   const prep = useQuery({
-    queryKey: ['hearing-notice', noteId, target?.channel ?? '', target?.personId ?? ''],
-    queryFn: () => api.post<HearingNotice>(`/case-notes/${noteId}/hearing-notice`, target ?? {}),
+    queryKey: [isMeeting ? 'meeting-notice' : 'hearing-notice', noteId, target?.channel ?? '', target?.personId ?? '', eventId ?? ''],
+    queryFn: () =>
+      isMeeting
+        ? api.post<NoteNotice>(`/case-notes/${noteId}/meeting-notice`, { ...(target ?? {}), ...(eventId !== undefined ? { eventId } : {}) })
+        : api.post<NoteNotice>(`/case-notes/${noteId}/hearing-notice`, target ?? {}),
     staleTime: Infinity,
     retry: false,
   });
@@ -1360,7 +1389,7 @@ function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClo
     });
   const n = prep.data;
   // 下書きを直した内容を自動保存する（AI の下書きが変わったら戻さない）
-  const noticeDraft = useDraft(n ? `note:${noteId}:hearing-notice` : null, text, setText, n?.text ?? '');
+  const noticeDraft = useDraft(n ? `note:${noteId}:${isMeeting ? 'meeting' : 'hearing'}-notice` : null, text, setText, n?.text ?? '');
   const send = useMutation({
     mutationFn: () =>
       api.post<{ note?: string; links: { name: string }[]; manualFiles: string[] }>(`/conversations/${n!.conversationId}/send`, {
@@ -1380,7 +1409,7 @@ function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClo
   return (
     <section className="card space-y-2 border-blue-200 bg-blue-50/40">
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="font-semibold">依頼者に期日連絡</h2>
+        <h2 className="font-semibold">{isMeeting ? '依頼者に打合せの連絡' : '依頼者に期日連絡'}</h2>
         {n && (
           <>
             <span className="text-sm text-slate-600">{n.recipient ?? n.clientName} 宛</span>
@@ -1402,16 +1431,20 @@ function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClo
                 </option>
               ))}
             </select>
-            <span className="text-xs text-slate-500">
-              期日 {fmtDateTime(n.hearingAt)} ／ 次回 {n.nextHearingText}
-            </span>
+            {isMeeting ? (
+              <span className="text-xs text-slate-500">打合せ {n.meetingAt ? fmtDateTime(n.meetingAt) : ''}</span>
+            ) : (
+              <span className="text-xs text-slate-500">
+                期日 {n.hearingAt ? fmtDateTime(n.hearingAt) : ''} ／ 次回 {n.nextHearingText}
+              </span>
+            )}
           </>
         )}
         <button className="btn btn-sm ml-auto" onClick={onClose}>
           閉じる
         </button>
       </div>
-      {prep.isLoading && <div className="text-sm text-slate-500">記録と次回期日をもとに下書きを作成中…</div>}
+      {prep.isLoading && <div className="text-sm text-slate-500">{isMeeting ? '記録と次回の打合せをもとに下書きを作成中…' : '記録と次回期日をもとに下書きを作成中…'}</div>}
       {prep.error &&
         (unreachableClientId(prep.error) ? (
           <ClientContactSetup clientId={unreachableClientId(prep.error)!} onSaved={() => prep.refetch()} />
@@ -1420,6 +1453,46 @@ function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClo
         ))}
       {n && (
         <>
+          {isMeeting && (
+            <div className="space-y-1 rounded border border-slate-200 bg-white p-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-semibold text-slate-700">次回の打合せ</span>
+                <select
+                  className="input w-auto max-w-full text-xs"
+                  value={n.nextMeeting ? String(n.nextMeeting.eventId) : ''}
+                  onChange={(e) => setEventId(e.target.value ? Number(e.target.value) : null)}
+                  disabled={prep.isFetching}
+                  title="本文に日時・Zoom の URL・パスコードを入れる予定（カレンダーのこの依頼者・事件の今後の打合せ・相談）"
+                >
+                  {(n.meetings ?? []).map((m) => (
+                    <option key={m.eventId} value={m.eventId}>
+                      {fmtDateTime(m.startAt)} {m.title}
+                      {m.url ? `（${m.provider ?? 'WEB'}）` : ''}
+                    </option>
+                  ))}
+                  <option value="">{(n.meetings ?? []).length ? '次回の案内を入れない' : 'カレンダーに今後の打合せがありません'}</option>
+                </select>
+              </div>
+              {n.nextMeeting ? (
+                <>
+                  <pre className="whitespace-pre-wrap font-sans text-slate-700">{n.nextMeeting.text}</pre>
+                  {!n.nextMeeting.url && <div className="text-orange-600">この予定に WEB 会議の URL がありません（対面なら問題ありません。WEB なら予定に Zoom を発行してから作り直してください）</div>}
+                </>
+              ) : (
+                (n.meetings ?? []).length === 0 && <div className="text-orange-600">次回の打合せがカレンダーにありません。決まっていれば先に「予定」で登録すると、日時と Zoom の URL が本文に入ります</div>
+              )}
+              {(n.confirmItems ?? []).length > 0 && (
+                <div>
+                  <span className="font-semibold text-slate-700">確認事項（記録の次のアクション）</span>
+                  <ul className="ml-4 list-disc text-slate-700">
+                    {n.confirmItems!.map((x, i) => (
+                      <li key={i}>{x}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
           <textarea className="input min-h-44 text-sm" value={text} onChange={(e) => setText(e.target.value)} disabled={prep.isFetching} />
           <DraftHint handle={noticeDraft} />
           <div className="text-sm">
@@ -1448,7 +1521,9 @@ function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClo
                 ))}
               </div>
             ) : (
-              <div className="text-xs text-slate-500">事件フォルダに最近更新したファイルがありません。「フォルダから選ぶ」で探せます</div>
+              <div className="text-xs text-slate-500">
+                {isMeeting ? '資料を一緒に送るときは「フォルダから選ぶ」で添付できます' : '事件フォルダに最近更新したファイルがありません。「フォルダから選ぶ」で探せます'}
+              </div>
             )}
             {browse && (
               <div className="mt-2">
@@ -1473,7 +1548,7 @@ function HearingNoticePanel({ noteId, onClose, onSent }: { noteId: number; onClo
             <Link to={`/inbox/${n.conversationId}`} className="btn btn-sm">
               会話を開いて送る
             </Link>
-            {!n.nextHearingAt && <span className="text-xs text-orange-600">次回期日がカレンダーにありません。決まっていれば先に「予定」で登録すると本文に入ります</span>}
+            {!isMeeting && !n.nextHearingAt && <span className="text-xs text-orange-600">次回期日がカレンダーにありません。決まっていれば先に「予定」で登録すると本文に入ります</span>}
             {msg && <span className="fade-in text-xs text-slate-700">{msg}</span>}
           </div>
         </>
@@ -2182,8 +2257,16 @@ function NoteView({ n, onDeleted, onNotice }: { n: Note; onDeleted: () => void; 
       </div>
       <div className="mt-1 flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
         {onNotice && (
-          <button className="mr-auto btn btn-sm btn-primary whitespace-nowrap" onClick={onNotice} title="この期日の結果と次回期日を、本人の文体で依頼者に連絡します">
-            依頼者に期日連絡
+          <button
+            className="mr-auto btn btn-sm btn-primary whitespace-nowrap"
+            onClick={onNotice}
+            title={
+              n.kind === 'meeting'
+                ? 'この打合せの内容・確認事項と、次回の打合せの日時・Zoom の URL を、本人の文体で依頼者に連絡します'
+                : 'この期日の結果と次回期日を、本人の文体で依頼者に連絡します'
+            }
+          >
+            {n.kind === 'meeting' ? '依頼者に連絡' : '依頼者に期日連絡'}
           </button>
         )}
         <button
