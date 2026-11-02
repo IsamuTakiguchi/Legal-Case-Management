@@ -22,6 +22,7 @@ import { logger } from '../logger.js';
 import { listContacts, createContact, updateContact, deleteContact, contactBriefs } from '../services/contacts.js';
 import { readContactMemo, importContactMemo } from '../services/contactMemo.js';
 import { prepareHearingNotice, ClientUnreachableError, clientReachability } from '../services/hearingNotice.js';
+import { prepareMeetingNotice } from '../services/meetingNotice.js';
 import { listCaseHolds, attachHoldSetToCase } from '../services/court.js';
 import { joinPath, getItemByPath } from '../integrations/onedrive.js';
 
@@ -559,6 +560,19 @@ clientRoutes.post('/case-notes/:id/hearing-notice', async (c) => {
     return c.json(await prepareHearingNotice(Number(c.req.param('id')), { channel: body.channel, personId: body.personId }));
   } catch (err) {
     // 連絡先が無いときは、画面がその場で登録する欄を出せるよう依頼者を返す
+    if (err instanceof ClientUnreachableError) return c.json({ error: err.message, code: err.code, clientId: err.clientId }, 409);
+    throw err;
+  }
+});
+
+/** 打合せの記録から、依頼者への連絡（内容・確認事項・次回の打合せの日時と Zoom の URL）の下書きを用意する（送信は /conversations/:id/send） */
+clientRoutes.post('/case-notes/:id/meeting-notice', async (c) => {
+  const body = z
+    .object({ channel: z.enum(['gmail', 'line', 'chatwork']).optional(), personId: z.number().int().nullable().optional(), eventId: z.number().int().nullable().optional() })
+    .parse(await c.req.json().catch(() => ({})));
+  try {
+    return c.json(await prepareMeetingNotice(Number(c.req.param('id')), { channel: body.channel, personId: body.personId, eventId: body.eventId }));
+  } catch (err) {
     if (err instanceof ClientUnreachableError) return c.json({ error: err.message, code: err.code, clientId: err.clientId }, 409);
     throw err;
   }

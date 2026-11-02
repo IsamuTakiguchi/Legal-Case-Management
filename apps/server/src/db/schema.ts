@@ -443,7 +443,7 @@ export const drafts = sqliteTable('drafts', {
   generatedText: text('generated_text').notNull(),
   finalText: text('final_text'),
   status: text('status').notNull().default('draft'), // draft | sent | discarded
-  /** 何の下書きか（hearing_notice=依頼者への期日連絡）。送った文を、次の同じ種類の下書きの手本にする */
+  /** 何の下書きか（hearing_notice=依頼者への期日連絡、meeting_notice=打合せ後の依頼者への連絡）。送った文を、次の同じ種類の下書きの手本にする */
   kind: text('kind'),
   createdAt: text('created_at').notNull().default(now()),
 });
