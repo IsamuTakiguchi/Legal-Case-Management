@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { ftsQuery } from './inbox.js';
-import { CASE_NOTE_KIND_LABEL, CHANNEL_LABEL, TASK_STATUS_LABEL, EVENT_KIND_LABEL, formatJaDateTime, type CaseNoteKind, type Channel, type TaskStatus, type EventKind, phoneDigits, isPhoneLike } from '@lcm/shared';
+import { CASE_NOTE_KIND_LABEL, CHANNEL_LABEL, TASK_STATUS_LABEL, EVENT_KIND_LABEL, formatJaDateTime, type CaseNoteKind, type Channel, type TaskStatus, type EventKind, phoneDigits, isPhoneLike, formatJaEventTime } from '@lcm/shared';
 
 /**
  * 事務所のデータを横断して探す。
@@ -281,7 +281,7 @@ export function searchAll(query: string, opts: SearchOptions = {}): SearchHit[] 
           kind: 'event',
           id: e.id,
           title: `${e.title}（${EVENT_KIND_LABEL[e.kind as EventKind] ?? e.kind}）`,
-          snippet: `${formatJaDateTime(new Date(e.startAt))}${e.location ? `・${e.location}` : ''}${e.description ? ` ${snippetAround(e.description, terms)}` : ''}`,
+          snippet: `${formatJaEventTime(e.startAt, e.endAt)}${e.location ? `・${e.location}` : ''}${e.description ? ` ${snippetAround(e.description, terms)}` : ''}`,
           at: e.startAt,
           clientName: clientName.get(e.clientId ?? kase?.clientId ?? -1) ?? null,
           caseTitle: kase?.title ?? null,

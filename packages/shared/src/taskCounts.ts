@@ -32,6 +32,8 @@ export function taskDeadline(t: TaskLike): string | null {
 export interface TaskCounts {
   /** 対応中（自分がやること） */
   open: number;
+  /** 起案・検討完了（提出・送付などが残っているもの。対応中・連絡待ちとは別に数える） */
+  drafted: number;
   /** 連絡待ち（依頼者＋相手方・裁判所＋事務局） */
   waiting: number;
   waitingClient: number;
@@ -43,11 +45,13 @@ export interface TaskCounts {
 }
 
 export function countTasks(tasks: TaskLike[], now = Date.now()): TaskCounts {
-  const c: TaskCounts = { open: 0, waiting: 0, waitingClient: 0, waitingOther: 0, waitingStaff: 0, openOverdue: 0, waitingOverdue: 0 };
+  const c: TaskCounts = { open: 0, drafted: 0, waiting: 0, waitingClient: 0, waitingOther: 0, waitingStaff: 0, openOverdue: 0, waitingOverdue: 0 };
   for (const t of tasks) {
     const d = taskDeadline(t);
     const overdue = !!d && new Date(d).getTime() < now;
-    if (t.status === 'open') {
+    if (t.status === 'drafted') {
+      c.drafted++;
+    } else if (t.status === 'open') {
       c.open++;
       if (overdue) c.openOverdue++;
     } else if (isWaitingStatus(t.status)) {

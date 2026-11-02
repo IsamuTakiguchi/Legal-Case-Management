@@ -2,7 +2,7 @@ import { and, eq, desc, gt, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/index.js';
 import { generateStructured, generateText } from '../integrations/anthropic.js';
-import { formatJaDateTime, formatJaDate, fixDueYear, dateOnlyDeadline, actionDeadlinesLabel, isWaitingStatus, WAITING_FOR, CASE_NOTE_KIND_LABEL, OPEN_CASE_STATUSES, CASE_CONTACT_ROLE_LABEL, taskStatusForWaiting, ACTIVE_TASK_STATUSES, parseJaDate, formatWareki, CASE_STATUSES, type CaseStatus, type CaseInput, type CaseNoteInput, type CaseNoteKind, type CaseContactRole, type TaskStatus } from '@lcm/shared';
+import { formatJaDateTime, formatJaDate, fixDueYear, dateOnlyDeadline, actionDeadlinesLabel, isWaitingStatus, WAITING_FOR, CASE_NOTE_KIND_LABEL, OPEN_CASE_STATUSES, CASE_CONTACT_ROLE_LABEL, taskStatusForWaiting, ACTIVE_TASK_STATUSES, NEW_TASK_STATUSES, parseJaDate, formatWareki, CASE_STATUSES, type CaseStatus, type CaseInput, type CaseNoteInput, type CaseNoteKind, type CaseContactRole, type TaskStatus, formatJaEventTime } from '@lcm/shared';
 import { createTask, chatworkReplyable } from './tasks.js';
 import { syncClientFolderWithStatus } from './clientFolders.js';
 import { logger } from '../logger.js';
@@ -372,7 +372,7 @@ export const noteTaskSuggestionSchema = z.object({
         title: z.string().describe('タスク名。弁護士が見て何をするか分かる言い方で、40 字以内'),
         due: z.string().nullable().describe('締切 YYYY-MM-DD: そのタスク自体をいつまでに済ませるか（例: 答弁書の提出期限）。記録から読み取れなければ null'),
         replyBy: z.string().nullable().describe('返信期限 YYYY-MM-DD: 返信待ちのタスクで、依頼者・相手方などの返事をいつまで待つか（例: 答弁書案への依頼者の返事）。返信待ちでない・読み取れなければ null'),
-        status: z.enum(ACTIVE_TASK_STATUSES).describe('こちらが動くなら open、依頼者の返事待ちなら waiting_client、相手方・裁判所・保険会社などの待ちなら waiting_other、事務局（事務所の職員）の回答や作業を待つなら waiting_staff'),
+        status: z.enum(NEW_TASK_STATUSES).describe('こちらが動くなら open、依頼者の返事待ちなら waiting_client、相手方・裁判所・保険会社などの待ちなら waiting_other、事務局（事務所の職員）の回答や作業を待つなら waiting_staff'),
         note: z.string().describe('そのタスクのメモ（背景・決まったこと）。1〜2 文'),
       }),
     )
@@ -612,7 +612,7 @@ export async function generateCaseSummary(id: number): Promise<string> {
   const md = await generateText({
     purpose: '事件サマリーの生成',
     system: '法律事務所の事務補助者として、事件の現状を弁護士向けに簡潔にまとめます。事実の創作はせず、与えられた記録だけを根拠にします。Markdown で「現状」「直近の動き」「未了事項」「推奨される次の一手」の 4 見出し、全体で 500 字程度。',
-    user: `事件: ${c.title}（${c.caseType?.label ?? c.caseType}）\n依頼者: ${c.client?.name}\n裁判所・事件番号: ${c.courtName ?? ''} ${c.caseNumber ?? ''}${c.accidentDate ? `\n事故日: ${formatWareki(c.accidentDate)}` : ''}\n現在の段階: ${c.stage ?? '未設定'}\n方針メモ: ${c.policy ?? '（なし）'}\n次回期日: ${c.nextHearingAt ? formatJaDateTime(new Date(c.nextHearingAt)) : '未定'}\n\n未了タスク:\n${openTasks.map((t) => `- [${t.status}] ${t.title}`).join('\n') || '（なし）'}\n\n今後の予定:\n${upcoming.map((e) => `- ${formatJaDateTime(new Date(e.startAt))} ${e.title}`).join('\n') || '（なし）'}\n\n記録（新しい順）:\n${timeline.map((t) => `- ${t.at.slice(0, 10)} [${t.type}] ${t.title}${t.body ? `: ${String(t.body).slice(0, 200)}` : ''}`).join('\n')}`,
+    user: `事件: ${c.title}（${c.caseType?.label ?? c.caseType}）\n依頼者: ${c.client?.name}\n裁判所・事件番号: ${c.courtName ?? ''} ${c.caseNumber ?? ''}${c.accidentDate ? `\n事故日: ${formatWareki(c.accidentDate)}` : ''}\n現在の段階: ${c.stage ?? '未設定'}\n方針メモ: ${c.policy ?? '（なし）'}\n次回期日: ${c.nextHearingAt ? formatJaDateTime(new Date(c.nextHearingAt)) : '未定'}\n\n未了タスク:\n${openTasks.map((t) => `- [${t.status}] ${t.title}`).join('\n') || '（なし）'}\n\n今後の予定:\n${upcoming.map((e) => `- ${formatJaEventTime(e.startAt, e.endAt)} ${e.title}`).join('\n') || '（なし）'}\n\n記録（新しい順）:\n${timeline.map((t) => `- ${t.at.slice(0, 10)} [${t.type}] ${t.title}${t.body ? `: ${String(t.body).slice(0, 200)}` : ''}`).join('\n')}`,
     effort: 'medium',
     maxTokens: 3000,
   });

@@ -3,7 +3,7 @@ import { eq, inArray, and } from 'drizzle-orm';
 import { notifyMyChat, appUrl } from '../services/notify.js';
 import { todaysEvents } from '../services/court.js';
 import { openAlerts } from '../services/alerts.js';
-import { formatJaDateTime, TASK_STATUS_LABEL, EVENT_KIND_LABEL, WAITING_TASK_STATUSES, type TaskStatus, type EventKind } from '@lcm/shared';
+import { formatJaDateTime, TASK_STATUS_LABEL, EVENT_KIND_LABEL, WAITING_TASK_STATUSES, type TaskStatus, type EventKind, formatJaEventTime } from '@lcm/shared';
 import { getSetting, getSettingInt } from '../services/settings.js';
 import { isConfigured } from '../config.js';
 
@@ -25,7 +25,8 @@ export async function morningDigest(): Promise<string> {
     .select({ t: schema.tasks, clientName: schema.clients.name })
     .from(schema.tasks)
     .leftJoin(schema.clients, eq(schema.clients.id, schema.tasks.clientId))
-    .where(and(eq(schema.tasks.status, 'open')))
+    // 対応中と起案・検討完了（提出・送付が残っている）の、締切が近いもの
+    .where(inArray(schema.tasks.status, ['open', 'drafted']))
     .all()
     .filter((r) => r.t.dueAt && r.t.dueAt <= new Date(Date.now() + 86400_000).toISOString());
   const events = todaysEvents();
@@ -36,7 +37,7 @@ export async function morningDigest(): Promise<string> {
 
   const sections: string[] = [];
   sections.push(`■ 今日の予定 (${events.length})`);
-  for (const e of events) sections.push(`  ${formatJaDateTime(new Date(e.startAt), { withWeekday: false })} ${e.title}${e.kind !== 'other' ? `〔${EVENT_KIND_LABEL[e.kind as EventKind]}〕` : ''}`);
+  for (const e of events) sections.push(`  ${formatJaEventTime(e.startAt, e.endAt, { withWeekday: false })} ${e.title}${e.kind !== 'other' ? `〔${EVENT_KIND_LABEL[e.kind as EventKind]}〕` : ''}`);
   sections.push(`■ 未返信の会話: ${needsReply.length} 件`);
   sections.push(`■ 返信待ち (${waiting.length})`);
   const now = Date.now();

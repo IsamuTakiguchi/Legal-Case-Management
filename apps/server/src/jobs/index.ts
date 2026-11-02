@@ -7,6 +7,7 @@ import { pollChatwork } from './chatworkPoll.js';
 import { morningDigest, morningDigestEnabled } from './digest.js';
 import { syncCalendar, checkPostEvents } from '../services/court.js';
 import { checkOverdueWaitingTasks, importChatworkTasks } from '../services/tasks.js';
+import { pruneOutboundUploads } from '../services/outboundUploads.js';
 import { checkMemoReviews } from '../services/memos.js';
 import { checkStaleSessions } from '../services/scheduling.js';
 import { checkCreditorOverdue } from '../services/creditors.js';
@@ -98,7 +99,13 @@ export const JOBS: JobDef[] = [
   { name: 'lineToken', label: 'LINE トークンの自動更新', cron: '15 18 * * *', run: refreshLineTokenIfNeeded, enabled: () => isConfigured('line') },
   { name: 'backup', label: 'バックアップ（OneDrive に世代保存）', cron: '0 18 * * *', run: runBackup, enabled: () => true },
   { name: 'scheduledSend', label: '送信予約の実行（毎分）', cron: '* * * * *', run: () => runDueScheduled(), enabled: () => true, quiet: true },
-  { name: 'housekeeping', label: 'ジョブ履歴の整理（60 日より古いものを削除）', cron: '50 16 * * *', run: async () => ({ deleted: pruneJobRuns(60) }), enabled: () => true },
+  {
+    name: 'housekeeping',
+    label: 'ジョブ履歴の整理（60 日より古いものを削除）・送らなかった添付ファイルの片付け',
+    cron: '50 16 * * *',
+    run: async () => ({ deleted: pruneJobRuns(60), uploads: pruneOutboundUploads(7) }),
+    enabled: () => true,
+  },
   {
     name: 'clientFolderSync',
     label: 'OneDrive のフォルダ名の変更・区分フォルダ間の移動を取り込む',

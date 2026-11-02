@@ -6,19 +6,22 @@ import { mergedLabel, type MergeRef } from '../lib/mergedAttachment';
 import { api } from '../lib/api';
 import { useDraft, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
-import { ContactLinkForm } from '../lib/ContactLinkForm';
+import { ConversationLinkForm } from '../lib/ConversationLinkForm';
 import { ConversationTaskPanel } from '../lib/ConversationTaskPanel';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { MemoBadge, MemoPanel, MemoSuggestionCard, type MemoSuggestion } from '../lib/Memo';
 import { ClientConfirmPanel } from '../lib/ClientConfirmPanel';
-import { channelBadge, channelLabel, fmtDateTime, fmtBytes, fromLocalInput, toLocalInput, todayLocalInput } from '../lib/format';
+import { RelayPanel } from '../lib/RelayPanel';
+import { channelBadge, channelLabel, fmtDateTime, fmtBytes, fromLocalInput, toLocalInput, todayLocalInput, fmtEventTime } from '../lib/format';
 import { Icon } from '../lib/icons';
 import { useSpotlight } from '../lib/spotlight';
 import { quickSendTimes } from '../lib/sendTimes';
 import { TaskDeadlines, NewTaskDeadlines, WaitDeadlineSelect, fmtDeadline } from '../lib/Deadline';
-import { dateOnlyDeadline, SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply, messageLink, type EventKind } from '@lcm/shared';
+import { dateOnlyDeadline, SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply, messageLink, type EventKind, isAllDayRange, isWaitingStatus } from '@lcm/shared';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 import { AttachmentImage, canPreviewImage } from '../lib/AttachmentImage';
+import { WindowConfirm, isHoldWindow } from '../lib/HoldForm';
+import { useLocalUploads, LocalFileButton, LocalFileBadges, fileDropProps } from '../lib/LocalFileAttach';
 
 /** Chatwork の取込理由の表示名（設定画面の診断と同じ） */
 const SCOPE_REASON_LABEL: Record<string, string> = {
@@ -51,6 +54,8 @@ interface Message {
   replyTo?: { id: number; senderName: string | null; direction: string; excerpt: string } | null;
   /** Chatwork: なぜ受信箱に入ったか（取込範囲の確認用） */
   scopeReason?: string | null;
+  /** 依頼者からの連絡を相手方代理人などに／相手方代理人などからの連絡を依頼者に伝えた記録 */
+  relays?: { direction: string; recipient: string; channel: string; conversationId: number | null; messageId: number | null; at: string }[];
   /** 事務局の質問から依頼者に確認を送った記録 */
   clientConfirms?: { channel: string; conversationId: number; messageId?: number | null; at: string; scheduledAt?: string | null }[];
   clientId?: number | null;
@@ -59,6 +64,8 @@ interface Message {
   caseTitle?: string | null;
   /** LINE アプリなど、アプリの外で送ったものを手で記録したもの */
   manual?: boolean;
+  /** 自分の送信に添付したファイルの名前 */
+  sentFiles?: string[];
 }
 interface Conv {
   id: number;
@@ -149,6 +156,10 @@ export default function Conversation() {
   const [reactFor, setReactFor] = useState<number | null>(null);
   // 事務局の質問を依頼者に確認する（Gmail・LINE）パネルを開いているメッセージ
   const [confirmFor, setConfirmFor] = useState<number | null>(null);
+  // 紐付けを変更する欄を開いているか
+  const [relinking, setRelinking] = useState(false);
+  // 依頼者からの連絡を相手方代理人などに／相手方代理人などからの連絡を依頼者に伝えるパネルを開いているメッセージ
+  const [relayFor, setRelayFor] = useState<number | null>(null);
   const [quoteOf, setQuoteOf] = useState<Message | null>(null);
   const [showTimer, setShowTimer] = useState(false);
   // LINE アプリで送った分を記録する欄（送った時刻）
@@ -159,6 +170,8 @@ export default function Conversation() {
   const [sendPreset, setSendPreset] = useState<string | null>(null);
   const [selectedAtt, setSelectedAtt] = useState<number[]>([]);
   const [driveFiles, setDriveFiles] = useState<DriveFile[]>([]);
+  // パソコンから選んだファイル
+  const uploads = useLocalUploads();
   const [showFiles, setShowFiles] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
   const [showStaffAsk, setShowStaffAsk] = useState(false);
@@ -169,7 +182,6 @@ export default function Conversation() {
   // 会話からタスクを登録するパネル
   const [showTasks, setShowTasks] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
-  const [linkClientId, setLinkClientId] = useState('');
 
   // 自分が別の手段で送ったものが「受信」で入ったときに、向きを直す
   const fixDirection = useMutation({
@@ -239,6 +251,7 @@ export default function Conversation() {
         text,
         attachmentIds: selectedAtt,
         driveFiles: driveFiles.map((f) => ({ itemId: f.itemId, name: f.name, path: f.path })),
+        uploadIds: uploads.ids,
         draftId,
         createWaitingTask: createWaiting,
         waitingFollowUpAt: createWaiting ? waitUntil : null,
@@ -252,6 +265,7 @@ export default function Conversation() {
       setDraftId(null);
       setSelectedAtt([]);
       setDriveFiles([]);
+      uploads.clear();
       setCreateWaiting(false);
       setWaitUntil(null);
       setReplyTo(null);
@@ -278,14 +292,6 @@ export default function Conversation() {
     },
   });
 
-  const link = useMutation({
-    mutationFn: (clientId: number) => api.post(`/conversations/${id}/link`, { clientId }),
-    onSuccess: () => {
-      setMsg({ kind: 'ok', text: '依頼者に紐付けました' });
-      invalidate();
-      qc.invalidateQueries({ queryKey: ['alerts'] });
-    },
-  });
   const unlink = useMutation({
     mutationFn: () => api.post(`/conversations/${id}/unlink`),
     onSuccess: () => {
@@ -294,7 +300,6 @@ export default function Conversation() {
     },
     onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
   });
-  const [linkMode, setLinkMode] = useState<'client' | 'contact'>('client');
 
   const toggle = useMutation({
     mutationFn: (v: { needsReply?: boolean; archived?: boolean }) => (v.needsReply !== undefined ? api.post(`/conversations/${id}/needs-reply`, v) : api.post(`/conversations/${id}/archive`, v)),
@@ -343,10 +348,6 @@ export default function Conversation() {
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   };
 
-  useEffect(() => {
-    if (c && !c.clientId && c.suggestions[0]) setLinkClientId(String(c.suggestions[0].id));
-  }, [c]);
-
   if (!c) return <div className="loading-text text-slate-500">読み込み中…</div>;
 
   // Chatwork のグループチャットは相手個人ではなくルーム（件名に保持）を会話名にする
@@ -391,10 +392,11 @@ export default function Conversation() {
           {c.client && !c.contact && (c.client.entityType === 'corporation' || (c.clientPersons?.length ?? 0) > 0 || otherThanClient(c.channel, c.counterpartName, c.client.name)) && (
             <ConversationPersonPicker
               corporate={c.client.entityType === 'corporation'}
+              group={!!c.lineGroup}
               conversationId={c.id}
               current={c.clientPerson ?? null}
               persons={c.clientPersons ?? []}
-              defaultName={c.counterpartName ?? ''}
+              defaultName={c.lineGroup ? '' : (c.counterpartName ?? '')}
               onDone={(text) => {
                 setMsg({ kind: 'ok', text });
                 invalidate();
@@ -405,14 +407,12 @@ export default function Conversation() {
           {(c.clientId || c.contactId) && (
             <button
               type="button"
-              className="text-xs text-slate-400 hover:text-red-600 hover:underline"
-              onClick={() => {
-                if (confirm('この会話の依頼者・事件・関係者への紐付けを外します。依頼者や関係者の連絡先は変更しません。よろしいですか？')) unlink.mutate();
-              }}
-              disabled={unlink.isPending}
-              title="間違って紐付けたときに外します"
+              className={`btn btn-sm ${relinking ? 'text-[var(--accent)]' : ''}`}
+              onClick={() => setRelinking(!relinking)}
+              aria-expanded={relinking}
+              title="この会話の相手を、別の依頼者・ご家族や窓口・事件の関係者（相手方代理人など）に付け替えます"
             >
-              紐付けを外す
+              紐付けを変更
             </button>
           )}
           {c.subject && !(c.channel === 'chatwork' && !c.client) && <span className="text-sm text-slate-500">件名: {c.subject}</span>}
@@ -426,6 +426,55 @@ export default function Conversation() {
           </div>
         </div>
 
+        {relinking && (c.clientId || c.contactId) && (
+          <div className="card space-y-2 border-blue-200">
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="font-semibold">紐付けを変更</span>
+              <span className="text-xs text-slate-500">
+                いま:{' '}
+                {c.contact
+                  ? `${c.contact.roleLabel} ${c.contact.name}（${c.client?.name ?? ''}／${c.contact.caseTitle}）`
+                  : c.clientPerson
+                    ? `${c.client?.name ?? ''} の${c.clientPerson.title ? `${c.clientPerson.title}・` : ''}${c.clientPerson.name}`
+                    : `依頼者 ${c.client?.name ?? ''}`}
+              </span>
+              <button className="btn btn-sm ml-auto" onClick={() => setRelinking(false)}>
+                閉じる
+              </button>
+            </div>
+            <ConversationLinkForm
+              conversationId={c.id}
+              group={!!c.lineGroup}
+              defaultName={c.counterpartName ?? ''}
+              current={{ clientId: c.clientId, caseId: c.caseId ?? null, contactId: c.contactId ?? null, personId: c.clientPerson?.id ?? null }}
+              newClientHref={`/clients?new=${encodeURIComponent(c.lineGroup ? '' : (c.counterpartName ?? ''))}&email=${encodeURIComponent(c.channel === 'gmail' ? (c.counterpartAddress ?? '') : '')}`}
+              onDone={(text) => {
+                setRelinking(false);
+                setMsg({ kind: 'ok', text: text.replace(/紐付けました/, '付け替えました') });
+                invalidate();
+                qc.invalidateQueries({ queryKey: ['alerts'] });
+              }}
+            />
+            <div className="flex flex-wrap items-center gap-3 border-t border-slate-100 pt-2 text-xs">
+              {c.contact && (
+                <Link to={`/cases/${c.contact.caseId}#contacts`} className="text-blue-700 hover:underline" title="関係者の名前・役割・所属・メールアドレス・電話などは、事件ページの「関係者」で直します">
+                  {c.contact.name}さんの登録内容（名前・役割・連絡先）を直す
+                </Link>
+              )}
+              <button
+                type="button"
+                className="text-slate-400 hover:text-red-600 hover:underline"
+                onClick={() => {
+                  if (confirm('この会話の依頼者・事件・関係者への紐付けを外します。依頼者や関係者の連絡先は変更しません。よろしいですか？')) unlink.mutate();
+                }}
+                disabled={unlink.isPending}
+                title="間違って紐付けたときに外します（付け替え先が決まっていないとき）"
+              >
+                紐付けを外す（どこにも付けない）
+              </button>
+            </div>
+          </div>
+        )}
         {c.staff && !c.clientId && (
           <div className="card border-slate-200 bg-slate-50 text-sm text-slate-600">
             <span className="badge badge-gray mr-2">事務局</span>
@@ -447,36 +496,19 @@ export default function Conversation() {
         )}
         {!c.clientId && !c.staff && (
           <div className="card border-orange-200 bg-orange-50">
-            <div className="mb-2 flex flex-wrap items-center gap-3 text-sm">
-              <span className="font-semibold text-orange-800">この連絡先はまだ紐付いていません</span>
-              <label className="flex items-center gap-1">
-                <input type="radio" name="linkMode" checked={linkMode === 'client'} onChange={() => setLinkMode('client')} /> 依頼者本人
-              </label>
-              <label className="flex items-center gap-1" title="相手方・相手方代理人・裁判所・保険会社など、依頼者以外の相手">
-                <input type="radio" name="linkMode" checked={linkMode === 'contact'} onChange={() => setLinkMode('contact')} /> 事件の関係者（相手方・相手方代理人など）
-              </label>
-            </div>
-            {linkMode === 'client' ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <ClientPicker value={linkClientId} onChange={setLinkClientId} suggestions={c.suggestions} />
-                <button className="btn btn-primary btn-sm" disabled={!linkClientId} onClick={() => link.mutate(Number(linkClientId))}>
-                  紐付ける
-                </button>
-                <Link to={`/clients?new=${encodeURIComponent(c.counterpartName ?? '')}&email=${encodeURIComponent(c.channel === 'gmail' ? c.counterpartAddress ?? '' : '')}`} className="btn btn-sm">
-                  新規依頼者として登録
-                </Link>
-              </div>
-            ) : (
-              <ContactLinkForm
-                conversationId={c.id}
-                defaultName={c.counterpartName ?? ''}
-                onDone={() => {
-                  setMsg({ kind: 'ok', text: '関係者として紐付けました' });
-                  invalidate();
-                  qc.invalidateQueries({ queryKey: ['alerts'] });
-                }}
-              />
-            )}
+            <div className="mb-2 text-sm font-semibold text-orange-800">{c.lineGroup ? 'この LINE グループはまだ紐付いていません' : 'この連絡先はまだ紐付いていません'}</div>
+            <ConversationLinkForm
+              conversationId={c.id}
+              group={!!c.lineGroup}
+              defaultName={c.counterpartName ?? ''}
+              suggestions={c.suggestions}
+              newClientHref={`/clients?new=${encodeURIComponent(c.lineGroup ? '' : (c.counterpartName ?? ''))}&email=${encodeURIComponent(c.channel === 'gmail' ? (c.counterpartAddress ?? '') : '')}`}
+              onDone={(text) => {
+                setMsg({ kind: 'ok', text });
+                invalidate();
+                qc.invalidateQueries({ queryKey: ['alerts'] });
+              }}
+            />
           </div>
         )}
 
@@ -516,6 +548,18 @@ export default function Conversation() {
                       {m.clientConfirms!.at(-1)!.scheduledAt ? '⏰ 依頼者への確認を予約' : '✓ 依頼者に確認済み'}（{({ gmail: 'Gmail', line: 'LINE', chatwork: 'Chatwork' } as Record<string, string>)[m.clientConfirms!.at(-1)!.channel] ?? m.clientConfirms!.at(-1)!.channel}・{fmtDateTime(m.clientConfirms!.at(-1)!.scheduledAt ?? m.clientConfirms!.at(-1)!.at)}）
                     </Link>
                   )}
+                  {(m.relays?.length ?? 0) > 0 &&
+                    (() => {
+                      const r = m.relays!.at(-1)!;
+                      const label = `✓ ${r.recipient}さんに伝え済み（${({ gmail: 'Gmail', line: 'LINE', chatwork: 'Chatwork', manual: 'FAX・郵送など' } as Record<string, string>)[r.channel] ?? r.channel}・${fmtDateTime(r.at)}）`;
+                      return r.conversationId ? (
+                        <Link to={messageLink(r.conversationId, r.messageId)} className="ml-1 rounded bg-green-100 px-1 text-[10px] text-green-800 hover:underline" title="伝えたやり取りを開きます">
+                          {label}
+                        </Link>
+                      ) : (
+                        <span className="ml-1 rounded bg-green-100 px-1 text-[10px] text-green-800">{label}</span>
+                      );
+                    })()}
                 </div>
                 {m.replyTo && (
                   <button
@@ -554,6 +598,20 @@ export default function Conversation() {
                       📨 依頼者に確認
                     </button>
                   )}
+                  {m.direction === 'in' && (c.contact || (c.client && !c.staff)) && (
+                    <button
+                      type="button"
+                      className="font-medium text-blue-700 hover:underline"
+                      onClick={() => setRelayFor(relayFor === m.id ? null : m.id)}
+                      title={
+                        c.contact
+                          ? 'この連絡・質問を、依頼者に伝える文に書き直して送ります'
+                          : 'この連絡・質問を、相手方代理人など事件の関係者への連絡に書き直して送ります（伝えるべきでないことは外します）'
+                      }
+                    >
+                      {c.contact ? '📨 依頼者に伝える' : '📤 相手方代理人に伝える'}
+                    </button>
+                  )}
                   <button type="button" className="hover:underline" onClick={() => setQuoteOf(m)} title={c.channel === 'chatwork' ? 'Chatwork の引用として本文に付けます' : '「> 」付きの引用文として本文に付けます'}>
                     ❝ 引用
                   </button>
@@ -580,6 +638,15 @@ export default function Conversation() {
                 )}
                 {c.cases.length >= 2 && !c.contact && <CaseTag m={m} cases={c.cases} out={m.direction === 'out'} onChanged={invalidate} />}
                 {c.channel === 'chatwork' && m.direction === 'in' && <MessageTools m={m} onChanged={invalidate} />}
+                {m.direction === 'out' && (m.sentFiles?.length ?? 0) > 0 && (
+                  <ul className="mt-1 space-y-0.5">
+                    {m.sentFiles!.map((name, i) => (
+                      <li key={`${name}-${i}`} className="text-xs">
+                        📎 {name} <span className="text-blue-100">（添付して送信）</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 {m.attachments.some(canPreviewImage) && (
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
                     {m.attachments.filter(canPreviewImage).map((a) => (
@@ -625,6 +692,7 @@ export default function Conversation() {
                 onSent={invalidate}
               />
             )}
+            {relayFor === m.id && <RelayPanel messageId={m.id} onClose={() => setRelayFor(null)} onSent={invalidate} />}
             </Fragment>
           ))}
           {c.messages.length === 0 && <div className="text-sm text-slate-500">まだやり取りはありません。下の欄で書いて送ると、ここに残ります。</div>}
@@ -697,7 +765,7 @@ export default function Conversation() {
               この相手は LINE公式アカウントをブロック（または友だち解除・退会）しています。LINE で送っても届きません。Gmail や電話など別の方法で連絡してください。
             </div>
           )}
-          <textarea className="input min-h-40 font-mono text-sm" value={text} onChange={(e) => setText(e.target.value)} placeholder="返信本文（AI 下書きを編集して送信）" />
+          <textarea className="input min-h-40 font-mono text-sm" value={text} onChange={(e) => setText(e.target.value)} placeholder="返信本文（AI 下書きを編集して送信。ファイルをここにドラッグ＆ドロップすると添付できます）" {...fileDropProps(uploads)} />
           <DraftHint handle={textDraft} />
           {(selectedAtt.length > 0 || driveFiles.length > 0) && (
             <div className="flex flex-wrap gap-1 text-xs">
@@ -722,11 +790,13 @@ export default function Conversation() {
               ))}
             </div>
           )}
-          {c.channel === 'line' && (selectedAtt.length > 0 || driveFiles.length > 0) && <div className="text-xs text-orange-700">LINE はファイルを直接送れないため、OneDrive の共有リンクとして送ります（発行できない場合は手動送付の案内文になります）。</div>}
+          <LocalFileBadges uploads={uploads} />
+          {c.channel === 'line' && (selectedAtt.length > 0 || driveFiles.length > 0 || uploads.items.length > 0) && <div className="text-xs text-orange-700">LINE はファイルを直接送れないため、OneDrive の共有リンクとして送ります（発行できない場合は手動送付の案内文になります）。</div>}
           <div className="flex flex-wrap items-center gap-2">
             <button className="btn btn-sm" onClick={() => setShowFiles(!showFiles)} disabled={!c.client}>
               📄 フォルダのファイルを添付
             </button>
+            <LocalFileButton uploads={uploads} />
             <button className="btn btn-sm" onClick={() => setShowSchedule(!showSchedule)}>
               📅 日程調整
             </button>
@@ -759,7 +829,7 @@ export default function Conversation() {
             </label>
             {createWaiting && <WaitDeadlineSelect value={waitUntil} onChange={setWaitUntil} />}
             <div className="ml-auto flex items-center gap-1">
-              <button className="btn btn-primary" onClick={() => send.mutate(undefined)} disabled={!text.trim() || send.isPending}>
+              <button className="btn btn-primary" onClick={() => send.mutate(undefined)} disabled={!text.trim() || send.isPending || uploads.uploading.length > 0}>
                 {send.isPending ? '送信中…' : c.lineGroup ? 'LINE グループに送信' : `${channelLabel(c.channel)} で送信`}
               </button>
               <button className={`btn ${showTimer ? 'text-[var(--accent)]' : ''}`} onClick={() => setShowTimer(!showTimer)} disabled={send.isPending} title="時刻を指定して、その時刻に自動で送ります" aria-expanded={showTimer}>
@@ -823,7 +893,7 @@ export default function Conversation() {
                   setSendPreset(null);
                 }}
               />
-              <button className="btn btn-primary" onClick={() => send.mutate(fromLocalInput(sendAt))} disabled={!text.trim() || !sendAt || send.isPending}>
+              <button className="btn btn-primary" onClick={() => send.mutate(fromLocalInput(sendAt))} disabled={!text.trim() || !sendAt || send.isPending || uploads.uploading.length > 0}>
                 {sendAt ? `${fmtDateTime(fromLocalInput(sendAt))} に送信予約` : '時刻を選んでください'}
               </button>
               <span className="text-xs text-slate-400">予約後も、この画面の「送信予約」から取消・時刻変更・今すぐ送信ができます</span>
@@ -1337,7 +1407,7 @@ function SessionCard({ s, onText, onDone, spotlight }: { s: Session; onText: (t:
 }
 
 /** 狭い欄に出す短い状態名 */
-const SHORT_TASK_STATUS: Record<string, string> = { open: '対応中', waiting_client: '依頼者待ち', waiting_other: '相手方待ち', waiting_staff: '事務局待ち' };
+const SHORT_TASK_STATUS: Record<string, string> = { open: '対応中', drafted: '起案・検討完了', waiting_client: '依頼者待ち', waiting_other: '相手方待ち', waiting_staff: '事務局待ち' };
 
 function TaskMini({ conversationId, clientId }: { conversationId: number; clientId: number | null }) {
   const qc = useQueryClient();
@@ -1349,7 +1419,7 @@ function TaskMini({ conversationId, clientId }: { conversationId: number; client
   // 返信期限（返信待ちのとき。null は設定の営業日数）と締切（null はなし）
   const [newFollowUp, setNewFollowUp] = useState<string | null>(null);
   const [newDue, setNewDue] = useState<string | null>(null);
-  const waiting = status !== 'open';
+  const waiting = isWaitingStatus(status);
   const add = useMutation({
     mutationFn: () => api.post('/tasks', { title, status, conversationId, clientId, followUpAt: waiting ? newFollowUp : null, dueAt: newDue }),
     onSuccess: () => {
@@ -1529,6 +1599,8 @@ interface PendingHold {
   fromThisConversation: boolean;
   rescheduleOf: { eventId: number; title: string; startAt: string } | null;
   candidates: { eventId: number; startAt: string; endAt: string }[];
+  /** 所要時間（分）。候補が枠なら、確定するときにこの長さで時間を決める */
+  durationMinutes?: number | null;
 }
 
 interface Replaced {
@@ -1652,7 +1724,9 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
     onError: (e) => setErr((e as Error).message),
   });
   const confirmHold = useMutation({
-    mutationFn: () => api.post<{ webText: string; rescheduled: { title: string; startAt: string } | null }>(`/conversations/${conversationId}/schedule/confirm-hold`, { ...pick, ...(meeting.by === 'them' ? meetingBody(meeting) : {}) }),
+    // 枠で押さえた候補は、その中で決めた時間（time）で確定する
+    mutationFn: (time?: { startAt: string; endAt: string }) =>
+      api.post<{ webText: string; rescheduled: { title: string; startAt: string } | null }>(`/conversations/${conversationId}/schedule/confirm-hold`, { ...pick, ...(meeting.by === 'them' ? meetingBody(meeting) : {}), ...(time ?? {}) }),
     onSuccess: (r) => {
       setWebText(r.webText ?? '');
       setWebTextTheirs(meeting.by === 'them');
@@ -1769,7 +1843,7 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
                       return (
                         <label key={c.eventId} className="flex flex-wrap items-center gap-2">
                           <input type="radio" name="hold-pick" checked={pick?.eventId === c.eventId} onChange={() => setPick({ sessionId: h.sessionId, eventId: c.eventId })} />
-                          <span>{fmtDateTime(c.startAt)}〜{fmtDateTime(c.endAt).split(' ').pop()}</span>
+                          <span>{isAllDayRange(c.startAt, c.endAt) ? fmtEventTime(c.startAt, c.endAt) : `${fmtDateTime(c.startAt)}〜${fmtDateTime(c.endAt).split(' ').pop()}`}</span>
                           {matched && <span className="badge badge-blue">やり取りで決まった日時</span>}
                         </label>
                       );
@@ -1779,18 +1853,35 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
               ))}
               <MeetingByFields value={meeting} onChange={setMeeting} provider={res.webProvider} detected={res.externalMeeting} holdMode />
               <div className="flex flex-wrap items-center gap-2">
-                <button
-                  className="btn btn-primary shrink-0 whitespace-nowrap"
-                  disabled={!pick || confirmHold.isPending}
-                  onClick={() => {
-                    const h = holds.find((x) => x.sessionId === pick?.sessionId);
-                    const c = h?.candidates.find((x) => x.eventId === pick?.eventId);
-                    if (!h || !c) return;
-                    if (window.confirm(`${fmtDateTime(c.startAt)} で確定しますか？\nほかの候補（${h.candidates.length - 1} 件）の仮押さえは削除されます。`)) confirmHold.mutate();
-                  }}
-                >
-                  {confirmHold.isPending ? '確定中…' : 'この候補で確定'}
-                </button>
+                {(() => {
+                  const h = holds.find((x) => x.sessionId === pick?.sessionId);
+                  const c = h?.candidates.find((x) => x.eventId === pick?.eventId);
+                  // 枠の候補は、その中で確定する時間を選ぶ
+                  if (h && c && h.durationMinutes && isHoldWindow(c, h.durationMinutes)) {
+                    return (
+                      <WindowConfirm
+                        key={c.eventId}
+                        candidate={c}
+                        durationMinutes={h.durationMinutes}
+                        pending={confirmHold.isPending}
+                        note={`ほかの候補（${h.candidates.length - 1} 件）の仮押さえは削除されます。`}
+                        onConfirm={(t) => confirmHold.mutate(t)}
+                      />
+                    );
+                  }
+                  return (
+                    <button
+                      className="btn btn-primary shrink-0 whitespace-nowrap"
+                      disabled={!pick || confirmHold.isPending}
+                      onClick={() => {
+                        if (!h || !c) return;
+                        if (window.confirm(`${fmtEventTime(c.startAt, c.endAt)} で確定しますか？\nほかの候補（${h.candidates.length - 1} 件）の仮押さえは削除されます。`)) confirmHold.mutate(undefined);
+                      }}
+                    >
+                      {confirmHold.isPending ? '確定中…' : 'この候補で確定'}
+                    </button>
+                  );
+                })()}
                 <span className="text-xs text-slate-500">「仮」が外れて確定の予定になります。{meeting.by === 'them' ? '会議 URL はこちらでは発行せず、相手方のものを入れます。' : 'WEB 会議の仮押さえなら、ここで会議 URL を発行します。'}</span>
               </div>
             </div>
@@ -1805,7 +1896,7 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
                   <option value="">取り消さない</option>
                   {holds.map((h) => (
                     <option key={h.sessionId} value={h.sessionId}>
-                      {h.title}（候補 {h.candidates.length} 件: {h.candidates.map((c) => fmtDateTime(c.startAt)).join('、')}）
+                      {h.title}（候補 {h.candidates.length} 件: {h.candidates.map((c) => fmtEventTime(c.startAt, c.endAt)).join('、')}）
                     </option>
                   ))}
                 </select>
@@ -2098,6 +2189,7 @@ function otherThanClient(channel: string, counterpart: string | null | undefined
  */
 function ConversationPersonPicker({
   corporate,
+  group,
   conversationId,
   current,
   persons,
@@ -2106,6 +2198,8 @@ function ConversationPersonPicker({
   onError,
 }: {
   corporate: boolean;
+  /** LINE のグループ（1 人の相手ではないので「〜とのグループ」と言う） */
+  group: boolean;
   conversationId: number;
   current: { id: number; name: string; title: string | null } | null;
   persons: { id: number; name: string; title: string | null }[];
@@ -2140,8 +2234,11 @@ function ConversationPersonPicker({
     );
   }
   return (
-    <label className="inline-flex items-center gap-1 text-sm text-slate-600" title={corporate ? '法人の依頼者の、どの担当者とのやり取りか' : 'ご本人とのやり取りか、ご家族など窓口の方とのやり取りか'}>
-      相手:
+    <label
+      className="inline-flex items-center gap-1 text-sm text-slate-600"
+      title={group ? '依頼者本人が入っているグループか、ご家族など窓口の方（法人なら担当者）とのグループか' : corporate ? '法人の依頼者の、どの担当者とのやり取りか' : 'ご本人とのやり取りか、ご家族など窓口の方とのやり取りか'}
+    >
+      {group ? 'グループ:' : '相手:'}
       <select
         className="input w-auto py-0.5 text-sm"
         value={current ? String(current.id) : ''}
@@ -2153,11 +2250,12 @@ function ConversationPersonPicker({
         }}
         aria-label={corporate ? '会話の相手（担当者）' : '会話の相手（窓口）'}
       >
-        <option value="">{corporate ? '会社・代表' : 'ご本人'}</option>
+        <option value="">{group ? (corporate ? '会社・代表とのグループ' : '依頼者とのグループ') : corporate ? '会社・代表' : 'ご本人'}</option>
         {persons.map((p) => (
           <option key={p.id} value={p.id}>
             {corporate ? '担当' : '窓口'} {p.name}
             {p.title ? `（${p.title}）` : ''}
+            {group ? 'とのグループ' : ''}
           </option>
         ))}
         <option value="new">{corporate ? '＋ 新しい担当者として登録…' : '＋ 窓口の方（ご家族など）として登録…'}</option>

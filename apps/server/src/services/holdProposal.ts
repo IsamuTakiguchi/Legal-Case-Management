@@ -4,7 +4,7 @@ import { getSetting, getSettingInt } from './settings.js';
 import { sendToConversation } from './send.js';
 import { draftReply } from './style.js';
 import { createTask } from './tasks.js';
-import { addBusinessDays, toJstParts, type Channel } from '@lcm/shared';
+import { addBusinessDays, isAllDayRange, toJstParts, type Channel } from '@lcm/shared';
 import { logger } from '../logger.js';
 
 /**
@@ -44,11 +44,26 @@ export interface HoldProposalContext {
 }
 
 /** 候補 1 件の行（設定の形に当てはめる） */
-export function formatSlotLine(startAt: string, endAt: string, format: string): string {
+export function formatSlotLine(startAt: string, endAt: string, format: string, durationMinutes?: number | null): string {
   const s = toJstParts(new Date(startAt));
   const e = toJstParts(new Date(endAt));
   const hm = (p: { hour: number; minute: number }) => `${p.hour}:${String(p.minute).padStart(2, '0')}`;
-  return format
+  if (isAllDayRange(startAt, endAt)) {
+    // 終日の候補は時刻の部分（「{start}-」「{start}〜{end}」）を「終日」にする。2 日以上なら最終日も添える
+    const last = toJstParts(new Date(new Date(endAt).getTime() - 86400_000));
+    const allDay = last.month === s.month && last.day === s.day ? '終日' : `〜${last.month}/${last.day} 終日`;
+    return format
+      .replace(/\{start\}\s*[-~〜～]?\s*(\{end\})?/g, allDay)
+      .replace(/\{end\}/g, '')
+      .replace(/\{M\}/g, String(s.month))
+      .replace(/\{D\}/g, String(s.day))
+      .replace(/\{wd\}/g, WD[s.weekday]!)
+      .trim();
+  }
+  const spanMin = (new Date(endAt).getTime() - new Date(startAt).getTime()) / 60_000;
+  // 枠（所要時間より長い時間帯）は「13:00〜17:00の間で60分」のように、時間帯と長さを出す
+  const window = durationMinutes && spanMin > durationMinutes ? `${hm(s)}〜${hm(e)}の間で${durationMinutes}分` : null;
+  return (window ? format.replace(/\{start\}\s*[-~〜～]?\s*(\{end\})?/g, window).replace(/\{end\}/g, '') : format)
     .replace(/\{M\}/g, String(s.month))
     .replace(/\{D\}/g, String(s.day))
     .replace(/\{wd\}/g, WD[s.weekday]!)
@@ -60,10 +75,10 @@ export function formatSlotLine(startAt: string, endAt: string, format: string): 
  * 打診の本文を組み立てる。
  * 場所が決まっていれば、テンプレートの {location} に入れる（{location} が無いテンプレートなら最後に「場所: …」を足す）
  */
-export function buildProposalText(input: { kind: string; clientName: string | null; candidates: { startAt: string; endAt: string }[]; location?: string | null }): string {
+export function buildProposalText(input: { kind: string; clientName: string | null; candidates: { startAt: string; endAt: string }[]; location?: string | null; durationMinutes?: number | null }): string {
   const lineFormat = getSetting('hold_proposal_slot_format') || '{M}/{D} {start}-';
   const template = getSetting('hold_proposal_template') || '{kind}の候補日ですが、\n{slots}\nでいかがでしょうか？';
-  const slots = input.candidates.map((c) => formatSlotLine(c.startAt, c.endAt, lineFormat)).join('\n');
+  const slots = input.candidates.map((c) => formatSlotLine(c.startAt, c.endAt, lineFormat, input.durationMinutes)).join('\n');
   const location = input.location?.trim() ?? '';
   const text = template
     .replace(/\{kind\}/g, input.kind || '打合せ')
@@ -130,7 +145,7 @@ export function holdProposalContext(sessionId: number): HoldProposalContext {
     location,
     conversations,
     defaultConversationId: fromSession ?? conversations[0]?.id ?? null,
-    text: buildProposalText({ kind: s.kind, clientName: client?.name ?? null, candidates, location }),
+    text: buildProposalText({ kind: s.kind, clientName: client?.name ?? null, candidates, location, durationMinutes: s.durationMinutes }),
     defaultFollowUpAt: addBusinessDays(new Date(), getSettingInt('waiting_followup_business_days', 3)).toISOString(),
     blocked,
   };

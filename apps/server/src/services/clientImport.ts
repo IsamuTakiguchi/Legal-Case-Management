@@ -2,6 +2,7 @@
 import { eq } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { deletePersonsOfClient } from './clientPersons.js';
+import { removeCaseRows } from './caseDelete.js';
 import { storage } from '../integrations/storage.js';
 import * as cw from '../channels/chatwork.js';
 import { isConfigured } from '../config.js';
@@ -250,26 +251,20 @@ export function applyImport(
   return { created, updated, casesCreated };
 }
 
-/** 依頼者を削除する（事件・ノート・タスク・債権者も削除。会話と添付は紐付けを外す） */
+/** 依頼者を削除する（事件・ノート・タスク・債権者・事件の関係者も削除。会話と添付は紐付けを外す） */
 export function deleteClient(id: number): boolean {
   const d = db();
   const exists = d.select({ id: schema.clients.id }).from(schema.clients).where(eq(schema.clients.id, id)).get();
   if (!exists) return false;
-  d.transaction(() => {
+  d.transaction((tx) => {
+    // 事件ごとに、記録・タスク・債権者・関係者を消し、会話や予定の紐付けを外す
     const cases = d.select({ id: schema.cases.id }).from(schema.cases).where(eq(schema.cases.clientId, id)).all();
-    for (const k of cases) {
-      const creditors = d.select({ id: schema.creditors.id }).from(schema.creditors).where(eq(schema.creditors.caseId, k.id)).all();
-      for (const cr of creditors) d.delete(schema.creditorEvents).where(eq(schema.creditorEvents.creditorId, cr.id)).run();
-      d.delete(schema.creditors).where(eq(schema.creditors.caseId, k.id)).run();
-      d.delete(schema.caseNotes).where(eq(schema.caseNotes.caseId, k.id)).run();
-      d.update(schema.calendarEvents).set({ caseId: null }).where(eq(schema.calendarEvents.caseId, k.id)).run();
-      d.delete(schema.tasks).where(eq(schema.tasks.caseId, k.id)).run();
-    }
-    d.delete(schema.cases).where(eq(schema.cases.clientId, id)).run();
+    for (const k of cases) removeCaseRows(tx, k.id);
     d.delete(schema.tasks).where(eq(schema.tasks.clientId, id)).run();
     d.delete(schema.caseNotes).where(eq(schema.caseNotes.clientId, id)).run();
     deletePersonsOfClient(id);
     d.update(schema.conversations).set({ clientId: null }).where(eq(schema.conversations.clientId, id)).run();
+    d.update(schema.messages).set({ clientId: null }).where(eq(schema.messages.clientId, id)).run();
     d.update(schema.attachments).set({ clientId: null }).where(eq(schema.attachments.clientId, id)).run();
     d.update(schema.calendarEvents).set({ clientId: null }).where(eq(schema.calendarEvents.clientId, id)).run();
     d.update(schema.schedulingSessions).set({ clientId: null }).where(eq(schema.schedulingSessions.clientId, id)).run();

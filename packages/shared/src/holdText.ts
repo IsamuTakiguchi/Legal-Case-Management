@@ -1,4 +1,4 @@
-import { jstDate, toJstParts } from './dates.js';
+import { jstDate, toJstParts, allDayRange } from './dates.js';
 
 export interface ParsedHoldSlot {
   startAt: string;
@@ -7,6 +7,8 @@ export interface ParsedHoldSlot {
   label: string;
   /** 終了が書かれておらず既定の長さで補ったか */
   endAssumed: boolean;
+  /** 終日（「12/21 終日」） */
+  allDay?: boolean;
 }
 
 const WD = ['日', '月', '火', '水', '木', '金', '土'];
@@ -48,6 +50,7 @@ const DATE_RE = /(?:(\d{4})[\/年])?(\d{1,2})[\/月](\d{1,2})日?/;
  * 「12/21（月）10～11：30　13～15」のような 1 行を、候補日時（開始・終了）に分解する。
  * 複数行なら行ごとに日付を読む。日付の無い行は直前の日付を引き継ぐ。
  * 年は省略可（今日以降で最も近いその日付）。終了の無い時刻は defaultMinutes で補う。
+ * 「12/21 終日」のように書けば、その日 1 日（終日）の候補にする。
  */
 export function parseHoldText(text: string, opts: { now?: Date; defaultMinutes?: number } = {}): { slots: ParsedHoldSlot[]; errors: string[] } {
   const now = opts.now ?? new Date();
@@ -81,6 +84,14 @@ export function parseHoldText(text: string, opts: { now?: Date; defaultMinutes?:
     }
     if (!current) {
       errors.push(`日付がありません: ${rawLine.trim()}`);
+      continue;
+    }
+    // 「12/21（月）終日」は、その日 1 日を押さえる
+    if (/終日/.test(rest)) {
+      const ymd = `${current.y}-${String(current.m).padStart(2, '0')}-${String(current.d).padStart(2, '0')}`;
+      const r = allDayRange(ymd);
+      const p = toJstParts(new Date(r.startAt));
+      slots.push({ ...r, label: `${p.month}/${p.day}(${WD[p.weekday]}) 終日`, endAssumed: false, allDay: true });
       continue;
     }
     const found: { start: number; end: number | null }[] = [];

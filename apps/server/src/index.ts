@@ -48,13 +48,13 @@ export function createApp() {
       referrerPolicy: 'strict-origin-when-cross-origin',
     }),
   );
-  // 本文サイズの上限。Excel 取込だけ大きめに許可
+  // 本文サイズの上限。Excel 取込と送信に添付するファイルだけ大きめに許可
   const LIMIT_DEFAULT = 2 * 1024 * 1024;
   const LIMIT_UPLOAD = 25 * 1024 * 1024;
   const LIMIT_RESTORE = 512 * 1024 * 1024;
   app.use('*', (c, next) =>
     bodyLimit({
-      maxSize: c.req.path.includes('/backup/restore') ? LIMIT_RESTORE : c.req.path.includes('/creditors/import') ? LIMIT_UPLOAD : LIMIT_DEFAULT,
+      maxSize: c.req.path.includes('/backup/restore') ? LIMIT_RESTORE : c.req.path.includes('/creditors/import') || c.req.path.endsWith('/outbound-uploads') ? LIMIT_UPLOAD : LIMIT_DEFAULT,
       onError: (cc) => cc.json({ error: 'リクエストが大きすぎます' }, 413),
     })(c, next),
   );

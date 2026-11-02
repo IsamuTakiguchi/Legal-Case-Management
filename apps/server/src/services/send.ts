@@ -4,6 +4,7 @@ import { adapterFor } from '../channels/registry.js';
 import { CHATWORK_FILE_LIMIT, chatworkReplyPrefix, chatworkQuoteBlock, stripChatworkMarkup } from '../channels/chatwork.js';
 import { storage } from '../integrations/storage.js';
 import { readClientFile } from './attachments.js';
+import { readOutboundUpload, removeOutboundUploads } from './outboundUploads.js';
 import { learnFromSent } from './style.js';
 import { ingestMessage } from './inbox.js';
 import { getSetting, getSettingInt } from './settings.js';
@@ -34,7 +35,7 @@ export interface SendOptions {
  * - ファイルはチャネル制約に応じて添付／共有リンク／手動送付案内に振り分ける
  * - 送信文を会話に保存し、文体サンプルとして学習する
  */
-export async function sendToConversation(conversationId: number, input: SendMessageInput, opts: SendOptions = {}): Promise<SendOutcome> {
+export async function sendToConversation(conversationId: number, input: Omit<SendMessageInput, 'uploadIds'> & { uploadIds?: string[] }, opts: SendOptions = {}): Promise<SendOutcome> {
   const d = db();
   const conv = d.select().from(schema.conversations).where(eq(schema.conversations.id, conversationId)).get();
   if (!conv) throw new Error('会話が見つかりません');
@@ -43,30 +44,34 @@ export async function sendToConversation(conversationId: number, input: SendMess
   if (!adapter.isConfigured()) throw new Error(`${channel} が未設定です`);
   const client = conv.clientId ? d.select().from(schema.clients).where(eq(schema.clients.id, conv.clientId)).get() : null;
 
-  // ファイルの収集
-  const files: OutboundFile[] = [];
+  // ファイルの収集（保存先にあるファイルは、共有リンクにするときその場所を使う）
+  const files: { file: OutboundFile; stored: StoredRef | null }[] = [];
   for (const id of input.attachmentIds) {
     const a = d.select().from(schema.attachments).where(eq(schema.attachments.id, id)).get();
     if (!a || !a.storedPath) continue;
     const data = await storage().get({ itemId: a.driveItemId, path: a.storedPath });
-    files.push({ filename: a.filename, mime: a.mime, data });
+    files.push({ file: { filename: a.filename, mime: a.mime, data }, stored: { itemId: a.driveItemId, path: a.storedPath } });
   }
   for (const f of input.driveFiles) {
     if (!client) throw new Error('依頼者が未紐付けのためフォルダのファイルを送れません');
     const data = await readClientFile(client, { itemId: f.itemId, path: f.path ?? null, name: f.name });
-    files.push({ filename: f.name, data, mime: null });
+    files.push({ file: { filename: f.name, data, mime: null }, stored: { itemId: f.itemId, path: f.path ?? '' } });
   }
+  // パソコンから選んだファイル
+  // （アプリが自分で送る文や、この機能より前に予約した送信には uploadIds が無い）
+  const uploadIds = input.uploadIds ?? [];
+  for (const id of uploadIds) files.push({ file: readOutboundUpload(id), stored: null });
 
   const limit = channel === 'chatwork' ? CHATWORK_FILE_LIMIT : channel === 'gmail' ? GMAIL_ATTACH_LIMIT : 0;
   const direct: OutboundFile[] = [];
   const links: { name: string; url: string }[] = [];
   const manualFiles: string[] = [];
-  for (const f of files) {
+  for (const { file: f, stored } of files) {
     if (limit > 0 && f.data.length <= limit) {
       direct.push(f);
       continue;
     }
-    const link = await tryShareLink(f, input, client ?? null, conv.caseId ?? null);
+    const link = await tryShareLink(f, stored, client ?? null, conv.caseId ?? null);
     if (link) links.push({ name: f.filename, url: link });
     else manualFiles.push(f.filename);
   }
@@ -135,7 +140,13 @@ export async function sendToConversation(conversationId: number, input: SendMess
       subject: conv.subject,
       body: channel === 'chatwork' ? stripChatworkMarkup(text) : text,
       attachments: [],
-      raw: { replyToMessageId: replyTarget?.id ?? null, quoteMessageId: quoteTarget?.id ?? null, providerRequestId: result.requestId ?? null },
+      raw: {
+        replyToMessageId: replyTarget?.id ?? null,
+        quoteMessageId: quoteTarget?.id ?? null,
+        providerRequestId: result.requestId ?? null,
+        // 何を添付したか（会話の画面に出す）。リンクで送った・手動送付にしたものも含める
+        ...(files.length ? { sentFiles: files.map((f) => f.file.filename) } : {}),
+      },
       identity: {
         channel,
         email: conv.counterpartAddress,
@@ -161,6 +172,8 @@ export async function sendToConversation(conversationId: number, input: SendMess
   }
 
   d.update(schema.messages).set({ draftId: input.draftId ?? null }).where(eq(schema.messages.id, message.id)).run();
+  // 送り終えたら、パソコンから選んだファイルの一時置き場を片付ける
+  removeOutboundUploads(uploadIds);
 
   if (input.createWaitingTask) {
     const contact = conv.contactId ? d.select().from(schema.caseContacts).where(eq(schema.caseContacts.id, conv.contactId)).get() : null;
@@ -179,19 +192,16 @@ export async function sendToConversation(conversationId: number, input: SendMess
   return { messageId: message.id, note: result.note, links, manualFiles };
 }
 
-async function tryShareLink(f: OutboundFile, input: SendMessageInput, client: { id: number; name: string; onedriveFolderPath: string | null } | null, caseId: number | null): Promise<string | null> {
+type StoredRef = { itemId?: string | null; path: string };
+
+async function tryShareLink(f: OutboundFile, stored: StoredRef | null, client: { id: number; name: string; onedriveFolderPath: string | null } | null, caseId: number | null): Promise<string | null> {
   const st = storage();
   if (!st.shareLink) return null;
   const days = getSettingInt('share_link_expiry_days', 30);
   const expires = new Date(Date.now() + days * 86400_000);
   // 既存の保存済みファイルなら item を再利用、それ以外は依頼者フォルダの送付用サブフォルダに置いてからリンク化
-  const att = input.attachmentIds
-    .map((id) => db().select().from(schema.attachments).where(eq(schema.attachments.id, id)).get())
-    .find((a) => a && a.filename === f.filename);
   try {
-    if (att?.storedPath) return await st.shareLink({ itemId: att.driveItemId, path: att.storedPath }, expires);
-    const df = input.driveFiles.find((x) => x.name === f.filename);
-    if (df) return await st.shareLink({ itemId: df.itemId, path: df.path ?? '' }, expires);
+    if (stored) return await st.shareLink(stored, expires);
     if (client) {
       const { caseFolder, caseOfClient } = await import('./attachments.js');
       // 会話に事件が付いていれば、その事件のフォルダに置く

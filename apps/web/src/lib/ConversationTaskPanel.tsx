@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ACTIVE_TASK_STATUSES, TASK_STATUS_LABEL, isWaitingStatus } from '@lcm/shared';
+import { NEW_TASK_STATUSES, TASK_STATUS_LABEL, isWaitingStatus } from '@lcm/shared';
 import { api } from './api';
 
 interface DraftTask {
@@ -92,7 +92,7 @@ export function ConversationTaskPanel({ conversationId, onClose, onDone }: { con
               </div>
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <select className="input w-auto py-0.5" value={dft.status} onChange={(e) => setDraft(i, { status: e.target.value })} aria-label="状態">
-                  {ACTIVE_TASK_STATUSES.map((st) => (
+                  {NEW_TASK_STATUSES.map((st) => (
                     <option key={st} value={st}>
                       {TASK_STATUS_LABEL[st]}
                     </option>

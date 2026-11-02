@@ -1,7 +1,7 @@
 import type { calendar_v3 } from 'googleapis';
 import { calendarApi } from './google.js';
 import { env } from '../config.js';
-import type { EventKind } from '@lcm/shared';
+import { isAllDayRange, jstYmd, type EventKind } from '@lcm/shared';
 
 const TZ = 'Asia/Tokyo';
 
@@ -28,6 +28,17 @@ export interface CalendarEventSummary {
   /** 「予定なし」扱い（空き時間の計算で無視する） */
   transparent?: boolean;
   tag: Partial<EventTag>;
+}
+
+/**
+ * Google に送る開始・終了。終日（JST の 0:00〜0:00）なら日付だけで送り、終日の予定にする。
+ * 時刻のある予定に戻すときに日付が残らないよう、使わないほうは null で消す
+ */
+export function eventTimes(startAt: Date, endAt: Date): { start: calendar_v3.Schema$EventDateTime; end: calendar_v3.Schema$EventDateTime } {
+  if (isAllDayRange(startAt, endAt)) {
+    return { start: { date: jstYmd(startAt), dateTime: null, timeZone: null }, end: { date: jstYmd(endAt), dateTime: null, timeZone: null } };
+  }
+  return { start: { dateTime: startAt.toISOString(), timeZone: TZ, date: null }, end: { dateTime: endAt.toISOString(), timeZone: TZ, date: null } };
 }
 
 function calId() {
@@ -118,8 +129,7 @@ export async function createEvent(opts: {
       ...(opts.meet ? { conferenceData: { createRequest: { requestId: `lcm-${Date.now()}`, conferenceSolutionKey: { type: 'hangoutsMeet' } } } } : {}),
       location: opts.location ?? undefined,
       description: opts.description ?? undefined,
-      start: { dateTime: opts.startAt.toISOString(), timeZone: TZ },
-      end: { dateTime: opts.endAt.toISOString(), timeZone: TZ },
+      ...eventTimes(opts.startAt, opts.endAt),
       status: opts.tentative ? 'tentative' : 'confirmed',
       extendedProperties: { private: priv },
     },
@@ -153,8 +163,10 @@ export async function updateEvent(
       ...(patch.title !== undefined ? { summary: patch.title } : {}),
       ...(patch.description !== undefined ? { description: patch.description } : {}),
       ...(patch.location !== undefined ? { location: patch.location } : {}),
-      ...(patch.startAt ? { start: { dateTime: patch.startAt.toISOString(), timeZone: TZ } } : {}),
-      ...(patch.endAt ? { end: { dateTime: patch.endAt.toISOString(), timeZone: TZ } } : {}),
+      // 開始・終了は両方そろっていれば、終日かどうかを見て送る
+      ...(patch.startAt && patch.endAt ? eventTimes(patch.startAt, patch.endAt) : {}),
+      ...(patch.startAt && !patch.endAt ? { start: { dateTime: patch.startAt.toISOString(), timeZone: TZ } } : {}),
+      ...(patch.endAt && !patch.startAt ? { end: { dateTime: patch.endAt.toISOString(), timeZone: TZ } } : {}),
       ...(patch.tentative !== undefined ? { status: patch.tentative ? 'tentative' : 'confirmed' } : {}),
     },
   });

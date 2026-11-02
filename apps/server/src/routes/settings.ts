@@ -14,7 +14,7 @@ import { myAddresses, configuredMyAddresses } from '../jobs/gmailPoll.js';
 import { refixOwnMessages, inboxCounts } from '../services/inbox.js';
 import { generateStyleProfile, getStyleProfile, saveStyleProfile, importGmailSent, importChatworkMine, importPlainText, styleStats } from '../services/style.js';
 import { storage } from '../integrations/storage.js';
-import { channelSchema, countTasks } from '@lcm/shared';
+import { channelSchema, countTasks, isWaitingStatus } from '@lcm/shared';
 import { model as aiModel } from '../integrations/anthropic.js';
 import { openAlerts } from '../services/alerts.js';
 import { listTasks } from '../services/tasks.js';
@@ -229,7 +229,7 @@ settingsRoutes.get('/dashboard', (c) => {
   const alerts = openAlerts();
   const byType: Record<string, number> = {};
   for (const a of alerts) byType[a.type] = (byType[a.type] ?? 0) + 1;
-  const waiting = listTasks({ status: 'active' }).filter((t) => t.status !== 'open');
+  const waiting = listTasks({ status: 'active' }).filter((t) => isWaitingStatus(t.status));
   const needsReply = db().select({ id: schema.conversations.id }).from(schema.conversations).where(and(eq(schema.conversations.needsReply, true), eq(schema.conversations.archived, false))).all().length;
   const active = listTasks({ status: 'active' });
   const activeTasks = active.length;

@@ -1,21 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
 import { InstructionBox } from '../lib/InstructionBox';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useSpotlight } from '../lib/spotlight';
 import { useDraftRecord, useDraftGroup, useDraft, DraftHint } from '../lib/draft';
 import { RoomPicker } from '../lib/RoomPicker';
+import { CASE_DELETE_NOTE } from '../lib/caseDelete';
 import { ClientPicker } from '../lib/ClientPicker';
-import { HoldForm, HoldLocationEditor, HoldAddCandidates, fmtEventRange, type RescheduleTarget } from '../lib/HoldForm';
+import { HoldForm, HoldLocationEditor, HoldAddCandidates, fmtEventRange, WindowConfirm, isHoldWindow, type RescheduleTarget } from '../lib/HoldForm';
 import { LongText } from '../lib/LongText';
 import { TaskDeadlines, NewTaskDeadlines, TaskDeadlineSelect, FOLLOW_LABEL, DUE_HINT, FOLLOW_HINT } from '../lib/Deadline';
 import { MemoBadge, MemoForm, MEMO_HINT } from '../lib/Memo';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { CaseFolderCard, type CaseFolderInfo } from '../lib/CaseFolderCard';
 import { NoteComposer, ActionDeadlineInputs, dueYmd } from '../lib/NoteComposer';
-import { fmtDateTime, fmtDate, fmtYen, fmtBytes, toLocalInput, fromLocalInput, channelLabel } from '../lib/format';
-import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, messageLink, ACTIVE_TASK_STATUSES, taskStatusForWaiting, formatWareki, parseJaDate, addYearsIso, taskDeadline, jstYmd, actionDeadlinesLabel, isWaitingStatus, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus } from '@lcm/shared';
+import { fmtDateTime, fmtDate, fmtYen, fmtBytes, toLocalInput, fromLocalInput, channelLabel, fmtEventTime } from '../lib/format';
+import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, messageLink, ACTIVE_TASK_STATUSES, taskStatusForWaiting, formatWareki, parseJaDate, addYearsIso, taskDeadline, jstYmd, actionDeadlinesLabel, isWaitingStatus, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus, isAllDayRange, NEW_TASK_STATUSES } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 import { ChatworkTaskReply } from '../lib/ChatworkTaskReply';
@@ -24,9 +25,12 @@ import { CopyButton } from '../lib/copy';
 import { CaseContactSummary, type SummaryClient } from '../lib/CaseContactSummary';
 import type { ClientPerson } from '../lib/ClientPersons';
 import { ClientContactSetup, unreachableClientId } from '../lib/ClientContactSetup';
+import { useLocalUploads, LocalFileButton, LocalFileBadges, fileDropProps } from '../lib/LocalFileAttach';
+import { ContactSuggestions } from '../lib/ContactSuggestions';
 
 interface Note {
   id: number;
+  caseId?: number;
   kind: string;
   occurredAt: string;
   counterpart: string | null;
@@ -134,12 +138,12 @@ export default function CaseDetail() {
   // 中身（タスク名・メモ）を直している未了タスク
   const [editingTask, setEditingTask] = useState<number | null>(null);
   const d = useQuery({ queryKey: ['case', id], queryFn: () => api.get<CaseData>(`/cases/${id}`) });
-  // ダッシュボードの「最近の動き」から #note-ID で開かれたら、その記録まで運ぶ
+  // ダッシュボードの「最近の動き」から #note-ID で開かれたら、その記録まで運ぶ。会話の画面から #contacts で来たら関係者の欄へ
   const loaded = !!d.data;
   useEffect(() => {
     const hash = location.hash;
-    if (!loaded || !/^#note-\d+$/.test(hash)) return;
-    const t = setTimeout(() => document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80);
+    if (!loaded || !/^#(note-\d+|contacts)$/.test(hash)) return;
+    const t = setTimeout(() => document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: 'smooth', block: hash === '#contacts' ? 'start' : 'center' }), 80);
     return () => clearTimeout(t);
   }, [loaded]);
   // 期日の記録を保存した直後（または記録の「依頼者に期日連絡」「依頼者に連絡」）に開く連絡パネル。期日と打合せで中身が変わる
@@ -168,6 +172,18 @@ export default function CaseDetail() {
     },
   });
   const summary = useMutation({ mutationFn: () => api.post(`/cases/${id}/summary`), onSuccess: () => qc.invalidateQueries({ queryKey: ['case', id] }) });
+  const nav = useNavigate();
+  // 誤って登録した事件の削除
+  const remove = useMutation({
+    mutationFn: () => api.del(`/cases/${id}`),
+    onSuccess: () => {
+      caseDraft.clear();
+      qc.invalidateQueries({ queryKey: ['cases'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      if (c?.client) qc.invalidateQueries({ queryKey: ['client', String(c.client.id)] });
+      nav('/cases');
+    },
+  });
   if (!c) return <div className="loading-text text-slate-500">読み込み中…</div>;
   return (
     <div className="space-y-4">
@@ -300,6 +316,18 @@ export default function CaseDetail() {
                 保存
               </button>
               {save.error && <div className="fade-in text-xs text-red-600">{(save.error as Error).message}</div>}
+              <button
+                type="button"
+                className="w-full text-center text-xs text-slate-400 hover:text-red-600 hover:underline"
+                onClick={() => {
+                  if (confirm(`「${c.title}」を削除します。${CASE_DELETE_NOTE}`)) remove.mutate();
+                }}
+                disabled={remove.isPending}
+                title="誤って登録した事件を削除します。終わった事件は削除せず、区分を「終了事件」にしてください"
+              >
+                {remove.isPending ? '削除中…' : 'この事件を削除'}
+              </button>
+              {remove.error && <div className="fade-in text-xs text-red-600">{(remove.error as Error).message}</div>}
             </section>
             <section className="card text-sm">
               <div className="mb-2 flex items-center">
@@ -340,7 +368,24 @@ export default function CaseDetail() {
                           {t.note && <span className="block truncate text-xs text-slate-500" title={t.note}>{t.note.split('\n')[0]}</span>}
                         </span>
                         <TaskEditButton onClick={() => setEditingTask(t.id)} />
-                        <span className="badge badge-gray">{TASK_STATUS_LABEL[t.status as TaskStatus]}</span>
+                        {/* 状態はここで変えられる（起案・検討完了・待ち・完了など） */}
+                        <select
+                          className="input w-auto py-0.5 text-xs"
+                          value={t.status}
+                          aria-label={`${t.title}の状態`}
+                          onChange={(e) =>
+                            api.put(`/tasks/${t.id}`, { status: e.target.value }).then(() => {
+                              qc.invalidateQueries({ queryKey: ['case', id] });
+                              qc.invalidateQueries({ queryKey: ['tasks'] });
+                            })
+                          }
+                        >
+                          {[...ACTIVE_TASK_STATUSES, 'done' as const].map((st) => (
+                            <option key={st} value={st}>
+                              {TASK_STATUS_LABEL[st]}
+                            </option>
+                          ))}
+                        </select>
                         {/* 締切（タスクそのもの）と、返信待ちなら返信期限。押すと変えられる */}
                         <span className="flex flex-wrap items-center">
                           <TaskDeadlines
@@ -454,7 +499,7 @@ export default function CaseDetail() {
                     <li key={e.id} className="border-b border-slate-100 pb-1 last:border-0">
                       {/* 狭い列でも件名がつぶれないよう、日時・ボタンの行と件名の行を分ける */}
                       <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-slate-500">{fmtDateTime(e.startAt)}</span>
+                      <span className="text-slate-500">{fmtEventTime(e.startAt, e.endAt)}</span>
                       <span className="badge badge-gray">{EVENT_KIND_LABEL[e.kind as EventKind]}</span>
                       <span className="ml-auto flex flex-wrap items-center gap-2">
                       <button className="text-xs text-slate-500 hover:text-blue-700 hover:underline" onClick={() => setRelinking(relinking === e.id ? null : e.id)} title="別の依頼者・事件に紐付けてしまったときに直します">
@@ -587,9 +632,12 @@ interface HoldSet {
   location: string | null;
   web: boolean;
   candidates: HoldCandidate[];
+  /** 所要時間（分）。候補が枠なら、確定するときにこの長さで時間を決める */
+  durationMinutes?: number | null;
 }
 
 function fmtSlot(startAt: string, endAt: string): string {
+  if (isAllDayRange(startAt, endAt)) return fmtEventTime(startAt, endAt);
   const t = (iso: string) => new Date(iso).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' });
   return `${fmtDate(startAt)} ${t(startAt)}〜${t(endAt)}`;
 }
@@ -744,6 +792,8 @@ function CaseHolds({
   const [addingTo, setAddingTo] = useState<number | null>(null);
   // 候補日の打診を開いている日程調整
   const [proposing, setProposing] = useState<number | null>(null);
+  // 枠で押さえた候補を確定する時間を選んでいる候補（googleEventId）
+  const [windowFor, setWindowFor] = useState<string | null>(null);
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['case-holds', caseId] });
     qc.invalidateQueries({ queryKey: ['case', String(caseId)] });
@@ -752,8 +802,10 @@ function CaseHolds({
   };
   const fail = (e: unknown) => setMsg({ kind: 'err', text: (e as Error).message });
   const confirmHold = useMutation({
-    mutationFn: (v: { sessionId: number; eventId: number }) => api.post<{ webText?: string }>(`/calendar/holds/${v.sessionId}/confirm`, { eventId: v.eventId }),
+    mutationFn: (v: { sessionId: number; eventId: number; startAt?: string; endAt?: string }) =>
+      api.post<{ webText?: string }>(`/calendar/holds/${v.sessionId}/confirm`, { eventId: v.eventId, startAt: v.startAt, endAt: v.endAt }),
     onSuccess: (r) => {
+      setWindowFor(null);
       refresh();
       setMsg({ kind: 'ok', text: `確定しました。ほかの候補の仮押さえは削除しました${r.webText ? `\n${r.webText}` : ''}` });
     },
@@ -929,6 +981,8 @@ function CaseHolds({
                       className="btn btn-sm btn-primary ml-auto"
                       disabled={confirmHold.isPending}
                       onClick={() => {
+                        // 枠の候補は、その中で確定する時間を選んでから
+                        if (isHoldWindow(v, s.durationMinutes)) return setWindowFor(windowFor === v.googleEventId ? null : v.googleEventId);
                         const extra = s.rescheduleOf ? `\n元の予定（${fmtEventRange(s.rescheduleOf.startAt, s.rescheduleOf.endAt)}）も削除されます。` : '';
                         if (window.confirm(`${fmtSlot(v.startAt, v.endAt)} で確定しますか？\nほかの候補（${Math.max(s.candidates.length - 1, 0)} 件）の仮押さえは削除されます。${extra}`))
                           confirmHold.mutate({ sessionId: s.sessionId, eventId: v.eventId! });
@@ -951,6 +1005,16 @@ function CaseHolds({
                   )}
                   {!v.eventId && (
                     <span className="ml-auto text-xs text-slate-400">カレンダーにありません</span>
+                  )}
+                  {windowFor === v.googleEventId && v.eventId && s.durationMinutes && (
+                    <WindowConfirm
+                      candidate={v}
+                      durationMinutes={s.durationMinutes}
+                      pending={confirmHold.isPending}
+                      note={`ほかの候補（${Math.max(s.candidates.length - 1, 0)} 件）の仮押さえは削除されます。${s.rescheduleOf ? `元の予定（${fmtEventRange(s.rescheduleOf.startAt, s.rescheduleOf.endAt)}）も削除されます。` : ''}`}
+                      onConfirm={(t) => confirmHold.mutate({ sessionId: s.sessionId, eventId: v.eventId!, ...t })}
+                      onCancel={() => setWindowFor(null)}
+                    />
                   )}
                 </li>
               ))}
@@ -1018,7 +1082,7 @@ function CaseTaskForm({ caseId, hasStaff, onDone }: { caseId: number; hasStaff: 
   const [msg, setMsg] = useState('');
   // 書きかけのタスク名は、この事件ごとに自動保存する
   const draft = useDraft(`case:${caseId}:new-task`, title, setTitle);
-  const waiting = status !== 'open';
+  const waiting = isWaitingStatus(status);
   const add = useMutation({
     mutationFn: () => {
       // 1 行目がタスク名、2 行目からはメモ（タスク画面と同じ書き方）
@@ -1074,7 +1138,7 @@ function CaseTaskForm({ caseId, hasStaff, onDone }: { caseId: number; hasStaff: 
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <select className="input w-auto py-0.5 text-xs" value={status} onChange={(e) => setStatus(e.target.value as TaskStatus)} aria-label="状態">
-          {ACTIVE_TASK_STATUSES.map((st) => (
+          {NEW_TASK_STATUSES.map((st) => (
             <option key={st} value={st}>
               {TASK_STATUS_LABEL[st]}
             </option>
@@ -1121,7 +1185,7 @@ function ContactsSection({ caseId, traffic }: { caseId: number; traffic: boolean
     setForm({ role: x.role, name: x.name, organization: x.organization ?? '', department: x.department ?? '', emails: x.emails.join(', '), phone: x.phone ?? '', fax: x.fax ?? '', note: x.note ?? '' });
   };
   return (
-    <section className="card text-sm">
+    <section id="contacts" className="card scroll-mt-4 text-sm">
       <div className="mb-2 flex items-center gap-2">
         <h2 className="font-semibold">{traffic ? '関係者（保険会社・相手方など）' : '関係者（相手方・代理人など）'}</h2>
         <button className="btn btn-sm ml-auto" onClick={() => setPasting((v) => !v)} title="メモ（事故日・担当者・電話・FAX）を貼り付けてまとめて登録">
@@ -1362,6 +1426,8 @@ function NoteNoticePanel({ noteId, kind, onClose, onSent }: { noteId: number; ki
   const [text, setText] = useState('');
   // 添付に選んだファイル（候補からでも、フォルダから探した分でも同じ入れ物に入れる）
   const [picked, setPicked] = useState<Map<string, DriveDoc>>(new Map());
+  // パソコンから選んだファイル
+  const uploads = useLocalUploads();
   const [browse, setBrowse] = useState(false);
   const [msg, setMsg] = useState('');
   const prep = useQuery({
@@ -1396,11 +1462,13 @@ function NoteNoticePanel({ noteId, kind, onClose, onSent }: { noteId: number; ki
         text,
         attachmentIds: [],
         driveFiles: [...picked.values()].map((d) => ({ itemId: d.itemId, name: d.name, path: d.path })),
+        uploadIds: uploads.ids,
         draftId: n!.draftId,
         createWaitingTask: false,
       }),
     onSuccess: (r) => {
       noticeDraft.clear();
+      uploads.clear();
       setMsg(`${n!.channelLabel} で送信しました${r.note ? `（${r.note}）` : ''}${r.links.length ? `。${r.links.length} 件はリンクで送付` : ''}${r.manualFiles.length ? `。${r.manualFiles.join('、')} は手動送付が必要です` : ''}`);
       setTimeout(onSent, 1500);
     },
@@ -1493,7 +1561,7 @@ function NoteNoticePanel({ noteId, kind, onClose, onSent }: { noteId: number; ki
               )}
             </div>
           )}
-          <textarea className="input min-h-44 text-sm" value={text} onChange={(e) => setText(e.target.value)} disabled={prep.isFetching} />
+          <textarea className="input min-h-44 text-sm" value={text} onChange={(e) => setText(e.target.value)} disabled={prep.isFetching} {...fileDropProps(uploads)} />
           <DraftHint handle={noticeDraft} />
           <div className="text-sm">
             <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
@@ -1504,6 +1572,7 @@ function NoteNoticePanel({ noteId, kind, onClose, onSent }: { noteId: number; ki
               <button type="button" className="btn btn-sm ml-auto" onClick={() => setBrowse(!browse)}>
                 {browse ? 'フォルダを閉じる' : '📁 フォルダから選ぶ'}
               </button>
+              <LocalFileButton uploads={uploads} />
             </div>
             {n.docs.length > 0 ? (
               <div className="flex flex-wrap gap-2">
@@ -1540,9 +1609,10 @@ function NoteNoticePanel({ noteId, kind, onClose, onSent }: { noteId: number; ki
                 ))}
               </div>
             )}
+            <LocalFileBadges uploads={uploads} className="mt-2" />
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <button className="btn btn-primary" onClick={() => send.mutate()} disabled={send.isPending || prep.isFetching || !text.trim()}>
+            <button className="btn btn-primary" onClick={() => send.mutate()} disabled={send.isPending || prep.isFetching || !text.trim() || uploads.uploading.length > 0}>
               {send.isPending ? '送信中…' : `${n.channelLabel} で送信`}
             </button>
             <Link to={`/inbox/${n.conversationId}`} className="btn btn-sm">
@@ -1681,6 +1751,15 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
           ))}
         </select>
       </div>
+      <ContactSuggestions
+        caseId={n.caseId ?? null}
+        name={counterpart}
+        phone={kind === 'phone' ? phone : ''}
+        onPick={(s) => {
+          if (s.name) setCounterpart(s.name);
+          if (s.phone && kind === 'phone') setPhone(s.phone);
+        }}
+      />
       <div>
         <label className="label">要旨</label>
         <textarea className="input min-h-16 text-sm" value={gist} onChange={(e) => setGist(e.target.value)} placeholder="空なら元メモがそのまま表示されます" />
@@ -2109,7 +2188,7 @@ function NoteTaskPanel({ n, onDone, onClose }: { n: Note; onDone: () => void; on
                 </div>
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   <select className="input w-auto py-0.5" value={dft.status} onChange={(e) => setDraft(i, { status: e.target.value })} aria-label="状態">
-                    {ACTIVE_TASK_STATUSES.map((st) => (
+                    {NEW_TASK_STATUSES.map((st) => (
                       <option key={st} value={st}>
                         {TASK_STATUS_LABEL[st]}
                       </option>
@@ -2207,7 +2286,7 @@ function NoteTaskPanel({ n, onDone, onClose }: { n: Note; onDone: () => void; on
         <label className="flex items-center gap-1">
           状態
           <select className="input w-auto py-0.5" value={status} onChange={(e) => setStatus(e.target.value)}>
-            {ACTIVE_TASK_STATUSES.map((st) => (
+            {NEW_TASK_STATUSES.map((st) => (
               <option key={st} value={st}>
                 {TASK_STATUS_LABEL[st]}
               </option>

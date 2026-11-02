@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useDraftGroup, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
-import { ContactLinkForm } from '../lib/ContactLinkForm';
+import { ConversationLinkForm } from '../lib/ConversationLinkForm';
 import { channelBadge, channelLabel, fmtDateTime, fromLocalInput, todayLocalInput } from '../lib/format';
 import { schedulingLink } from '../lib/alertLink';
 import { MemoSuggestionCard, type MemoCandidate } from '../lib/Memo';
@@ -165,7 +165,7 @@ function UnlinkedHeader({ alert }: { alert: Alert }) {
         {p.preview ? <span className="whitespace-pre-wrap">「{p.preview}」</span> : <span className="text-slate-400">（本文なし。写真やファイルだけの受信の可能性があります）</span>}
         {p.sentAt && <span className="ml-2 whitespace-nowrap text-xs text-slate-400">{fmtDateTime(p.sentAt)} 受信</span>}
       </div>
-      <div className="text-xs text-slate-500">依頼者か事件の関係者に紐付けると、以後の受信と添付ファイルが自動で振り分けられます。</div>
+      <div className="text-xs text-slate-500">依頼者（ご家族・窓口を含む）か事件の関係者に紐付けると、以後の受信と添付ファイルが自動で振り分けられます。</div>
     </div>
   );
 }
@@ -211,37 +211,23 @@ function LineFollowAction({ alert, onDone }: { alert: Alert; onDone: () => void 
 
 function LinkAction({ alert, onLink, onContactLinked, label = '依頼者に紐付け' }: { alert: Alert; onLink: (clientId: number) => void; onContactLinked?: () => void; label?: string }) {
   const [id, setId] = useState('');
-  const [mode, setMode] = useState<'client' | 'contact'>('client');
   const conversationId = alert.payload.conversationId ? Number(alert.payload.conversationId) : null;
-  // 会話の未紐付けは「依頼者本人」か「事件の関係者（相手方・相手方代理人など）」かを選べる
+  // 会話の未紐付けは「依頼者本人」「依頼者のご家族・窓口」「事件の関係者」から選べる（LINE のグループは「〜とのグループ」）
   if (onContactLinked && conversationId) {
+    const group = !!alert.payload.lineGroup;
     return (
-      <div className="space-y-2">
-        <div className="flex flex-wrap items-center gap-3 text-sm">
-          <label className="flex items-center gap-1">
-            <input type="radio" name={`mode-${alert.id}`} checked={mode === 'client'} onChange={() => setMode('client')} /> 依頼者本人
-          </label>
-          <label className="flex items-center gap-1" title="相手方・相手方代理人・裁判所・保険会社など、依頼者以外の相手">
-            <input type="radio" name={`mode-${alert.id}`} checked={mode === 'contact'} onChange={() => setMode('contact')} /> 事件の関係者
-          </label>
+      <ConversationLinkForm
+        conversationId={conversationId}
+        group={group}
+        defaultName={String(alert.payload.displayName ?? '')}
+        newClientHref={`/clients?new=${encodeURIComponent(group ? '' : String(alert.payload.displayName ?? ''))}${newClientEmail(alert)}`}
+        extra={
           <Link to={`/inbox/${conversationId}`} className="btn btn-sm">
             会話を開く
           </Link>
-        </div>
-        {mode === 'client' ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <ClientPicker value={id} onChange={setId} emptyLabel={`${label}…`} />
-            <button className="btn btn-primary btn-sm" disabled={!id} onClick={() => onLink(Number(id))}>
-              紐付ける
-            </button>
-            <Link to={`/clients?new=${encodeURIComponent(String(alert.payload.displayName ?? ''))}${newClientEmail(alert)}`} className="btn btn-sm">
-              新規依頼者を登録
-            </Link>
-          </div>
-        ) : (
-          <ContactLinkForm conversationId={conversationId} defaultName={String(alert.payload.displayName ?? '')} onDone={onContactLinked} />
-        )}
-      </div>
+        }
+        onDone={onContactLinked}
+      />
     );
   }
   return (

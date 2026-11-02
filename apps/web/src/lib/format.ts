@@ -1,9 +1,18 @@
-import { CHANNEL_LABEL, type Channel } from '@lcm/shared';
+import { CHANNEL_LABEL, isAllDayRange, type Channel } from '@lcm/shared';
 
 export function fmtDateTime(iso?: string | null): string {
   if (!iso) return '';
   const d = new Date(iso);
   return d.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', weekday: 'short' });
+}
+
+/** 予定の日時。終日なら「10/30(金) 終日」（2 日以上なら「10/30(金)〜10/31 終日」）、それ以外は開始日時 */
+export function fmtEventTime(startAt: string, endAt: string): string {
+  if (!isAllDayRange(startAt, endAt)) return fmtDateTime(startAt);
+  const md = (iso: string, weekday: boolean) => new Date(iso).toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric', ...(weekday ? { weekday: 'short' as const } : {}) });
+  const last = new Date(new Date(endAt).getTime() - 86400_000).toISOString();
+  const first = md(startAt, true);
+  return md(last, false) === md(startAt, false) ? `${first} 終日` : `${first}〜${md(last, false)} 終日`;
 }
 
 export function fmtDate(iso?: string | null): string {

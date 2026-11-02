@@ -8,6 +8,7 @@ import { replyToChatworkTask } from '../services/taskReply.js';
 import { callbackContext, saveCallbackNote } from '../services/taskCallback.js';
 import { createMemo, detectMemos, memoInputSchema, snoozeMemo } from '../services/memos.js';
 import { isConfigured } from '../config.js';
+import { isLineGroupThread } from '../channels/line.js';
 import { db, schema } from '../db/index.js';
 import { eq, desc } from 'drizzle-orm';
 
@@ -37,7 +38,7 @@ taskRoutes.put('/tasks/:id', async (c) => {
 
 /** チェックしたタスクをまとめて処理 */
 taskRoutes.post('/tasks/bulk', async (c) => {
-  const body = z.object({ ids: z.array(z.number().int()).min(1).max(500), action: z.enum(['done', 'open', ...WAITING_TASK_STATUSES, 'nudge', 'delete']) }).parse(await c.req.json());
+  const body = z.object({ ids: z.array(z.number().int()).min(1).max(500), action: z.enum(['done', 'open', 'drafted', ...WAITING_TASK_STATUSES, 'nudge', 'delete']) }).parse(await c.req.json());
   return c.json(bulkUpdateTasks(body.ids, body.action));
 });
 
@@ -80,10 +81,19 @@ taskRoutes.get('/tasks/:id/callback', (c) => c.json(callbackContext(Number(c.req
 
 taskRoutes.post('/tasks/:id/callback', async (c) => {
   const raw = await c.req.json();
-  const input = caseNoteInputSchema.omit({ kind: true }).parse(raw);
+  // 誰の事件か未確定なら事件の代わりに provisional（仮の呼び名）を受け取り、「氏名未確認」の相談を作って記録する
+  const provisional = z.object({ label: z.string().trim().max(100).nullable().optional() }).nullable().optional().parse(raw.provisional);
+  const input = caseNoteInputSchema.omit({ kind: true }).extend({ caseId: z.number().int().nullable().optional() }).parse(raw);
   const mode = raw.createTasks === 'single' ? 'single' : raw.createTasks === 'each' || raw.createTasks === true ? 'each' : false;
   const taskIndexes = Array.isArray(raw.taskIndexes) ? (raw.taskIndexes as unknown[]).map(Number).filter((n) => Number.isInteger(n) && n >= 0) : undefined;
-  return c.json(await saveCallbackNote(Number(c.req.param('id')), input, { completeTask: raw.completeTask === true, createTasks: mode, taskIndexes }));
+  return c.json(
+    await saveCallbackNote(Number(c.req.param('id')), input, {
+      completeTask: raw.completeTask === true,
+      createTasks: mode,
+      taskIndexes,
+      provisional: provisional ? { label: provisional.label || null } : null,
+    }),
+  );
 });
 
 // ---- 時期未定の備忘 ----
@@ -110,9 +120,19 @@ taskRoutes.post('/tasks/:id/memo-snooze', async (c) => {
 // ---- アラート ----
 taskRoutes.get('/alerts', (c) => {
   const status = c.req.query('status') ?? 'open';
-  if (status === 'open') return c.json(openAlerts(c.req.query('type') || undefined));
+  if (status === 'open') return c.json(withLineGroup(openAlerts(c.req.query('type') || undefined)));
   return c.json(db().select().from(schema.alerts).where(eq(schema.alerts.status, status)).orderBy(desc(schema.alerts.createdAt)).limit(100).all());
 });
+
+/** 未紐付けの LINE がグループか（紐付けの選択肢を「〜とのグループ」にする） */
+function withLineGroup<T extends { type: string; payload: unknown }>(alerts: T[]): T[] {
+  return alerts.map((a) => {
+    const p = a.payload as { channel?: string; conversationId?: number };
+    if (a.type !== 'unlinked_contact' || p.channel !== 'line' || !p.conversationId) return a;
+    const conv = db().select({ externalThreadId: schema.conversations.externalThreadId }).from(schema.conversations).where(eq(schema.conversations.id, p.conversationId)).get();
+    return { ...a, payload: { ...p, lineGroup: !!conv && isLineGroupThread(conv.externalThreadId) } };
+  });
+}
 
 taskRoutes.post('/alerts/:id/resolve', async (c) => {
   const body = z.object({ status: z.enum(['resolved', 'dismissed']).default('resolved') }).parse(await c.req.json().catch(() => ({})));

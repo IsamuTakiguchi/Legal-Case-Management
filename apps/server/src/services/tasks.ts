@@ -9,6 +9,8 @@ import * as cw from '../channels/chatwork.js';
 import { logger } from '../logger.js';
 import { generateStructured } from '../integrations/anthropic.js';
 import { z } from 'zod';
+import { caseForChatworkRoom, guessClientFromText, primaryOpenCase } from './staff.js';
+import { findClientByIdentity } from './identity.js';
 
 export type TaskRow = typeof schema.tasks.$inferSelect;
 
@@ -115,18 +117,18 @@ export function updateTask(id: number, patch: Partial<TaskInput> & { status?: Ta
         cw.setTaskStatus(cur.chatworkRoomId, cur.chatworkTaskId, 'done').catch((err) => logger.warn({ err }, 'Chatwork タスク完了に失敗'));
       }
     }
-    if (patch.status === 'open') {
-      resolveAlertsByKeyPrefix(`waiting_overdue:${id}:`);
-      if (cur.status === 'done' && cur.chatworkTaskId && cur.chatworkRoomId && isConfigured('chatwork')) {
-        cw.setTaskStatus(cur.chatworkRoomId, cur.chatworkTaskId, 'open').catch((err) => logger.warn({ err }, 'Chatwork タスク再開に失敗'));
-      }
+    // 対応中・起案・検討完了（自分の手元にある状態）に戻したら、待ちの期限切れのお知らせは閉じる
+    if (patch.status === 'open' || patch.status === 'drafted') resolveAlertsByKeyPrefix(`waiting_overdue:${id}:`);
+    // 完了から未完了に戻したら、Chatwork のタスクも未完了に戻す
+    if (cur.status === 'done' && patch.status !== 'memo' && cur.chatworkTaskId && cur.chatworkRoomId && isConfigured('chatwork')) {
+      cw.setTaskStatus(cur.chatworkRoomId, cur.chatworkTaskId, 'open').catch((err) => logger.warn({ err }, 'Chatwork タスク再開に失敗'));
     }
   }
   db().update(schema.tasks).set(set).where(eq(schema.tasks.id, id)).run();
   return db().select().from(schema.tasks).where(eq(schema.tasks.id, id)).get()!;
 }
 
-export type TaskBulkAction = 'done' | 'open' | 'waiting_client' | 'waiting_other' | 'waiting_staff' | 'nudge' | 'delete';
+export type TaskBulkAction = 'done' | 'open' | 'drafted' | 'waiting_client' | 'waiting_other' | 'waiting_staff' | 'nudge' | 'delete';
 
 /** 一覧でチェックしたタスクをまとめて処理する（状態変更・催促した・削除） */
 export function bulkUpdateTasks(ids: number[], action: TaskBulkAction): { updated: number } {
@@ -330,6 +332,50 @@ export function chatworkSource(t: cw.ChatworkTask) {
   };
 }
 
+/**
+ * Chatwork のタスクを、どの依頼者・事件のものかに紐付ける。
+ * 1. 元のメッセージを取り込んでいれば、そのメッセージ（無ければ会話）の依頼者・事件
+ * 2. 事件専用ルームなら、その事件
+ * 3. 依頼者（法人の担当者を含む）のルームなら、その依頼者
+ * 4. それでも分からなければ（事務局のルーム・マイチャットなど）、本文の依頼者名から推定
+ * 依頼者だけ分かったときは、その依頼者の主な事件に付ける
+ */
+export function chatworkTaskLink(t: Pick<cw.ChatworkTask, 'room' | 'message_id' | 'body'>): { clientId: number | null; caseId: number | null } {
+  const d = db();
+  let clientId: number | null = null;
+  let caseId: number | null = null;
+  const msg = t.message_id
+    ? d
+        .select({ clientId: schema.messages.clientId, caseId: schema.messages.caseId, conversationId: schema.messages.conversationId })
+        .from(schema.messages)
+        .where(and(eq(schema.messages.channel, 'chatwork'), eq(schema.messages.externalId, t.message_id)))
+        .get()
+    : undefined;
+  if (msg) {
+    const conv = d.select({ clientId: schema.conversations.clientId, caseId: schema.conversations.caseId }).from(schema.conversations).where(eq(schema.conversations.id, msg.conversationId)).get();
+    caseId = msg.caseId ?? conv?.caseId ?? null;
+    clientId = msg.clientId ?? conv?.clientId ?? null;
+  }
+  if (!caseId) {
+    const roomCase = caseForChatworkRoom(t.room.room_id);
+    if (roomCase && (!clientId || roomCase.clientId === clientId)) caseId = roomCase.id;
+  }
+  if (!clientId && !caseId) clientId = findClientByIdentity({ channel: 'chatwork', chatworkRoomId: t.room.room_id })?.id ?? null;
+  if (!clientId && !caseId) {
+    // 宛先の行（「@瀧口 勇さん」）は弁護士・事務局の名前なので、依頼者名の推定から外す
+    const text = cw
+      .stripChatworkMarkup(t.body)
+      .split('\n')
+      .filter((l) => !(l.trim().startsWith('@') && l.trim().length <= 20))
+      .join('\n');
+    const g = guessClientFromText(text);
+    if (g) ({ clientId, caseId } = g);
+  }
+  if (caseId) clientId = d.select({ clientId: schema.cases.clientId }).from(schema.cases).where(eq(schema.cases.id, caseId)).get()?.clientId ?? clientId;
+  else if (clientId) caseId = primaryOpenCase(clientId)?.id ?? null;
+  return { clientId, caseId };
+}
+
 /** Chatwork の自分のタスクを取り込む（既存運用を壊さない） */
 export async function importChatworkTasks(): Promise<{ imported: number; completed: number }> {
   if (!isConfigured('chatwork')) return { imported: 0, completed: 0 };
@@ -341,15 +387,17 @@ export async function importChatworkTasks(): Promise<{ imported: number; complet
     if (existing) {
       // 以前の版で取り込んだタスクには、返信先（元のメッセージ・振った人）が入っていないので足す
       if (!existing.chatworkMessageId && t.message_id) db().update(schema.tasks).set(chatworkSource(t)).where(eq(schema.tasks.id, existing.id)).run();
+      linkImportedChatworkTask(existing, t);
       continue;
     }
-    const client = db().select().from(schema.clients).where(eq(schema.clients.chatworkRoomId, t.room.room_id)).get();
+    const link = chatworkTaskLink(t);
     db()
       .insert(schema.tasks)
       .values({
         title: chatworkTaskTitle(t.body),
         note: cw.stripChatworkMarkup(t.body),
-        clientId: client?.id ?? null,
+        clientId: link.clientId,
+        caseId: link.caseId,
         status: 'open',
         chatworkRoomId: t.room.room_id,
         chatworkTaskId: t.task_id,
@@ -371,6 +419,20 @@ export async function importChatworkTasks(): Promise<{ imported: number; complet
     completed++;
   }
   return { imported, completed };
+}
+
+/**
+ * 取り込み済みで、依頼者・事件が付いていないタスクに後から付ける
+ * （以前の版では事件を付けていなかった・取込の時点では元のメッセージをまだ取り込んでいなかった、など）。
+ * 依頼者だけ付いているタスクは、手で直していなければ、同じ依頼者の事件を足す
+ */
+function linkImportedChatworkTask(existing: TaskRow, t: cw.ChatworkTask) {
+  if (existing.caseId) return;
+  if (existing.clientId && existing.updatedAt !== existing.createdAt) return;
+  const link = chatworkTaskLink(t);
+  if (!link.caseId && !link.clientId) return;
+  if (existing.clientId && existing.clientId !== link.clientId) return;
+  db().update(schema.tasks).set({ clientId: link.clientId, caseId: link.caseId }).where(eq(schema.tasks.id, existing.id)).run();
 }
 
 /**

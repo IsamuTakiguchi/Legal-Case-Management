@@ -5,6 +5,9 @@ import { api } from './api';
 import { fmtDateTime } from './format';
 import { NoteComposer } from './NoteComposer';
 
+/** 事件の選択肢のうち「誰の事件か未確定」 */
+const PROVISIONAL = 'provisional';
+
 interface CallbackCtx {
   taskId: number;
   title: string;
@@ -28,13 +31,18 @@ export function CallbackPanel({ taskId, onClose, onSaved }: { taskId: number; on
   // 候補に無い事件を選ぶとき（進行中の事件の一覧から）
   const [showAll, setShowAll] = useState(false);
   const all = useQuery({ queryKey: ['cases', 'open'], queryFn: () => api.get<{ id: number; title: string; clientName: string }[]>('/cases?status=open'), enabled: showAll });
+  // 事件の id、または誰の事件か未確定なら PROVISIONAL
   const [caseId, setCaseId] = useState('');
+  // 誰の事件か未確定のとき、新しく作る「氏名未確認」の相談者の呼び名
+  const [label, setLabel] = useState('');
   const d = ctx.data;
   useEffect(() => {
     if (!d) return;
     setCaseId(d.defaultCaseId ? String(d.defaultCaseId) : '');
+    setLabel(d.callerName ? `（氏名未確認）${d.callerName.replace(/(さん|様|氏)$/, '')}さん` : '');
     if (!d.cases.length) setShowAll(true);
   }, [d]);
+  const provisional = caseId === PROVISIONAL;
   const options = [...(d?.cases ?? []), ...(showAll ? (all.data ?? []).filter((c) => !d?.cases.some((x) => x.id === c.id)) : [])];
   return (
     <section className="fade-in card space-y-3 border-green-200 text-sm">
@@ -69,6 +77,7 @@ export function CallbackPanel({ taskId, onClose, onSaved }: { taskId: number; on
             <span className="shrink-0 whitespace-nowrap">記録する事件</span>
             <select className="input w-full min-w-0 sm:w-auto sm:flex-1" value={caseId} onChange={(e) => setCaseId(e.target.value)}>
               <option value="">（事件を選んでください）</option>
+              <option value={PROVISIONAL}>誰の事件か未確定（新しい相談として記録）</option>
               {options.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.clientName ? `${c.clientName}：` : ''}
@@ -81,16 +90,31 @@ export function CallbackPanel({ taskId, onClose, onSaved }: { taskId: number; on
                 ほかの事件
               </button>
             )}
-            {caseId && (
+            {caseId && !provisional && (
               <Link to={`/cases/${caseId}`} className="text-xs text-blue-700 hover:underline">
                 事件を開く
               </Link>
             )}
           </label>
+          {provisional && (
+            <div className="space-y-1 rounded-md bg-black/[0.03] p-2">
+              <label className="flex flex-wrap items-center gap-1">
+                <span className="shrink-0 whitespace-nowrap">仮の呼び名</span>
+                <input className="input w-full min-w-0 sm:w-64" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="（氏名未確認）相談者" />
+              </label>
+              <div className="text-xs text-slate-500">
+                「氏名未確認」の相談者と相談の事件を作り、そこに記録します{d.callerPhone ? `（電話番号 ${d.callerPhone} も登録します）` : ''}。誰の事件か分かったら、依頼者ページで氏名を確定するか、既存の依頼者に統合してください。
+              </div>
+            </div>
+          )}
           <NoteComposer
-            caseId={Number(caseId) || 0}
-            callback={{ taskId, context: d.message, counterpart: d.callerName ?? d.clientName, phone: d.callerPhone ?? d.phones[0]?.number ?? null }}
-            onSaved={(_note, extra) => onSaved(extra?.taskStatus === 'done' ? '折り返しを記録し、タスクを完了にしました' : '折り返しを記録しました')}
+            caseId={provisional ? 0 : Number(caseId) || 0}
+            callback={{ taskId, context: d.message, counterpart: d.callerName ?? d.clientName, phone: d.callerPhone ?? d.phones[0]?.number ?? null, provisional: provisional ? { label: label.trim() || null } : null }}
+            onSaved={(_note, extra) =>
+              onSaved(
+                `${provisional ? '折り返しを「氏名未確認」の新しい相談として記録しました（依頼者ページで氏名の確定・既存の依頼者への統合ができます）' : '折り返しを記録しました'}${extra?.taskStatus === 'done' ? '。タスクを完了にしました' : ''}`,
+              )
+            }
           />
         </>
       )}

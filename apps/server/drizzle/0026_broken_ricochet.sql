@@ -1,0 +1,1 @@
+ALTER TABLE `scheduling_sessions` ADD `duration_minutes` integer;

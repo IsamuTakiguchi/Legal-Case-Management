@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { eq, and, inArray, desc, ne, gte, lte } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { generateStructured } from '../integrations/anthropic.js';
-import { familyName, formatJaDateTime, toJstParts, OPEN_CASE_STATUSES, type EventKind } from '@lcm/shared';
+import { familyName, formatJaDateTime, toJstParts, OPEN_CASE_STATUSES, type EventKind, formatJaEventTime } from '@lcm/shared';
 import { createCalendarEvent, editCalendarEvent, createHoldSet, removeCalendarEvent, cancelHoldSet, confirmHold, pendingHoldsFor, type PendingHoldSet } from './court.js';
 import { getSetting, businessHours, fmtHm } from './settings.js';
 import { issueZoomIfNeeded, webLocation, webMeetingProvider, webMeetingText, findMeetingInText, externalLocation, externalMeetingText, externalProviderOf, withExternalMeeting, EXTERNAL_PROVIDER_LABEL, type ExternalMeeting } from './webMeeting.js';
@@ -230,11 +230,16 @@ export function conversationHolds(conversationId: number): PendingHoldSet[] {
 }
 
 /** 会話の画面から、仮押さえの候補の 1 つで確定する（ほかの候補は消える。WEB 会議ならここで会議 URL を発行） */
-export async function confirmHoldFromConversation(conversationId: number, sessionId: number, eventId: number, opts: { meetingBy?: 'us' | 'them'; meeting?: ExternalMeeting | null } = {}) {
+export async function confirmHoldFromConversation(
+  conversationId: number,
+  sessionId: number,
+  eventId: number,
+  opts: { meetingBy?: 'us' | 'them'; meeting?: ExternalMeeting | null; time?: { startAt: string; endAt: string } | null } = {},
+) {
   const hold = holdOfConversation(conversationId, sessionId);
   if (!hold.candidates.some((c) => c.eventId === eventId)) throw new Error('選んだ日時はこの仮押さえの候補ではありません');
-  // 相手が URL を発行するなら、こちらでは会議を作らずに相手の URL を入れる
-  const r = await confirmHold(sessionId, eventId, opts.meetingBy === 'them' ? { theirs: { meeting: opts.meeting?.url ? opts.meeting : null } } : {});
+  // 相手が URL を発行するなら、こちらでは会議を作らずに相手の URL を入れる。枠の候補は決めた時間で確定する
+  const r = await confirmHold(sessionId, eventId, { ...(opts.meetingBy === 'them' ? { theirs: { meeting: opts.meeting?.url ? opts.meeting : null } } : {}), time: opts.time ?? null });
   logger.info({ conversationId, sessionId, eventId }, '会話から仮押さえを確定しました');
   return { event: r, webText: r?.webText ?? '', rescheduled: hold.rescheduleOf };
 }
@@ -487,7 +492,7 @@ export async function registerScheduleFromConversation(conversationId: number, i
     counterpartName: client ? null : who,
     location: theirs ? externalLocation(meeting, input.location) : (input.location ?? original?.location ?? null),
     description: (() => {
-      const desc = original ? [`${formatJaDateTime(new Date(original.startAt))} の「${original.title}」の日程変更`, baseDescription].join('\n') : baseDescription;
+      const desc = original ? [`${formatJaEventTime(original.startAt, original.endAt)} の「${original.title}」の日程変更`, baseDescription].join('\n') : baseDescription;
       return theirs ? withExternalMeeting(desc, meeting) : desc;
     })(),
     slots: input.slots,

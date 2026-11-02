@@ -4,7 +4,7 @@ import { Link, useParams, useNavigate } from 'react-router-dom';
 import { NewMessagePanel } from '../lib/NewMessagePanel';
 import { api } from '../lib/api';
 import { useDraftRecord, clearDraft, DraftHint } from '../lib/draft';
-import { channelBadge, channelLabel, fmtDateTime, fmtBytes } from '../lib/format';
+import { channelBadge, channelLabel, fmtDateTime, fmtBytes, fmtEventTime } from '../lib/format';
 import { Icon } from '../lib/icons';
 import { ClientForm, clientFormDraftKey, type ClientRow } from './Clients';
 import { EVENT_KIND_LABEL, TASK_STATUS_LABEL, type EventKind, type TaskStatus, CASE_STATUSES, CASE_STATUS_LABEL, telHref, representativeLabel } from '@lcm/shared';
@@ -18,7 +18,7 @@ interface Detail extends ClientRow {
   cases: { id: number; title: string; caseTypeLabel: string; status: string; nextHearingAt: string | null; stage: string | null; folderRel?: string; folderOwn?: boolean }[];
   conversations: { id: number; channel: string; subject: string | null; lastMessageAt: string | null; needsReply: boolean; contact?: { name: string; roleLabel: string; caseTitle: string } | null }[];
   tasks: { id: number; title: string; status: string; followUpAt: string | null }[];
-  events: { id: number; title: string; startAt: string; kind: string }[];
+  events: { id: number; title: string; startAt: string; endAt: string; kind: string }[];
   /** 法人の担当者・個人の窓口（ご家族など） */
   persons?: ClientPerson[];
 }
@@ -229,7 +229,7 @@ export default function ClientDetail() {
           <ul className="space-y-1 text-sm">
             {c.events.map((e) => (
               <li key={e.id} className="flex items-center gap-2">
-                <span className="w-32 text-slate-500">{fmtDateTime(e.startAt)}</span>
+                <span className="w-32 text-slate-500">{fmtEventTime(e.startAt, e.endAt)}</span>
                 <span className="badge badge-gray">{EVENT_KIND_LABEL[e.kind as EventKind]}</span>
                 <span>{e.title}</span>
               </li>

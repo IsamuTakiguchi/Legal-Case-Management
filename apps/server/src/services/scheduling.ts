@@ -6,7 +6,7 @@ import { createZoomMeeting, deleteZoomMeeting } from '../integrations/zoom.js';
 import { generateStructured } from '../integrations/anthropic.js';
 import { getSetting, getSettingInt, holidaySet, businessHours, parseHm } from './settings.js';
 import { upsertAlert, resolveAlertsByKeyPrefix } from './alerts.js';
-import { addBusinessDays, familyName, formatJaDateTime, isJstWeekend, jstDate, toJstParts, type ConfirmSlotInput, type ProposeSlotsInput, type SchedulePreferences } from '@lcm/shared';
+import { addBusinessDays, familyName, formatJaDateTime, isJstWeekend, jstDate, toJstParts, type ConfirmSlotInput, type ProposeSlotsInput, type SchedulePreferences, formatJaEventTime } from '@lcm/shared';
 import { isConfigured } from '../config.js';
 import { isGoogleConnected } from '../integrations/google.js';
 import { webMeetingProvider } from './webMeeting.js';
@@ -319,7 +319,7 @@ const chosenSlotSchema = z.object({
 export async function extractChosenSlot(sessionId: number, replyText: string) {
   const session = db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, sessionId)).get();
   if (!session) throw new Error('セッションが見つかりません');
-  const list = session.candidates.map((c, i) => `${i}: ${formatJaDateTime(new Date(c.startAt))}`).join('\n');
+  const list = session.candidates.map((c, i) => `${i}: ${formatJaEventTime(c.startAt, c.endAt)}`).join('\n');
   return generateStructured({
     purpose: '日程調整（返信の読み取り）',
     tier: 'light',
