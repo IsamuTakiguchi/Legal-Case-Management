@@ -229,14 +229,18 @@ export const formTemplates = sqliteTable(
     size: integer('size'),
     caseType: text('case_type'),
     docType: text('doc_type'),
-    source: text('source').notNull().default('library'), // library | client_folder
+    source: text('source').notNull().default('library'), // library | client_folder | detected（OneDrive に新しくできたファイルから見つけたもの）
+    /** active=ライブラリに入っている | candidate=追加の候補（確認待ち） | dismissed=対象外にした（もう候補に出さない） */
+    status: text('status').notNull().default('active'),
+    /** 新しいファイルとして見つけた日時（source=detected） */
+    detectedAt: text('detected_at'),
     clientId: integer('client_id'),
     extractedText: text('extracted_text'),
     extractError: text('extract_error'),
     manualOverride: integer('manual_override', { mode: 'boolean' }).notNull().default(false),
     indexedAt: text('indexed_at').notNull().default(now()),
   },
-  (t) => [uniqueIndex('form_drive_item').on(t.driveItemId), index('form_type').on(t.caseType, t.docType)],
+  (t) => [uniqueIndex('form_drive_item').on(t.driveItemId), index('form_type').on(t.caseType, t.docType), index('form_status').on(t.status)],
 );
 
 export const conversations = sqliteTable(

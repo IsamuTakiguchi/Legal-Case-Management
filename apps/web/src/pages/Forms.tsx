@@ -17,9 +17,28 @@ interface FormRow {
   caseType: string | null;
   docType: string | null;
   source: string;
+  detectedAt?: string | null;
   hasText: number;
   extractError: string | null;
 }
+
+/** OneDrive に新しくできたファイルから見つけた書式の候補 */
+interface Candidate {
+  id: number;
+  name: string;
+  path: string;
+  webUrl: string | null;
+  modifiedAt: string | null;
+  size: number | null;
+  caseType: string | null;
+  docType: string | null;
+  clientName: string | null;
+  detectedAt: string | null;
+  hasText: number;
+  excerpt: string | null;
+}
+
+const SOURCE_LABEL: Record<string, string> = { library: '書式フォルダ', client_folder: '依頼者フォルダ', detected: '新しいファイル' };
 
 export default function Forms() {
   const [params] = useSearchParams();
@@ -30,10 +49,19 @@ export default function Forms() {
   const [selected, setSelected] = useState<number[]>([]);
   const [showDraft, setShowDraft] = useState(false);
   const types = useQuery({ queryKey: ['case-types'], queryFn: () => api.get<{ key: string; label: string }[]>('/case-types') });
-  const stats = useQuery({ queryKey: ['forms-stats'], queryFn: () => api.get<{ total: number; byDocType: Record<string, number> }>('/forms/stats') });
+  const stats = useQuery({ queryKey: ['forms-stats'], queryFn: () => api.get<{ total: number; byDocType: Record<string, number>; candidates?: number }>('/forms/stats') });
   const list = useQuery({ queryKey: ['forms', q, caseType, docType], queryFn: () => api.get<FormRow[]>(`/forms?${new URLSearchParams({ q, caseType, docType }).toString()}`) });
   const index = useMutation({ mutationFn: () => api.post<{ scanned: number; indexed: number; errors: number }>('/forms/index'), onSuccess: () => { qc.invalidateQueries({ queryKey: ['forms'] }); qc.invalidateQueries({ queryKey: ['forms-stats'] }); } });
   const update = useMutation({ mutationFn: (v: { id: number; caseType?: string | null; docType?: string | null }) => api.put(`/forms/${v.id}`, v), onSuccess: () => qc.invalidateQueries({ queryKey: ['forms'] }) });
+  // ライブラリから外す（もう候補にも出さない。OneDrive のファイルはそのまま）
+  const remove = useMutation({
+    mutationFn: (id: number) => api.post(`/forms/${id}/dismiss`),
+    onSuccess: (_r, id) => {
+      setSelected((s) => s.filter((x) => x !== id));
+      qc.invalidateQueries({ queryKey: ['forms'] });
+      qc.invalidateQueries({ queryKey: ['forms-stats'] });
+    },
+  });
   const typeLabel = (k: string | null) => types.data?.find((t) => t.key === k)?.label ?? (k ?? '未分類');
   return (
     <div className="space-y-4">
@@ -69,6 +97,7 @@ export default function Forms() {
           </button>
         )}
       </div>
+      <FormCandidates types={types.data ?? []} />
       {showDraft && <DraftPanel templateIds={selected} caseId={params.get('caseId') ? Number(params.get('caseId')) : null} onClose={() => setShowDraft(false)} />}
       <div className="card p-0">
         <table className="w-full text-sm">
@@ -113,8 +142,23 @@ export default function Forms() {
                 <td className="px-2 py-2">
                   <input className="input w-28 py-0.5 text-xs" defaultValue={f.docType ?? ''} onBlur={(e) => e.target.value !== (f.docType ?? '') && update.mutate({ id: f.id, docType: e.target.value || null })} />
                 </td>
-                <td className="px-2 py-2 text-xs text-slate-500">{f.source === 'library' ? '書式フォルダ' : '依頼者フォルダ'}</td>
-                <td className="px-2 py-2 text-xs text-slate-500">{fmtDate(f.modifiedAt)}</td>
+                <td className="px-2 py-2 text-xs text-slate-500">
+                  {SOURCE_LABEL[f.source] ?? f.source}
+                  {f.source === 'detected' && <div className="text-slate-400">{f.detectedAt ? `${fmtDate(f.detectedAt)} 自動追加` : '自動追加'}</div>}
+                </td>
+                <td className="px-2 py-2 text-xs text-slate-500">
+                  {fmtDate(f.modifiedAt)}
+                  <div>
+                    <button
+                      type="button"
+                      className="text-slate-400 hover:text-red-600 hover:underline"
+                      onClick={() => confirm(`「${f.name}」を書式ライブラリから外しますか？（OneDrive のファイルはそのまま残ります）`) && remove.mutate(f.id)}
+                      title="書式ライブラリから外します。もう候補にも出しません（OneDrive のファイルは消しません）"
+                    >
+                      外す
+                    </button>
+                  </div>
+                </td>
               </tr>
             ))}
             {list.data?.length === 0 && (
@@ -129,6 +173,115 @@ export default function Forms() {
         </table>
       </div>
     </div>
+  );
+}
+
+/**
+ * OneDrive（依頼者フォルダ）に新しくできたファイルから見つけた、書式の候補。
+ * 文書種別がファイル名から分かる Word・Excel は自動でライブラリに入るので、ここに出るのはそれ以外（確認してから追加する）
+ */
+function FormCandidates({ types }: { types: { key: string; label: string }[] }) {
+  const qc = useQueryClient();
+  const list = useQuery({ queryKey: ['form-candidates'], queryFn: () => api.get<Candidate[]>('/forms/candidates') });
+  const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.get<Record<string, string>>('/settings') });
+  const [open, setOpen] = useState(true);
+  // 追加する前に直した類型・文書種別
+  const [edits, setEdits] = useState<Record<number, { caseType?: string | null; docType?: string | null }>>({});
+  const [msg, setMsg] = useState('');
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['form-candidates'] });
+    qc.invalidateQueries({ queryKey: ['forms'] });
+    qc.invalidateQueries({ queryKey: ['forms-stats'] });
+  };
+  const detect = useMutation({
+    mutationFn: () => api.post<{ checked: number; added: number; candidates: number; skipped?: string }>('/forms/detect'),
+    onSuccess: (r) => {
+      setMsg(r.skipped ? r.skipped : r.added || r.candidates ? `自動で追加 ${r.added} 件 ／ 候補 ${r.candidates} 件` : '新しいファイルはありませんでした');
+      refresh();
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
+  const accept = useMutation({ mutationFn: (id: number) => api.post(`/forms/${id}/accept`, edits[id] ?? {}), onSuccess: refresh, onError: (e) => setMsg((e as Error).message) });
+  const dismiss = useMutation({ mutationFn: (id: number) => api.post(`/forms/${id}/dismiss`), onSuccess: refresh, onError: (e) => setMsg((e as Error).message) });
+  const autoAdd = (settings.data?.forms_auto_add ?? '1') !== '0';
+  const setAuto = useMutation({
+    mutationFn: (on: boolean) => api.put('/settings', { forms_auto_add: on ? '1' : '0' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['settings'] }),
+  });
+  const rows = list.data ?? [];
+  const edit = (id: number, patch: { caseType?: string | null; docType?: string | null }) => setEdits((e) => ({ ...e, [id]: { ...e[id], ...patch } }));
+  return (
+    <section className="card space-y-2 text-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className="font-semibold" onClick={() => setOpen(!open)} aria-expanded={open}>
+          {open ? '▾' : '▸'} 新しいファイルから見つけた候補
+        </button>
+        <span className={`badge ${rows.length ? 'badge-orange' : 'badge-gray'}`}>{rows.length} 件</span>
+        <button className="btn btn-sm ml-auto" onClick={() => detect.mutate()} disabled={detect.isPending} title="OneDrive の依頼者フォルダに新しくできたファイルを見に行きます（ふだんは 1 時間ごとに自動で見ています）">
+          {detect.isPending ? '確認中…' : '新しいファイルを今すぐ確認'}
+        </button>
+        {msg && <span className="fade-in text-xs text-slate-600">{msg}</span>}
+      </div>
+      {open && (
+        <>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+            <span>OneDrive の依頼者フォルダに新しくできた Word・Excel などを 1 時間ごとに見て、書式になりそうなものを集めます（受領資料・送付ファイルは除く）。</span>
+            <label className="flex items-center gap-1 text-slate-700">
+              <input type="checkbox" checked={autoAdd} onChange={(e) => setAuto.mutate(e.target.checked)} disabled={!settings.data || setAuto.isPending} />
+              ファイル名から文書種別（準備書面・契約書など）が分かる Word・Excel は自動でライブラリに追加する
+            </label>
+          </div>
+          {rows.length === 0 ? (
+            <div className="text-xs text-slate-500">確認待ちの候補はありません</div>
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {rows.map((c) => {
+                const e = edits[c.id] ?? {};
+                return (
+                  <li key={c.id} className="flex flex-wrap items-start gap-2 py-2">
+                    <div className="min-w-0 flex-1">
+                      {c.webUrl ? (
+                        <a href={c.webUrl} target="_blank" rel="noreferrer" className="font-medium text-blue-700 hover:underline">
+                          {c.name}
+                        </a>
+                      ) : (
+                        <span className="font-medium">{c.name}</span>
+                      )}
+                      <div className="truncate text-xs text-slate-400" title={c.path}>
+                        {c.clientName && <span className="mr-1 text-slate-600">{c.clientName}</span>}
+                        {c.path} {fmtBytes(c.size)} {c.modifiedAt && `更新 ${fmtDate(c.modifiedAt)}`}
+                      </div>
+                      {c.excerpt ? <div className="line-clamp-2 text-xs text-slate-500">{c.excerpt}</div> : !c.hasText && <div className="text-xs text-orange-600">本文を取り出せませんでした</div>}
+                    </div>
+                    <select className="input w-auto py-0.5 text-xs" value={(e.caseType !== undefined ? e.caseType : c.caseType) ?? ''} onChange={(ev) => edit(c.id, { caseType: ev.target.value || null })} aria-label="類型">
+                      <option value="">未分類</option>
+                      {types.map((t) => (
+                        <option key={t.key} value={t.key}>
+                          {t.label}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      className="input w-28 py-0.5 text-xs"
+                      value={(e.docType !== undefined ? e.docType : c.docType) ?? ''}
+                      onChange={(ev) => edit(c.id, { docType: ev.target.value || null })}
+                      placeholder="文書種別"
+                      aria-label="文書種別"
+                    />
+                    <button className="btn btn-sm btn-primary" onClick={() => accept.mutate(c.id)} disabled={accept.isPending || dismiss.isPending}>
+                      ライブラリに追加
+                    </button>
+                    <button className="btn btn-sm" onClick={() => dismiss.mutate(c.id)} disabled={accept.isPending || dismiss.isPending} title="書式にしません。もう候補に出しません（OneDrive のファイルはそのまま）">
+                      対象外
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
