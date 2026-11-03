@@ -226,6 +226,7 @@ export default function CaseDetail() {
                 persons={c.persons ?? []}
                 contacts={c.contacts ?? []}
                 traffic={c.caseType?.key === 'traffic'}
+                caseTitle={c.title}
               />
             )}
             <NoteComposer

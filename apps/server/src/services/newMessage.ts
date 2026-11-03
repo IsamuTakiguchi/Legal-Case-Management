@@ -2,9 +2,10 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import * as cw from '../channels/chatwork.js';
 import { isConfigured } from '../config.js';
+import { adapterFor } from '../channels/registry.js';
 import { CHANNEL_LABEL, type Channel } from '@lcm/shared';
 import { availableChannels, ensureClientConversation } from './hearingNotice.js';
-import { clientOwnConversations } from './contacts.js';
+import { clientOwnConversations, ensureContactConversation, getContact, contactRoleLabel } from './contacts.js';
 import { getClientPerson, listClientPersons } from './clientPersons.js';
 import { staffRooms } from './staff.js';
 
@@ -47,7 +48,9 @@ export function clientSendTargets(clientId: number) {
     .sort((a, b) => (b.lastMessageAt ?? '').localeCompare(a.lastMessageAt ?? ''))
     .slice(0, 5)
     .map((c) => ({ conversationId: c.id, subject: c.subject ?? '（件名なし）', lastMessageAt: c.lastMessageAt, personId: c.clientPersonId ?? null }));
-  return { clientId, clientName: client.name, targets, missing, gmailThreads };
+  // 関係者への送信ボタンを出すかどうかにも使う（チャネルがアプリに接続済みか）
+  const configured = { gmail: channelReady('gmail'), line: channelReady('line'), chatwork: channelReady('chatwork') };
+  return { clientId, clientName: client.name, targets, missing, gmailThreads, configured };
 }
 
 /**
@@ -74,6 +77,76 @@ export function startClientConversation(clientId: number, input: { channel: Chan
   const row = db()
     .insert(schema.conversations)
     .values({ channel: 'gmail', externalThreadId: `new:${client.id}:${Date.now()}`, clientId: client.id, clientPersonId: person?.id ?? null, counterpartName: person?.name ?? client.name, counterpartAddress: email ?? null, subject })
+    .returning()
+    .get();
+  return { conversationId: row.id };
+}
+
+/** そのチャネルで送れる状態か（アプリに接続済みか。Gmail は Google に接続済みか） */
+function channelReady(channel: Channel): boolean {
+  try {
+    return adapterFor(channel).isConfigured();
+  } catch {
+    return false;
+  }
+}
+
+/** 関係者（相手方代理人・保険会社など）に送れる宛先と、送れない理由。メールは前のやり取りの続きにもできる */
+export function contactSendTargets(contactId: number) {
+  const contact = getContact(contactId);
+  if (!contact) throw new Error('関係者が見つかりません');
+  const targets: { channel: 'gmail' | 'line'; channelLabel: string; to: string }[] = [];
+  const missing: string[] = [];
+  if (!contact.emails[0]) missing.push('メールアドレスが未登録です');
+  else if (!channelReady('gmail')) missing.push('Gmail が未接続です');
+  else targets.push({ channel: 'gmail', channelLabel: CHANNEL_LABEL.gmail, to: contact.emails[0] });
+  if (contact.lineUserId) {
+    if (channelReady('line')) targets.push({ channel: 'line', channelLabel: CHANNEL_LABEL.line, to: 'LINE' });
+    else missing.push('LINE 公式アカウントが未設定です');
+  }
+  const gmailThreads = db()
+    .select()
+    .from(schema.conversations)
+    .where(and(eq(schema.conversations.contactId, contact.id), eq(schema.conversations.channel, 'gmail')))
+    .all()
+    .filter((c) => !c.externalThreadId.startsWith('new:'))
+    .sort((a, b) => (b.lastMessageAt ?? '').localeCompare(a.lastMessageAt ?? ''))
+    .slice(0, 5)
+    .map((c) => ({ conversationId: c.id, subject: c.subject ?? '（件名なし）', lastMessageAt: c.lastMessageAt }));
+  return { contactId: contact.id, name: contact.organization ? `${contact.organization} ${contact.name}` : contact.name, roleLabel: contactRoleLabel(contact.role), targets, missing, gmailThreads };
+}
+
+/**
+ * 関係者との会話を開く（無ければ作る）。依頼者と同じく、メールは件名を付けた新しいメール（threadConversationId を渡すとそのメールの続き）、
+ * LINE は相手とのトーク。会話はその事件・依頼者に紐付ける
+ */
+export function startContactConversation(contactId: number, input: { channel: 'gmail' | 'line'; subject?: string | null; threadConversationId?: number | null }): { conversationId: number } {
+  const contact = getContact(contactId);
+  if (!contact) throw new Error('関係者が見つかりません');
+  const kase = db().select().from(schema.cases).where(eq(schema.cases.id, contact.caseId)).get();
+  if (!kase) throw new Error('事件が見つかりません');
+  if (!contactSendTargets(contactId).targets.some((t) => t.channel === input.channel)) throw new Error(`${CHANNEL_LABEL[input.channel]} ではこの関係者に送れません（連絡先が未登録か、チャネルが未設定です）`);
+  if (input.channel === 'line') return { conversationId: ensureContactConversation(contact, 'line', kase).id };
+  if (input.threadConversationId) {
+    const conv = db().select().from(schema.conversations).where(eq(schema.conversations.id, input.threadConversationId)).get();
+    if (!conv || conv.channel !== 'gmail' || conv.contactId !== contact.id) throw new Error('続けるメールが見つかりません');
+    if (conv.archived) db().update(schema.conversations).set({ archived: false }).where(eq(schema.conversations.id, conv.id)).run();
+    return { conversationId: conv.id };
+  }
+  const subject = input.subject?.trim();
+  if (!subject) throw new Error('メールの件名を入力してください');
+  const row = db()
+    .insert(schema.conversations)
+    .values({
+      channel: 'gmail',
+      externalThreadId: `new:contact${contact.id}:${Date.now()}`,
+      clientId: kase.clientId,
+      caseId: kase.id,
+      contactId: contact.id,
+      counterpartName: contact.organization ? `${contact.organization} ${contact.name}` : contact.name,
+      counterpartAddress: contact.emails[0]!,
+      subject,
+    })
     .returning()
     .get();
   return { conversationId: row.id };

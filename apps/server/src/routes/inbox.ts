@@ -24,7 +24,7 @@ import { getSetting } from '../services/settings.js';
 import { activeCasesForClient } from '../services/cases.js';
 import { memoSuggestionsFor, openMemos } from '../services/memos.js';
 import { suggestConversationTasks, createConversationTasks } from '../services/conversationTasks.js';
-import { clientSendTargets, startClientConversation, staffSendTargets, startRoomConversation } from '../services/newMessage.js';
+import { clientSendTargets, startClientConversation, staffSendTargets, startRoomConversation, contactSendTargets, startContactConversation } from '../services/newMessage.js';
 import { sendMessageSchema, draftRequestSchema, caseContactInputSchema, parseChatworkReactions, staffAskDraftSchema, staffAskSendSchema, TASK_STATUSES, type Channel } from '@lcm/shared';
 
 export const inboxRoutes = new Hono();
@@ -165,6 +165,17 @@ inboxRoutes.post('/clients/:id/start-conversation', async (c) => {
     })
     .parse(await c.req.json());
   return c.json(startClientConversation(Number(c.req.param('id')), body));
+});
+
+/** 関係者（相手方代理人・保険会社など）に送れる宛先と、送れない理由 */
+inboxRoutes.get('/contacts/:id/send-targets', (c) => c.json(contactSendTargets(Number(c.req.param('id')))));
+
+/** 関係者との会話を開く（無ければ作る）。メールは件名を付けた新しいメール、または前のメールの続き */
+inboxRoutes.post('/contacts/:id/start-conversation', async (c) => {
+  const body = z
+    .object({ channel: z.enum(['gmail', 'line']), subject: z.string().max(200).nullable().optional(), threadConversationId: z.number().int().nullable().optional() })
+    .parse(await c.req.json());
+  return c.json(startContactConversation(Number(c.req.param('id')), body));
 });
 
 /** 事務局に送る宛先（Chatwork のルームと事務局メンバー） */
