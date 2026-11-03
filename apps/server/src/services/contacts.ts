@@ -179,3 +179,41 @@ export function clientOwnConversations(clientId: number) {
     .all()
     .filter((c) => !(c.meta as { staff?: boolean }).staff);
 }
+
+/** 関係者との会話を開く（無ければ作る）。Gmail は新しいメール、LINE は相手とのトーク */
+export function ensureContactConversation(contact: ContactRow, channel: 'gmail' | 'line', kase: typeof schema.cases.$inferSelect): typeof schema.conversations.$inferSelect {
+  const d = db();
+  const own = d
+    .select()
+    .from(schema.conversations)
+    .where(and(eq(schema.conversations.contactId, contact.id), eq(schema.conversations.channel, channel)))
+    .all()
+    .filter((c) => !c.archived)
+    .sort((a, b) => (b.lastMessageAt ?? '').localeCompare(a.lastMessageAt ?? ''));
+  if (own[0]) return own[0];
+  if (channel === 'line') {
+    const existing = d
+      .select()
+      .from(schema.conversations)
+      .where(and(eq(schema.conversations.channel, 'line'), eq(schema.conversations.externalThreadId, contact.lineUserId!)))
+      .get();
+    if (existing) {
+      const patch = { archived: false, contactId: contact.id, clientId: kase.clientId, caseId: kase.id };
+      d.update(schema.conversations).set(patch).where(eq(schema.conversations.id, existing.id)).run();
+      return { ...existing, ...patch };
+    }
+  }
+  return d
+    .insert(schema.conversations)
+    .values({
+      channel,
+      externalThreadId: channel === 'gmail' ? `new:contact${contact.id}:${Date.now()}` : contact.lineUserId!,
+      clientId: kase.clientId,
+      caseId: kase.id,
+      contactId: contact.id,
+      counterpartName: contact.organization ? `${contact.organization} ${contact.name}` : contact.name,
+      counterpartAddress: channel === 'gmail' ? contact.emails[0]! : contact.lineUserId,
+    })
+    .returning()
+    .get();
+}
