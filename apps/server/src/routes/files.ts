@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { streamSSE } from 'hono/streaming';
 import { mergeSelectedAttachments } from '../services/attachmentMerge.js';
 import { listAttachments, assignAttachment, processAttachment, retryFailedAttachments, saveAttachment, ignoreAttachment, fetchAttachmentData, bulkAttachments, attachmentSummary, requeueStuckAttachments } from '../services/attachments.js';
-import { indexForms, searchForms, updateForm, formStats, draftFromForms } from '../services/forms.js';
+import { indexForms, searchForms, updateForm, formStats, draftFromForms, detectNewForms, listFormCandidates, setFormStatus } from '../services/forms.js';
 import { formDraftRequestSchema } from '@lcm/shared';
 import { storage } from '../integrations/storage.js';
 import { attachmentPreview } from '../services/attachmentPreview.js';
@@ -97,6 +97,25 @@ fileRoutes.get('/forms', (c) => {
 fileRoutes.get('/forms/stats', (c) => c.json(formStats()));
 
 fileRoutes.post('/forms/index', async (c) => c.json(await indexForms({ full: c.req.query('full') === '1' })));
+
+/** OneDrive に新しくできたファイルから見つけた、書式の候補（確認待ち） */
+fileRoutes.get('/forms/candidates', (c) => c.json(listFormCandidates()));
+
+/** OneDrive の新しいファイルを今すぐ確認する（ふだんは 1 時間ごとに自動） */
+fileRoutes.post('/forms/detect', async (c) => c.json(await detectNewForms()));
+
+/** 候補をライブラリに入れる（類型・文書種別を直してもよい） */
+fileRoutes.post('/forms/:id/accept', async (c) => {
+  const body = z.object({ caseType: z.string().nullable().optional(), docType: z.string().nullable().optional() }).parse(await c.req.json().catch(() => ({})));
+  setFormStatus(Number(c.req.param('id')), 'active', body);
+  return c.json({ ok: true });
+});
+
+/** 候補を対象外にする・ライブラリから外す（もう候補に出さない。OneDrive のファイルはそのまま） */
+fileRoutes.post('/forms/:id/dismiss', (c) => {
+  setFormStatus(Number(c.req.param('id')), 'dismissed');
+  return c.json({ ok: true });
+});
 
 fileRoutes.put('/forms/:id', async (c) => {
   const body = z.object({ caseType: z.string().nullable().optional(), docType: z.string().nullable().optional() }).parse(await c.req.json());

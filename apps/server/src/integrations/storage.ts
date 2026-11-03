@@ -17,7 +17,17 @@ export interface ListedFile {
   isFolder: boolean;
   size?: number;
   modifiedAt?: string;
+  createdAt?: string;
   webUrl?: string;
+}
+
+/** 前回から新しくできた・変わったファイル（フォルダ配下すべて） */
+export interface ChangedFiles {
+  files: ListedFile[];
+  /** 次に続きを取るときに渡す目印 */
+  cursor: string;
+  /** 目印なしで取った（初回。フォルダ配下のファイルがすべて返る） */
+  initial: boolean;
 }
 
 /** 一覧しようとしたフォルダが無い（まだ作られていない）ときのエラー */
@@ -42,6 +52,8 @@ export interface StorageBackend {
   move(file: { itemId?: string | null; path: string }, newFolderPath: string): Promise<StoredFile>;
   list(folderPath: string): Promise<ListedFile[]>;
   shareLink?(file: { itemId?: string | null; path: string }, expiresAt: Date): Promise<string>;
+  /** フォルダ配下で、前回（cursor）から新しくできた・変わったファイル。cursor が無ければ配下のファイルすべて */
+  changedFiles?(folderPath: string, cursor: string | null): Promise<ChangedFiles>;
   remove(file: { itemId?: string | null; path: string }): Promise<void>;
 }
 
@@ -94,9 +106,43 @@ class OneDriveStorage implements StorageBackend {
   async shareLink(file: { itemId?: string | null; path: string }, expiresAt: Date): Promise<string> {
     return od.createShareLink(await this.resolveId(file), { scope: 'anonymous', expiresAt });
   }
+  /** Graph の delta で変更を取る。目印が古くなって使えなければ（410 など）取り直す */
+  async changedFiles(folderPath: string, cursor: string | null): Promise<ChangedFiles> {
+    let r: Awaited<ReturnType<typeof od.deltaChildren>>;
+    let initial = !cursor;
+    try {
+      r = await od.deltaChildren(folderPath, cursor);
+    } catch (err) {
+      if (!cursor) throw err;
+      r = await od.deltaChildren(folderPath, null);
+      initial = true;
+    }
+    const files: ListedFile[] = [];
+    for (const i of r.items) {
+      if (!i.file || i.deleted) continue;
+      const parent = driveParentPath(i.parentReference?.path);
+      files.push({ name: i.name, path: od.joinPath(parent, i.name), itemId: i.id, isFolder: false, size: i.size, modifiedAt: i.lastModifiedDateTime, createdAt: i.createdDateTime, webUrl: i.webUrl });
+    }
+    return { files, cursor: r.deltaLink, initial };
+  }
   async remove(file: { itemId?: string | null; path: string }): Promise<void> {
     await od.deleteItem(await this.resolveId(file));
   }
+}
+
+/**
+ * Graph の parentReference.path（「/drive/root:/依頼者/山田」「/drives/b!xx/root:/依頼者/%E5%B1%B1」）を、
+ * アプリで使うパス（「/依頼者/山田」）にする。「%」を含む名前でも壊れないよう、読めなければそのまま使う
+ */
+export function driveParentPath(p: string | null | undefined): string {
+  const rel = (p ?? '').replace(/^.*?root:/, '');
+  let decoded = rel;
+  try {
+    decoded = decodeURIComponent(rel);
+  } catch {
+    decoded = rel;
+  }
+  return od.joinPath(decoded);
 }
 
 /** OneDrive 同期フォルダに直接書き込む（事務所 PC で動かす場合の代替） */
@@ -164,6 +210,33 @@ export class LocalFolderStorage implements StorageBackend {
   }
   async remove(file: { path: string }): Promise<void> {
     await fs.unlink(this.abs(file.path));
+  }
+  /** フォルダ配下を見て、目印（前回の時刻）より後に変わったファイルを返す */
+  async changedFiles(folderPath: string, cursor: string | null): Promise<ChangedFiles> {
+    const startedAt = new Date().toISOString();
+    const out: ListedFile[] = [];
+    const walk = async (dir: string, depth: number) => {
+      if (depth > 8) return;
+      let entries: import('node:fs').Dirent[];
+      try {
+        entries = await fs.readdir(this.abs(dir), { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of entries) {
+        const p = od.joinPath(dir, e.name);
+        if (e.isDirectory()) {
+          await walk(p, depth + 1);
+          continue;
+        }
+        const st = await fs.stat(this.abs(p)).catch(() => null);
+        if (!st) continue;
+        if (cursor && st.mtime.toISOString() <= cursor) continue;
+        out.push({ name: e.name, path: p, isFolder: false, size: st.size, modifiedAt: st.mtime.toISOString(), createdAt: st.birthtime.toISOString() });
+      }
+    };
+    await walk(folderPath, 0);
+    return { files: out, cursor: startedAt, initial: !cursor };
   }
 }
 

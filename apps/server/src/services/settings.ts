@@ -38,6 +38,8 @@ http://www.noboriohji.com/access/`,
   unassigned_folder: '_未振分',
   forms_library_paths: '/書式',
   forms_index_client_subfolders: '提出書面',
+  /** OneDrive に新しくできたファイルのうち、ファイル名から文書種別が分かる Word・Excel を自動で書式ライブラリに入れるか（'0' ならすべて候補にして確認する） */
+  forms_auto_add: '1',
   share_link_expiry_days: '30',
   /** API 利用料の円換算に使う為替レート（1 ドル＝何円） */
   usd_jpy_rate: '150',

@@ -194,6 +194,7 @@ export interface DriveItem {
   webUrl?: string;
   eTag?: string;
   lastModifiedDateTime?: string;
+  createdDateTime?: string;
   folder?: { childCount: number };
   file?: { mimeType?: string };
   parentReference?: { path?: string; id?: string };

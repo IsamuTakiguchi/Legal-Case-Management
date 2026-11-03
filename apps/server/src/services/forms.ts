@@ -6,10 +6,11 @@ import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } fro
 import { db, schema } from '../db/index.js';
 import { storage } from '../integrations/storage.js';
 import { joinPath } from '../integrations/onedrive.js';
-import { getSetting } from './settings.js';
+import { getSetting, getSyncState, setSyncState } from './settings.js';
+import { isMsConnected } from '../integrations/onedrive.js';
 import { clientFolder, caseFolder } from './attachments.js';
 import { generateText } from '../integrations/anthropic.js';
-import { inferDocType, type FormDraftRequest } from '@lcm/shared';
+import { inferDocType, DOC_TYPE_KEYWORDS, type FormDraftRequest } from '@lcm/shared';
 import { ftsQuery } from './inbox.js';
 import { logger } from '../logger.js';
 
@@ -50,9 +51,13 @@ export async function extractText(name: string, data: Buffer): Promise<string> {
   throw new Error(`本文抽出に未対応の形式: ${ext}`);
 }
 
+/** 文書種別の手がかり（既定の言葉に、事件類型ごとに足した言葉を加える） */
 function docTypeKeywords(): Record<string, string[]> {
-  const ct = db().select().from(schema.caseTypes).get();
-  return ct?.docTypeKeywords ?? {};
+  const out: Record<string, string[]> = Object.fromEntries(Object.entries(DOC_TYPE_KEYWORDS).map(([k, v]) => [k, [...v]]));
+  for (const ct of db().select({ kws: schema.caseTypes.docTypeKeywords }).from(schema.caseTypes).all()) {
+    for (const [k, v] of Object.entries(ct.kws ?? {})) out[k] = [...new Set([...(out[k] ?? []), ...v])];
+  }
+  return out;
 }
 
 /** パスから事件類型を推定（書式フォルダ直下のサブフォルダ名が類型ラベルと一致すれば採用） */
@@ -135,6 +140,8 @@ export async function indexForms(opts: { full?: boolean } = {}): Promise<{ scann
         extractedText: text,
         extractError,
         indexedAt: new Date().toISOString(),
+        // 新しいファイルとして候補に出ていたものも、書式フォルダ・提出書面にあればライブラリに入れる（対象外にしたものはそのまま）
+        ...(existing?.status === 'candidate' ? { status: 'active' } : {}),
       };
       if (existing) db().update(schema.formTemplates).set(values).where(eq(schema.formTemplates.id, existing.id)).run();
       else db().insert(schema.formTemplates).values(values).run();
@@ -142,6 +149,175 @@ export async function indexForms(opts: { full?: boolean } = {}): Promise<{ scann
     }
   }
   return { scanned, indexed, errors };
+}
+
+// ---- OneDrive に新しくできたファイルから、書式の候補を見つける ----
+
+/** 書式として使えそうな形式（自分で作る書面）。PDF は文書種別が分かるものだけ候補にする */
+const AUTHORED = /\.(docx|doc|xlsx|xlsm)$/i;
+/** はじめて見るとき（目印が無いとき）に拾う期間 */
+const INITIAL_LOOKBACK_DAYS = 14;
+/** 1 回に追加・候補にする上限（大量に移したときに一度に増えすぎないように） */
+const DETECT_LIMIT = 50;
+/** これより大きいファイルは本文を取り出さない */
+const DETECT_MAX_BYTES = 15 * 1024 * 1024;
+/** OneDrive の変更を続きから取るための目印の置き場所（sync_state） */
+const DETECT_CURSOR_KEY = 'forms:detectCursor';
+
+/** 依頼者・事件のフォルダ（長いものから当てる）。見つけたファイルがどの依頼者・どの類型かを決めるのに使う */
+function folderOwners() {
+  const out: { folder: string; clientId: number; caseType: string | null }[] = [];
+  const clients = db().select().from(schema.clients).where(eq(schema.clients.archived, false)).all();
+  for (const c of clients) {
+    const cases = db().select().from(schema.cases).where(eq(schema.cases.clientId, c.id)).orderBy(desc(schema.cases.updatedAt)).all();
+    out.push({ folder: clientFolder(c), clientId: c.id, caseType: cases[0]?.caseType ?? null });
+    for (const k of cases) {
+      const base = caseFolder(c, k);
+      if (base !== clientFolder(c)) out.push({ folder: base, clientId: c.id, caseType: k.caseType });
+    }
+  }
+  return out.sort((a, b) => b.folder.length - a.folder.length);
+}
+
+const under = (p: string, folder: string) => {
+  const f = folder.replace(/\/+$/, '');
+  return p === f || p.startsWith(`${f}/`);
+};
+
+/**
+ * OneDrive（依頼者フォルダ）に新しくできた・書き直したファイルを見て、書式ライブラリの候補にする。
+ * - ファイル名から文書種別（準備書面・契約書など）が分かる Word・Excel は、自動でライブラリに入れる（設定 forms_auto_add=1 のとき）
+ * - それ以外の Word・Excel と、文書種別が分かる PDF は「候補」にして、画面で追加するか対象外にするかを選ぶ
+ * 受け取った資料（受領資料）・送付用に置いたファイル・アプリが保存した受信ファイル・書式フォルダの分（別に索引化）は対象にしない
+ */
+export async function detectNewForms(opts: { now?: Date } = {}): Promise<{ checked: number; added: number; candidates: number; skipped?: string }> {
+  const st = storage();
+  if (!st.changedFiles) return { checked: 0, added: 0, candidates: 0, skipped: 'このファイルの置き場所では使えません' };
+  if (st.kind === 'onedrive' && !(await isMsConnected().catch(() => false))) return { checked: 0, added: 0, candidates: 0, skipped: 'OneDrive が未接続です' };
+  const now = opts.now ?? new Date();
+  const root = st.clientRoot();
+  const cursor = getSyncState(DETECT_CURSOR_KEY);
+  const changed = await st.changedFiles(root, cursor);
+  const since = changed.initial ? new Date(now.getTime() - INITIAL_LOOKBACK_DAYS * 86400_000).toISOString() : null;
+
+  const libraryRoots = getSetting('forms_library_paths').split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+  // 受け取った資料・送付用・未振分・バックアップのフォルダは見ない
+  const skipSegments = [getSetting('attachment_subfolder'), '送付ファイル', getSetting('unassigned_folder')].filter(Boolean);
+  const backup = getSetting('backup_folder');
+  const owners = folderOwners();
+  const kws = docTypeKeywords();
+  const autoAdd = getSetting('forms_auto_add') !== '0';
+  const d = db();
+  // アプリが保存した受信ファイル（依頼者から届いたもの）は書式ではない
+  const received = new Set<string>();
+  for (const a of d.select({ itemId: schema.attachments.driveItemId, path: schema.attachments.storedPath }).from(schema.attachments).all()) {
+    if (a.itemId) received.add(a.itemId);
+    if (a.path) received.add(a.path);
+  }
+
+  let checked = 0;
+  let added = 0;
+  let candidates = 0;
+  // 新しいものから見る
+  const files = [...changed.files].sort((a, b) => (b.modifiedAt ?? '').localeCompare(a.modifiedAt ?? ''));
+  for (const f of files) {
+    if (added + candidates >= DETECT_LIMIT) break;
+    if (f.name.startsWith('~$') || f.name.startsWith('.')) continue; // Word の一時ファイルなど
+    if (since && (f.modifiedAt ?? '') < since) continue;
+    const isPdf = /\.pdf$/i.test(f.name);
+    if (!AUTHORED.test(f.name) && !isPdf) continue;
+    const segs = f.path.split('/');
+    if (skipSegments.some((s) => segs.includes(s))) continue;
+    if (backup && under(f.path, joinPath(backup))) continue;
+    if (libraryRoots.some((r) => under(f.path, joinPath(r)))) continue;
+    if ((f.itemId && received.has(f.itemId)) || received.has(f.path)) continue;
+    const owner = owners.find((o) => under(f.path, o.folder));
+    if (!owner) continue; // 依頼者のフォルダ以外は見ない
+    checked++;
+    const key = f.itemId ?? f.path;
+    const existing = d.select({ id: schema.formTemplates.id }).from(schema.formTemplates).where(eq(schema.formTemplates.driveItemId, key)).get();
+    if (existing) continue; // ライブラリに入っているもの・候補・対象外にしたものはそのまま（中身の更新は夜の索引化で）
+    const docType = inferDocType(f.name, kws);
+    if (isPdf && !docType) continue;
+    let text: string | null = null;
+    let extractError: string | null = null;
+    if ((f.size ?? 0) <= DETECT_MAX_BYTES) {
+      try {
+        text = (await extractText(f.name, await st.get({ itemId: f.itemId, path: f.path }))).slice(0, MAX_TEXT);
+      } catch (err) {
+        extractError = String(err).slice(0, 300);
+      }
+    } else {
+      extractError = '大きすぎるため本文を取り出していません';
+    }
+    const status = autoAdd && docType && !isPdf ? 'active' : 'candidate';
+    d.insert(schema.formTemplates)
+      .values({
+        driveItemId: key,
+        name: f.name,
+        path: f.path,
+        webUrl: f.webUrl ?? null,
+        ext: f.name.split('.').pop()?.toLowerCase() ?? null,
+        modifiedAt: f.modifiedAt ?? null,
+        size: f.size ?? null,
+        caseType: owner.caseType,
+        docType,
+        source: 'detected',
+        status,
+        detectedAt: now.toISOString(),
+        clientId: owner.clientId,
+        extractedText: text,
+        extractError,
+        indexedAt: now.toISOString(),
+      })
+      .run();
+    if (status === 'active') added++;
+    else candidates++;
+  }
+  // 上限で打ち切ったときも目印は進める（大量に移したときに候補が溢れないように。残りは夜の索引化の対象フォルダなら、そちらで入る）
+  setSyncState(DETECT_CURSOR_KEY, changed.cursor);
+  if (added || candidates) logger.info({ added, candidates }, 'OneDrive の新しいファイルから書式の候補を見つけました');
+  return { checked, added, candidates };
+}
+
+/** 確認待ちの候補（新しく見つけた順） */
+export function listFormCandidates() {
+  return db()
+    .select({
+      id: schema.formTemplates.id,
+      name: schema.formTemplates.name,
+      path: schema.formTemplates.path,
+      webUrl: schema.formTemplates.webUrl,
+      ext: schema.formTemplates.ext,
+      modifiedAt: schema.formTemplates.modifiedAt,
+      size: schema.formTemplates.size,
+      caseType: schema.formTemplates.caseType,
+      docType: schema.formTemplates.docType,
+      clientId: schema.formTemplates.clientId,
+      clientName: schema.clients.name,
+      detectedAt: schema.formTemplates.detectedAt,
+      extractError: schema.formTemplates.extractError,
+      hasText: sql<number>`CASE WHEN ${schema.formTemplates.extractedText} IS NULL THEN 0 ELSE 1 END`,
+      excerpt: sql<string | null>`substr(${schema.formTemplates.extractedText}, 1, 160)`,
+    })
+    .from(schema.formTemplates)
+    .leftJoin(schema.clients, eq(schema.clients.id, schema.formTemplates.clientId))
+    .where(eq(schema.formTemplates.status, 'candidate'))
+    .orderBy(desc(schema.formTemplates.detectedAt), desc(schema.formTemplates.modifiedAt))
+    .limit(200)
+    .all();
+}
+
+/** 候補をライブラリに入れる（類型・文書種別を直してから入れてもよい）、またはライブラリから外す・対象外にする */
+export function setFormStatus(id: number, status: 'active' | 'dismissed', patch: { caseType?: string | null; docType?: string | null } = {}) {
+  const row = db().select({ id: schema.formTemplates.id }).from(schema.formTemplates).where(eq(schema.formTemplates.id, id)).get();
+  if (!row) throw new Error('書式が見つかりません');
+  const manual = patch.caseType !== undefined || patch.docType !== undefined;
+  db()
+    .update(schema.formTemplates)
+    .set({ status, ...patch, ...(manual ? { manualOverride: true } : {}) })
+    .where(eq(schema.formTemplates.id, id))
+    .run();
 }
 
 async function walk(folder: string, depth: number): Promise<{ name: string; path: string; itemId?: string; modifiedAt?: string; size?: number; webUrl?: string }[]> {
@@ -163,6 +339,8 @@ export function searchForms(filter: { q?: string; caseType?: string; docType?: s
   if (filter.caseType) conds.push(eq(schema.formTemplates.caseType, filter.caseType));
   if (filter.docType) conds.push(eq(schema.formTemplates.docType, filter.docType));
   if (filter.source) conds.push(eq(schema.formTemplates.source, filter.source));
+  // ライブラリに入っているものだけ（候補・対象外は出さない）
+  conds.push(eq(schema.formTemplates.status, 'active'));
   let ids: number[] | null = null;
   if (filter.q && filter.q.trim()) {
     ids = d.all<{ rowid: number }>(sql`SELECT rowid FROM form_templates_fts WHERE form_templates_fts MATCH ${ftsQuery(filter.q)} ORDER BY bm25(form_templates_fts) LIMIT 200`).map((r) => r.rowid);
@@ -182,11 +360,12 @@ export function searchForms(filter: { q?: string; caseType?: string; docType?: s
       docType: schema.formTemplates.docType,
       source: schema.formTemplates.source,
       clientId: schema.formTemplates.clientId,
+      detectedAt: schema.formTemplates.detectedAt,
       extractError: schema.formTemplates.extractError,
       hasText: sql<number>`CASE WHEN ${schema.formTemplates.extractedText} IS NULL THEN 0 ELSE 1 END`,
     })
     .from(schema.formTemplates)
-    .where(conds.length ? and(...conds) : undefined)
+    .where(and(...conds))
     .orderBy(desc(schema.formTemplates.modifiedAt))
     .limit(filter.limit ?? 100)
     .all();
@@ -202,14 +381,16 @@ export function updateForm(id: number, patch: { caseType?: string | null; docTyp
 }
 
 export function formStats() {
-  const rows = db().select({ caseType: schema.formTemplates.caseType, docType: schema.formTemplates.docType, source: schema.formTemplates.source }).from(schema.formTemplates).all();
+  const all = db().select({ caseType: schema.formTemplates.caseType, docType: schema.formTemplates.docType, source: schema.formTemplates.source, status: schema.formTemplates.status }).from(schema.formTemplates).all();
+  const rows = all.filter((r) => r.status === 'active');
+  const candidates = all.filter((r) => r.status === 'candidate').length;
   const byCaseType: Record<string, number> = {};
   const byDocType: Record<string, number> = {};
   for (const r of rows) {
     byCaseType[r.caseType ?? '未分類'] = (byCaseType[r.caseType ?? '未分類'] ?? 0) + 1;
     byDocType[r.docType ?? '未分類'] = (byDocType[r.docType ?? '未分類'] ?? 0) + 1;
   }
-  return { total: rows.length, byCaseType, byDocType };
+  return { total: rows.length, byCaseType, byDocType, candidates };
 }
 
 /** 個人情報らしき箇所を伏字化（AI に渡す前処理） */
