@@ -4,6 +4,7 @@ import type { ChannelAdapter, InboundMessage, SendResult } from './types.js';
 import { db, schema } from '../db/index.js';
 import { eq, asc } from 'drizzle-orm';
 import { logger } from '../logger.js';
+import { getSetting } from '../services/settings.js';
 
 type GmailMessage = gmail_v1.Schema$Message;
 type Part = gmail_v1.Schema$MessagePart;
@@ -241,4 +242,20 @@ export async function recategorizeConversations(opts: { all?: boolean } = {}): P
   }
   logger.info({ checked: targets.length, updated, nonPrimary, fetched }, 'Gmail 会話の区分を再判定しました');
   return { checked: targets.length, updated, nonPrimary, fetched };
+}
+
+/** 設定「必ず取り込む送信元」を小文字の配列にする（アドレス、またはドメイン） */
+export function alwaysSenders(): string[] {
+  return (getSetting('gmail_always_senders') || '')
+    .split(/[\s,、]+/)
+    .map((x) => x.trim().toLowerCase().replace(/^@/, ''))
+    .filter(Boolean);
+}
+
+/** 送信元が設定「必ず取り込む送信元」に当たるか（アドレスの一致、またはドメイン・その下のサブドメイン） */
+export function matchesAlwaysSender(email: string | null | undefined, list = alwaysSenders()): boolean {
+  const e = (email ?? '').trim().toLowerCase();
+  if (!e.includes('@')) return false;
+  const domain = e.slice(e.lastIndexOf('@') + 1);
+  return list.some((x) => (x.includes('@') ? x === e : domain === x || domain.endsWith(`.${x}`)));
 }

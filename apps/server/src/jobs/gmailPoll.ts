@@ -1,10 +1,27 @@
 import { gmailApi, isGoogleConnected } from '../integrations/google.js';
-import { normalizeGmailMessage, NON_PRIMARY_CATEGORIES, type GmailCategory } from '../channels/gmail.js';
+import { normalizeGmailMessage, matchesAlwaysSender, NON_PRIMARY_CATEGORIES, type GmailCategory } from '../channels/gmail.js';
 import { ingestMessage } from '../services/inbox.js';
 import { getSyncState, setSyncState, getSetting } from '../services/settings.js';
 import { logger } from '../logger.js';
+import { db, schema } from '../db/index.js';
 
 const KEY_HISTORY = 'gmail:historyId';
+
+/**
+ * Gmail の分類（メイン以外のタブ）に関係なく取り込む送信元か。
+ * 設定「必ず取り込む送信元」に加え、登録済みの依頼者・窓口（担当者）・事件の関係者のアドレスからのメールも必ず取り込む
+ * （依頼者からのメールが「新着」などに分類されて落ちるのを防ぐ）
+ */
+export function isAlwaysIngestSender(email: string | null | undefined): boolean {
+  const e = (email ?? '').trim().toLowerCase();
+  if (!e) return false;
+  if (matchesAlwaysSender(e)) return true;
+  const has = (list: string[] | null | undefined) => (list ?? []).some((x) => x.trim().toLowerCase() === e);
+  const d = db();
+  if (d.select({ emails: schema.clients.emails }).from(schema.clients).all().some((c) => has(c.emails))) return true;
+  if (d.select({ emails: schema.clientPersons.emails }).from(schema.clientPersons).all().some((p) => has(p.emails))) return true;
+  return d.select({ emails: schema.caseContacts.emails }).from(schema.caseContacts).all().some((k) => has(k.emails));
+}
 const KEY_ADDR = 'gmail:myAddresses';
 
 /** 設定「自分のメールアドレス」（別名・他アカウント）を小文字の配列にする */
@@ -52,6 +69,61 @@ export async function myAddresses(opts: { refresh?: boolean } = {}): Promise<str
   return [...new Set([...addrs, ...extra])];
 }
 
+/** Gmail のメッセージを取り込む。primaryOnly ならメイン以外のタブの受信は取り込まない（必ず取り込む送信元は除く） */
+async function ingestGmailIds(ids: string[], mine: string[], opts: { primaryOnly: boolean }): Promise<{ ingested: number; skipped: number }> {
+  const gmail = gmailApi();
+  let ingested = 0;
+  let skipped = 0;
+  for (const id of ids) {
+    try {
+      const full = await gmail.users.messages.get({ userId: 'me', id, format: 'full' });
+      const norm = normalizeGmailMessage(full.data, mine);
+      if (!norm) continue;
+      // 「メインだけ」の設定なら、プロモーション／ソーシャル／新着／フォーラムに分類された受信は取り込まない。
+      // ただし、必ず取り込む送信元（設定のもの・登録済みの依頼者や関係者）からのものは取り込む
+      if (
+        opts.primaryOnly &&
+        norm.direction === 'in' &&
+        NON_PRIMARY_CATEGORIES.includes((norm.raw as { category?: GmailCategory }).category ?? 'primary') &&
+        !isAlwaysIngestSender(norm.senderAddress)
+      ) {
+        skipped++;
+        continue;
+      }
+      const r = await ingestMessage(norm);
+      if (r.isNew) ingested++;
+    } catch (err) {
+      const code = (err as { code?: number }).code;
+      if (code === 404) continue;
+      logger.warn({ err, id }, 'Gmail メッセージ取得に失敗');
+    }
+  }
+  return { ingested, skipped };
+}
+
+/**
+ * 取り込まれなかったメールを、送信元を指定して取り込み直す（直近 days 日分）。
+ * 「メインだけ」の設定で落ちたものも含めて取り込む（取り込み済みのものは重ねて入らない）
+ */
+export async function refetchGmailFrom(sender: string, days = 30): Promise<{ found: number; ingested: number }> {
+  const s = sender.trim().toLowerCase().replace(/^@/, '');
+  // Gmail の検索に渡すので、アドレス・ドメインに使う文字だけ受け付ける
+  if (!/^[a-z0-9._%+-]*@?[a-z0-9.-]+\.[a-z]{2,}$/.test(s)) throw new Error('メールアドレスか、ドメイン（例: example.jp）を入れてください');
+  if (!isGoogleConnected()) throw new Error('Google に接続されていません');
+  const gmail = gmailApi();
+  const mine = await myAddresses();
+  const ids: string[] = [];
+  let pageToken: string | undefined;
+  do {
+    const list = await gmail.users.messages.list({ userId: 'me', maxResults: 100, q: `from:${s} newer_than:${Math.max(1, Math.min(365, days))}d -in:spam -in:trash -in:draft`, pageToken });
+    for (const m of list.data.messages ?? []) if (m.id) ids.push(m.id);
+    pageToken = list.data.nextPageToken ?? undefined;
+  } while (pageToken && ids.length < 500);
+  const r = await ingestGmailIds(ids.reverse(), mine, { primaryOnly: false });
+  logger.info({ sender: s, found: ids.length, ingested: r.ingested }, 'Gmail を送信元で取り込み直しました');
+  return { found: ids.length, ingested: r.ingested };
+}
+
 /**
  * Gmail をポーリングして新着を取り込む。
  * history.list を使い、historyId が失効していたら直近分を messages.list で再同期する。
@@ -66,24 +138,9 @@ export async function pollGmail(): Promise<{ ingested: number; skipped?: number;
   let skipped = 0;
 
   const ingestIds = async (ids: string[]) => {
-    for (const id of ids) {
-      try {
-        const full = await gmail.users.messages.get({ userId: 'me', id, format: 'full' });
-        const norm = normalizeGmailMessage(full.data, mine);
-        if (!norm) continue;
-        // 「メインだけ」の設定なら、プロモーション／ソーシャル／新着／フォーラムに分類された受信は取り込まない
-        if (primaryOnly && norm.direction === 'in' && NON_PRIMARY_CATEGORIES.includes((norm.raw as { category?: GmailCategory }).category ?? 'primary')) {
-          skipped++;
-          continue;
-        }
-        const r = await ingestMessage(norm);
-        if (r.isNew) ingested++;
-      } catch (err) {
-        const code = (err as { code?: number }).code;
-        if (code === 404) continue;
-        logger.warn({ err, id }, 'Gmail メッセージ取得に失敗');
-      }
-    }
+    const r = await ingestGmailIds(ids, mine, { primaryOnly });
+    ingested += r.ingested;
+    skipped += r.skipped;
   };
 
   const fullSync = async (): Promise<string> => {

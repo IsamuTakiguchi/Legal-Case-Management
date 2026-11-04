@@ -15,7 +15,7 @@ import { linkGmailMessageToCreditor } from './creditors.js';
 import { findContactByIdentity, contactBriefs } from './contacts.js';
 import { maybeClassifyInBackground } from './caseClassify.js';
 import { getSetting } from './settings.js';
-import { NON_PRIMARY_CATEGORIES, type GmailCategory } from '../channels/gmail.js';
+import { NON_PRIMARY_CATEGORIES, matchesAlwaysSender, type GmailCategory } from '../channels/gmail.js';
 import { stripQuotedReply } from '@lcm/shared';
 import { queueInboundPush } from './push.js';
 
@@ -267,10 +267,14 @@ function previewOf(last: MessageRow) {
   return { body: body.slice(0, 600), truncated: body.length > 600, direction: last.direction, sentAt: last.sentAt, senderName: last.senderName };
 }
 
-/** Gmail の「メインだけ」の設定で、受信箱から外している会話か */
-function hiddenByGmailCategory(r: { channel: string; meta: unknown }): boolean {
+/**
+ * Gmail の「メインだけ」の設定で、受信箱から外している会話か。
+ * 依頼者・関係者に紐付いた会話と、「必ず取り込む送信元」からの会話は、どのタブに分類されても出す
+ */
+function hiddenByGmailCategory(r: { channel: string; meta: unknown; clientId?: number | null; contactId?: number | null; counterpartAddress?: string | null }): boolean {
   if (r.channel !== 'gmail' || getSetting('gmail_categories') !== 'primary') return false;
-  return NON_PRIMARY_CATEGORIES.includes(((r.meta as { category?: string }).category ?? 'primary') as GmailCategory);
+  if (!NON_PRIMARY_CATEGORIES.includes(((r.meta as { category?: string }).category ?? 'primary') as GmailCategory)) return false;
+  return !r.clientId && !r.contactId && !matchesAlwaysSender(r.counterpartAddress);
 }
 
 /**
@@ -280,7 +284,16 @@ function hiddenByGmailCategory(r: { channel: string; meta: unknown }): boolean {
  */
 export function inboxCounts(): { inbox: number; unread: number } {
   const rows = db()
-    .select({ id: schema.conversations.id, channel: schema.conversations.channel, meta: schema.conversations.meta, needsReply: schema.conversations.needsReply, unread: schema.conversations.unread })
+    .select({
+      id: schema.conversations.id,
+      channel: schema.conversations.channel,
+      meta: schema.conversations.meta,
+      needsReply: schema.conversations.needsReply,
+      unread: schema.conversations.unread,
+      clientId: schema.conversations.clientId,
+      contactId: schema.conversations.contactId,
+      counterpartAddress: schema.conversations.counterpartAddress,
+    })
     .from(schema.conversations)
     .where(eq(schema.conversations.archived, false))
     .all()
