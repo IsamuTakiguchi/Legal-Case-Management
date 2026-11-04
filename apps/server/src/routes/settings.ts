@@ -10,7 +10,7 @@ import { recentActivity } from '../services/activity.js';
 import { lineQuotaStatus } from '../services/lineQuota.js';
 import { JOBS, runJob, jobStatus } from '../jobs/index.js';
 import { usageSummary } from '../services/apiCost.js';
-import { myAddresses, configuredMyAddresses } from '../jobs/gmailPoll.js';
+import { myAddresses, configuredMyAddresses, refetchGmailFrom } from '../jobs/gmailPoll.js';
 import { refixOwnMessages, inboxCounts } from '../services/inbox.js';
 import { generateStyleProfile, getStyleProfile, saveStyleProfile, importGmailSent, importChatworkMine, importPlainText, styleStats } from '../services/style.js';
 import { storage } from '../integrations/storage.js';
@@ -89,6 +89,12 @@ settingsRoutes.get('/gmail/my-addresses', async (c) => {
 settingsRoutes.post('/chatwork/recheck-scope', async (c) => c.json(await recheckChatworkScope({ apply: c.req.query('apply') === '1' })));
 
 /** 取込済みの Gmail 会話の区分（メイン／プロモーション等）を判定し直す */
+/** 送信元を指定して、取り込まれなかったメールを取り込み直す（直近 30 日。「メインだけ」で落ちたものも） */
+settingsRoutes.post('/gmail/refetch', async (c) => {
+  const body = z.object({ sender: z.string().trim().min(3).max(200), days: z.number().int().min(1).max(365).optional() }).parse(await c.req.json());
+  return c.json(await refetchGmailFrom(body.sender, body.days ?? 30));
+});
+
 settingsRoutes.post('/gmail/recategorize', async (c) => c.json(await recategorizeConversations({ all: c.req.query('all') === '1' })));
 
 settingsRoutes.get('/settings/templates', (c) => c.json(listTemplates()));

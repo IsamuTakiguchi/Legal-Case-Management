@@ -66,6 +66,11 @@ const FIELDS: { key: string; label: string; hint?: string; multiline?: boolean; 
     ],
   },
   {
+    key: 'gmail_always_senders',
+    label: 'Gmail で必ず取り込む送信元（メールアドレス・ドメイン、カンマ区切り）',
+    hint: '取込範囲を「メインだけ」にしていても、ここに入れた送信元からのメールは必ず受信箱に入れます。裁判所・弁護士会・各種システムの自動通知（no-reply など）は Gmail が「新着」などに分類しやすいので、ここに入れてください。ドメイン（例: ben54.jp）を入れると、そのドメインのアドレスすべてが対象です。登録済みの依頼者・窓口・事件の関係者のアドレスからのメールは、入れなくても必ず取り込みます',
+  },
+  {
     key: 'chatwork_scope',
     label: 'Chatwork の取込範囲',
     hint: '「自分宛だけ」にすると、[To] で自分が指定されたもの・自分のメッセージへの返信（re）・全員宛（toall）・ダイレクトチャット・自分に振られたタスクのメッセージだけを受信箱に取り込みます。引用（[qt]）の中の [To:自分] は自分宛と見ません。グループでの自分の発言は、取り込み済みのやり取りへの返信だけ入ります',
@@ -369,6 +374,17 @@ export default function Settings() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['conversations'] }),
     onError: (e) => setMsg((e as Error).message),
   });
+  // 送信元を指定して、取り込まれなかったメールを取り込み直す
+  const [refetchSender, setRefetchSender] = useState('');
+  const refetch = useMutation({
+    mutationFn: () => api.post<{ found: number; ingested: number }>('/gmail/refetch', { sender: refetchSender.trim() }),
+    onSuccess: (r) => {
+      setMsg(r.found ? `「${refetchSender.trim()}」からのメール ${r.found} 件を確認し、${r.ingested} 件を新しく受信箱に取り込みました（直近 30 日）` : `直近 30 日に「${refetchSender.trim()}」からのメールは Gmail にありませんでした`);
+      qc.invalidateQueries({ queryKey: ['conversations'] });
+      qc.invalidateQueries({ queryKey: ['nav-counts'] });
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
   const recategorize = useMutation({
     mutationFn: () => api.post<{ checked: number; updated: number; nonPrimary: number }>('/gmail/recategorize?all=1'),
     onSuccess: (r) => {
@@ -664,6 +680,24 @@ export default function Settings() {
                       <span>設定より前に取り込んだメールに区分を付け直します（Gmail に問い合わせるため、件数が多いと時間がかかります）</span>
                     </div>
                   )}
+                </>
+              ) : f.key === 'gmail_always_senders' ? (
+                <>
+                  <input className="input" value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} placeholder="例: no-reply02@ben54.jp, courts.go.jp" />
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    <span>受信箱に入らなかったメールを取り込み直す:</span>
+                    <input
+                      className="input w-auto py-0.5 text-xs"
+                      value={refetchSender}
+                      onChange={(e) => setRefetchSender(e.target.value)}
+                      placeholder="送信元（例: no-reply02@ben54.jp）"
+                      aria-label="取り込み直す送信元"
+                    />
+                    <button type="button" className="btn btn-sm" onClick={() => refetch.mutate()} disabled={refetch.isPending || refetchSender.trim().length < 3}>
+                      {refetch.isPending ? '取込中…' : '直近 30 日分を取り込む'}
+                    </button>
+                    <span>Gmail から、その送信元のメールを探して受信箱に入れます（取込範囲の設定に関係なく。取り込み済みのものは重ねて入りません）</span>
+                  </div>
                 </>
               ) : f.key === 'my_email_addresses' ? (
                 <>
