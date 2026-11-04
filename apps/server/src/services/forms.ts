@@ -155,12 +155,12 @@ export async function indexForms(opts: { full?: boolean } = {}): Promise<{ scann
 
 /** 書式として使えそうな形式（自分で作る書面）。PDF は文書種別が分かるものだけ候補にする */
 const AUTHORED = /\.(docx|doc|xlsx|xlsm)$/i;
-/** はじめて見るとき（目印が無いとき）に拾う期間 */
+/** はじめて見るとき（目印が無いとき）に拾う期間（ローカルのフォルダのとき。OneDrive は初回は「いま」から見はじめる） */
 const INITIAL_LOOKBACK_DAYS = 14;
-/** 1 回に追加・候補にする上限（大量に移したときに一度に増えすぎないように） */
-const DETECT_LIMIT = 50;
-/** これより大きいファイルは本文を取り出さない */
-const DETECT_MAX_BYTES = 15 * 1024 * 1024;
+/** 1 回に追加・候補にする上限（大量に移したときに一度に増えすぎない・1 回の処理が重くならないように） */
+const DETECT_LIMIT = 20;
+/** これより大きいファイルは本文を取り出さない（夜の索引化に任せる） */
+const DETECT_MAX_BYTES = 5 * 1024 * 1024;
 /** OneDrive の変更を続きから取るための目印の置き場所（sync_state） */
 const DETECT_CURSOR_KEY = 'forms:detectCursor';
 
@@ -197,8 +197,11 @@ export async function detectNewForms(opts: { now?: Date } = {}): Promise<{ check
   const now = opts.now ?? new Date();
   const root = st.clientRoot();
   const cursor = getSyncState(DETECT_CURSOR_KEY);
-  const changed = await st.changedFiles(root, cursor);
+  // 書式になりうる形式だけ受け取る（写真・スキャンなどは最初から捨てる）
+  const changed = await st.changedFiles(root, cursor, { accept: /\.(docx|doc|xlsx|xlsm|pdf)$/i, limit: 500 });
   const since = changed.initial ? new Date(now.getTime() - INITIAL_LOOKBACK_DAYS * 86400_000).toISOString() : null;
+  // 目印は先に進めておく（途中で失敗・再起動しても、同じ重い処理を何度も繰り返さない）
+  setSyncState(DETECT_CURSOR_KEY, changed.cursor);
 
   const libraryRoots = getSetting('forms_library_paths').split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
   // 受け取った資料・送付用・未振分・バックアップのフォルダは見ない
@@ -274,8 +277,6 @@ export async function detectNewForms(opts: { now?: Date } = {}): Promise<{ check
     if (status === 'active') added++;
     else candidates++;
   }
-  // 上限で打ち切ったときも目印は進める（大量に移したときに候補が溢れないように。残りは夜の索引化の対象フォルダなら、そちらで入る）
-  setSyncState(DETECT_CURSOR_KEY, changed.cursor);
   if (added || candidates) logger.info({ added, candidates }, 'OneDrive の新しいファイルから書式の候補を見つけました');
   return { checked, added, candidates };
 }

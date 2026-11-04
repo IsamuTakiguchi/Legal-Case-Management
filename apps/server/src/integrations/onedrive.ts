@@ -337,6 +337,33 @@ export async function createShareLink(itemId: string, opts: { scope: 'anonymous'
   return res.link.webUrl;
 }
 
+/** delta で取る項目（全部取ると 1 件あたりが大きく、件数が多いとメモリを圧迫する） */
+const DELTA_SELECT = 'id,name,size,webUrl,file,folder,deleted,parentReference,lastModifiedDateTime,createdDateTime';
+
+/**
+ * ドライブ全体の変更を、前回（deltaLink）から 1 ページずつ受け取る（全部をメモリに溜めない）。
+ * OneDrive for Business・SharePoint では delta はドライブのルートでしか使えないので、フォルダで絞るのは呼び出し側で行う。
+ * 戻り値は次に続きを取るための deltaLink
+ */
+export async function driveDeltaPages(deltaLink: string, onPage: (items: DriveItem[]) => void | Promise<void>): Promise<string> {
+  let url = deltaLink;
+  let next = '';
+  while (url) {
+    const page = await graph<{ value: DriveItem[]; '@odata.nextLink'?: string; '@odata.deltaLink'?: string }>(url);
+    await onPage(page.value);
+    if (page['@odata.deltaLink']) next = page['@odata.deltaLink'];
+    url = page['@odata.nextLink'] ?? '';
+  }
+  return next;
+}
+
+/** いまの時点の deltaLink（過去の変更は返さない。ここから先の変更だけを取りはじめるとき用） */
+export async function latestDriveDeltaLink(): Promise<string> {
+  const page = await graph<{ '@odata.deltaLink'?: string }>(`/me/drive/root/delta?token=latest&$select=${DELTA_SELECT}`);
+  if (!page['@odata.deltaLink']) throw new Error('OneDrive の変更の目印を取得できませんでした');
+  return page['@odata.deltaLink'];
+}
+
 /** delta でフォルダ配下の変更を再帰的に取得する */
 export async function deltaChildren(folderPath: string, deltaLink?: string | null): Promise<{ items: DriveItem[]; deltaLink: string }> {
   const items: DriveItem[] = [];

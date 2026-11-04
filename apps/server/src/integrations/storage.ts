@@ -52,8 +52,11 @@ export interface StorageBackend {
   move(file: { itemId?: string | null; path: string }, newFolderPath: string): Promise<StoredFile>;
   list(folderPath: string): Promise<ListedFile[]>;
   shareLink?(file: { itemId?: string | null; path: string }, expiresAt: Date): Promise<string>;
-  /** フォルダ配下で、前回（cursor）から新しくできた・変わったファイル。cursor が無ければ配下のファイルすべて */
-  changedFiles?(folderPath: string, cursor: string | null): Promise<ChangedFiles>;
+  /**
+   * フォルダ配下で、前回（cursor）から新しくできた・変わったファイル（accept の形式だけ、limit 件まで）。
+   * cursor が無いときの扱いは置き場所による（OneDrive はいまから見はじめる、ローカルは配下すべて）
+   */
+  changedFiles?(folderPath: string, cursor: string | null, opts?: { accept?: RegExp; limit?: number }): Promise<ChangedFiles>;
   remove(file: { itemId?: string | null; path: string }): Promise<void>;
 }
 
@@ -106,24 +109,34 @@ class OneDriveStorage implements StorageBackend {
   async shareLink(file: { itemId?: string | null; path: string }, expiresAt: Date): Promise<string> {
     return od.createShareLink(await this.resolveId(file), { scope: 'anonymous', expiresAt });
   }
-  /** Graph の delta で変更を取る。目印が古くなって使えなければ（410 など）取り直す */
-  async changedFiles(folderPath: string, cursor: string | null): Promise<ChangedFiles> {
-    let r: Awaited<ReturnType<typeof od.deltaChildren>>;
-    let initial = !cursor;
-    try {
-      r = await od.deltaChildren(folderPath, cursor);
-    } catch (err) {
-      if (!cursor) throw err;
-      r = await od.deltaChildren(folderPath, null);
-      initial = true;
-    }
+  /**
+   * Graph の delta で変更を取る。ドライブ全体の変更を 1 ページずつ受け取り、フォルダ配下・形式（accept）で絞ったものだけ残す。
+   * 目印が無いとき（初回）・古くて使えないときは、過去分は読まずに「いま」から見はじめる（ドライブ全体を読み込まない）
+   */
+  async changedFiles(folderPath: string, cursor: string | null, opts: { accept?: RegExp; limit?: number } = {}): Promise<ChangedFiles> {
+    if (!cursor) return { files: [], cursor: await od.latestDriveDeltaLink(), initial: true };
+    const root = od.joinPath(folderPath);
     const files: ListedFile[] = [];
-    for (const i of r.items) {
-      if (!i.file || i.deleted) continue;
-      const parent = driveParentPath(i.parentReference?.path);
-      files.push({ name: i.name, path: od.joinPath(parent, i.name), itemId: i.id, isFolder: false, size: i.size, modifiedAt: i.lastModifiedDateTime, createdAt: i.createdDateTime, webUrl: i.webUrl });
+    const limit = opts.limit ?? 500;
+    const collect = (items: od.DriveItem[]) => {
+      for (const i of items) {
+        if (files.length >= limit) return;
+        if (!i.file || i.deleted) continue;
+        if (opts.accept && !opts.accept.test(i.name)) continue;
+        const parent = driveParentPath(i.parentReference?.path);
+        const p = od.joinPath(parent, i.name);
+        if (root !== '/' && p !== root && !p.startsWith(`${root}/`)) continue;
+        files.push({ name: i.name, path: p, itemId: i.id, isFolder: false, size: i.size, modifiedAt: i.lastModifiedDateTime, createdAt: i.createdDateTime, webUrl: i.webUrl });
+      }
+    };
+    try {
+      const next = await od.driveDeltaPages(cursor, collect);
+      return { files, cursor: next || cursor, initial: false };
+    } catch (err) {
+      // 目印が古くなった（410 resyncRequired など）ときは、いまから見はじめる
+      if (/ 410 |resync/i.test(String(err))) return { files: [], cursor: await od.latestDriveDeltaLink(), initial: true };
+      throw err;
     }
-    return { files, cursor: r.deltaLink, initial };
   }
   async remove(file: { itemId?: string | null; path: string }): Promise<void> {
     await od.deleteItem(await this.resolveId(file));
@@ -212,8 +225,9 @@ export class LocalFolderStorage implements StorageBackend {
     await fs.unlink(this.abs(file.path));
   }
   /** フォルダ配下を見て、目印（前回の時刻）より後に変わったファイルを返す */
-  async changedFiles(folderPath: string, cursor: string | null): Promise<ChangedFiles> {
+  async changedFiles(folderPath: string, cursor: string | null, opts: { accept?: RegExp; limit?: number } = {}): Promise<ChangedFiles> {
     const startedAt = new Date().toISOString();
+    const limit = opts.limit ?? 500;
     const out: ListedFile[] = [];
     const walk = async (dir: string, depth: number) => {
       if (depth > 8) return;
@@ -229,6 +243,8 @@ export class LocalFolderStorage implements StorageBackend {
           await walk(p, depth + 1);
           continue;
         }
+        if (out.length >= limit) return;
+        if (opts.accept && !opts.accept.test(e.name)) continue;
         const st = await fs.stat(this.abs(p)).catch(() => null);
         if (!st) continue;
         if (cursor && st.mtime.toISOString() <= cursor) continue;

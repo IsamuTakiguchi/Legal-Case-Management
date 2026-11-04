@@ -40,6 +40,8 @@ http://www.noboriohji.com/access/`,
   forms_index_client_subfolders: '提出書面',
   /** OneDrive に新しくできたファイルのうち、ファイル名から文書種別が分かる Word・Excel を自動で書式ライブラリに入れるか（'0' ならすべて候補にして確認する） */
   forms_auto_add: '1',
+  /** OneDrive の新しいファイルから書式の候補を探す（1 時間ごと）か。'0' で止める */
+  forms_detect_enabled: '1',
   share_link_expiry_days: '30',
   /** API 利用料の円換算に使う為替レート（1 ドル＝何円） */
   usd_jpy_rate: '150',
