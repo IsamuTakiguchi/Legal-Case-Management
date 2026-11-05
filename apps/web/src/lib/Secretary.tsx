@@ -80,6 +80,7 @@ interface ExtendedAction {
   [field: string]: unknown;
 }
 type ExtendedType =
+  | 'staff_create'
   | 'case_update'
   | 'case_create'
   | 'client_create'
@@ -142,6 +143,7 @@ const TYPE_LABEL: Record<Action['type'], string> = {
   note: '記録',
   event: '予定',
   task: 'タスク',
+  staff_create: '事務局の登録',
   case_update: '事件の変更',
   case_create: '事件の登録',
   client_create: '依頼者の登録',
@@ -496,7 +498,7 @@ function LinkRow({ a, onChange, clients, cases }: { a: EventAction | TaskAction;
   );
 }
 
-const EXTENDED = new Set<string>(['case_update', 'case_create', 'client_create', 'client_update', 'contact_create', 'contact_update', 'task_update', 'task_delete', 'event_update', 'event_delete', 'message_send']);
+const EXTENDED = new Set<string>(['staff_create', 'case_update', 'case_create', 'client_create', 'client_update', 'contact_create', 'contact_update', 'task_update', 'task_delete', 'event_update', 'event_delete', 'message_send']);
 function isExtended(a: Action): a is ExtendedAction {
   return EXTENDED.has(a.type);
 }
@@ -540,6 +542,7 @@ const FIELD_UI: Record<string, { label: string; kind: FieldKind; options?: [stri
   courtName: { label: '裁判所', kind: 'text' },
   caseNumber: { label: '事件番号', kind: 'text' },
   referrer: { label: '紹介者', kind: 'text' },
+  staffName: { label: '担当事務局（名前）', kind: 'text' },
   organization: { label: '所属', kind: 'text' },
   phone: { label: '電話', kind: 'text' },
   fax: { label: 'FAX', kind: 'text' },
