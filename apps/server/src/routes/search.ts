@@ -41,6 +41,6 @@ searchRoutes.post('/secretary/plan', async (c) => {
 
 /** AI 秘書: 確認した案を実際に登録する */
 searchRoutes.post('/secretary/apply', async (c) => {
-  const body = z.object({ actions: z.array(secretaryActionSchema).min(1).max(8) }).parse(await c.req.json());
+  const body = z.object({ actions: z.array(secretaryActionSchema).min(1).max(12) }).parse(await c.req.json());
   return c.json(await applySecretaryActions(body.actions));
 });
