@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { createClientRecord, updateClientRecord } from '../services/clientWrite.js';
 import { deleteCase } from '../services/caseDelete.js';
 import { noteContactSuggestions } from '../services/noteContacts.js';
 import { listStaff, createStaff, updateStaff, deleteStaff, listChatworkAccounts, staffRooms } from '../services/staff.js';
@@ -44,21 +45,7 @@ clientRoutes.get('/clients', (c) => {
   return c.json(rows);
 });
 
-/** メールアドレスは前後の空白を落とし、小文字にして重複を除く（同じ相手を 2 度登録しないため） */
-function normalizeEmails(emails: string[]): string[] {
-  return [...new Set(emails.map((e) => e.trim().toLowerCase()).filter(Boolean))];
-}
-
-clientRoutes.post('/clients', async (c) => {
-  const input = clientInputSchema.parse(await c.req.json());
-  if (input.lineUserId) assertLineFriendFree(input.lineUserId, null);
-  // 個人・法人を選ばずに登録したら、名前から推定する（「株式会社」などが付けば法人）
-  const entityType = input.entityType ?? (looksLikeCorporation(input.name) ? 'corporation' : 'individual');
-  const row = db().insert(schema.clients).values({ ...input, entityType, emails: normalizeEmails(input.emails), phones: normalizePhones(input.phones) }).returning().get();
-  // LINE の友だちを選んで登録したら、既存の会話を付け、友だち追加の通知を消す
-  if (input.lineUserId) linkLineFriendToClient(input.lineUserId, row.id);
-  return c.json(db().select().from(schema.clients).where(eq(schema.clients.id, row.id)).get());
-});
+clientRoutes.post('/clients', async (c) => c.json(createClientRecord(clientInputSchema.parse(await c.req.json()))));
 
 // ---- 同じ名前で二重に登録した依頼者の統合 ----
 
@@ -148,20 +135,7 @@ clientRoutes.put('/clients/:id', async (c) => {
   // partial() でも default([]) が効くので、送られていない一覧（別名・メール・電話）が空で上書きされてしまう。
   // 実際に送られてきた項目だけを書き換える
   const input = Object.fromEntries(Object.entries(parsed).filter(([k]) => k in raw)) as typeof parsed;
-  if (input.lineUserId) assertLineFriendFree(input.lineUserId, id);
-  const before = db().select({ path: schema.clients.onedriveFolderPath, name: schema.clients.name, provisional: schema.clients.provisional }).from(schema.clients).where(eq(schema.clients.id, id)).get();
-  // 氏名未確認の依頼者の名前を直したら、氏名が分かったものとして扱う（明示の指定があればそちら）
-  if (before?.provisional && input.name !== undefined && input.name.trim() !== before.name && input.provisional === undefined) input.provisional = false;
-  db().update(schema.clients)
-    .set({ ...input, ...(input.emails ? { emails: normalizeEmails(input.emails) } : {}), ...(input.phones ? { phones: normalizePhones(input.phones) } : {}), updatedAt: new Date().toISOString() })
-    .where(eq(schema.clients.id, id))
-    .run();
-  if (input.lineUserId) linkLineFriendToClient(input.lineUserId, id);
-  // 依頼者フォルダを指定し直したら、前のフォルダの ID を忘れて新しいフォルダを追う（前のフォルダに戻されないように）
-  if ('onedriveFolderPath' in input && (input.onedriveFolderPath?.trim() ?? '') !== (before?.path?.trim() ?? '')) {
-    await adoptClientFolderPath(id).catch((err) => logger.warn({ err, clientId: id }, '依頼者フォルダの ID を控えられませんでした'));
-  }
-  return c.json(db().select().from(schema.clients).where(eq(schema.clients.id, id)).get());
+  return c.json(await updateClientRecord(id, input));
 });
 
 /** 依頼者フォルダの名前を OneDrive 上で変える（アプリのパスと保存済みファイルの表示も付け替える） */

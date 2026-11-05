@@ -10,6 +10,7 @@ import { createTask } from './tasks.js';
 import { createCalendarEvent } from './court.js';
 import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, EVENT_KINDS, EVENT_KIND_LABEL, TASK_STATUSES, TASK_STATUS_LABEL, formatJaDateTime, toJstParts, phoneDigits, isPhoneLike, representativeLabel } from '@lcm/shared';
 import { logger } from '../logger.js';
+import { extendedActionSchemas, extendedReadTools, previewExtended, applyExtended, EXTENDED_TYPES, type ExtendedAction, type Change } from './secretaryActions.js';
 
 /**
  * AI 秘書。
@@ -18,7 +19,8 @@ import { logger } from '../logger.js';
  * 依頼者や事件を自分で調べ、やることの案を返す。案を出すところまでが秘書の仕事で、
  * 実際に登録するのは、弁護士が中身を確かめて「登録する」を押したときだけ。
  *
- * 秘書が触れるのは記録・予定・タスクの 3 つ。メッセージの送信はしない（送信は会話画面で行う）。
+ * 記録・予定・タスクの追加に加えて、事件・依頼者・関係者の登録と変更、タスク・予定の変更と削除、
+ * メッセージの送信（依頼者・関係者・事務局）も案にできる（secretaryActions.ts）。どれも確認のあとに実行する。
  */
 
 const WD = ['日', '月', '火', '水', '木', '金', '土'];
@@ -60,18 +62,20 @@ export const taskActionSchema = z.object({
   note: z.string().nullable().optional(),
   clientId: z.number().int().nullable().optional(),
   caseId: z.number().int().nullable().optional(),
-  status: z.enum(TASK_STATUSES).describe('open=自分がやる / waiting_client=依頼者の返事待ち / waiting_other=相手方・裁判所の返事待ち / waiting_staff=事務局の回答・作業待ち'),
+  status: z.enum(TASK_STATUSES).describe('open=自分がやる / waiting_client=依頼者の返事待ち / waiting_other=相手方・裁判所の返事待ち / waiting_staff=事務局の回答・作業待ち（新しく作るときに drafted・done は使わない）'),
   dueAt: isoAt.nullable().optional().describe('期限（自分がやるとき）'),
   followUpAt: isoAt.nullable().optional().describe('催促する日（返事待ちのとき）。空なら営業日で自動'),
 });
 
-export const secretaryActionSchema = z.discriminatedUnion('type', [noteActionSchema, eventActionSchema, taskActionSchema]);
-export type SecretaryAction = z.infer<typeof secretaryActionSchema>;
+export const secretaryActionSchema = z.discriminatedUnion('type', [noteActionSchema, eventActionSchema, taskActionSchema, ...extendedActionSchemas]);
+type BasicAction = z.infer<typeof noteActionSchema> | z.infer<typeof eventActionSchema> | z.infer<typeof taskActionSchema>;
+export type SecretaryAction = BasicAction | ExtendedAction;
+const isExtended = (a: SecretaryAction): a is ExtendedAction => (EXTENDED_TYPES as string[]).includes(a.type);
 
 /** 秘書が最後に返すまとめ */
 const proposalSchema = z.object({
   reply: z.string().describe('弁護士への返事。何をするつもりか、何が分からなかったかを日本語で簡潔に'),
-  actions: z.array(secretaryActionSchema).max(8).describe('登録したいことの案。質問に答えるだけのときは空にする'),
+  actions: z.array(secretaryActionSchema).max(12).describe('登録・変更・送信したいことの案。質問に答えるだけのときは空にする'),
   questions: z.array(z.string()).max(3).describe('登録の前に確かめたいこと。無ければ空'),
 });
 
@@ -80,6 +84,8 @@ export interface SecretaryPlan {
   reply: string;
   /** 確認待ちの案（画面で直せる） */
   actions: SecretaryAction[];
+  /** 案ごとの説明と、変更の一覧（いま → 変更後）。actions と同じ並び */
+  previews: { label: string; changes: Change[] }[];
   /** 足りないので聞きたいこと */
   questions: string[];
   /** 調べるのに使った資料（根拠として画面に出す） */
@@ -184,6 +190,7 @@ export function calendarInRange(fromIso: string, toIso: string) {
 
 function readTools(sources: SearchHit[]): AgentTool[] {
   return [
+    ...extendedReadTools(),
     agentTool({
       name: 'find_client',
       description: '依頼者を名前・かな・別名・電話番号で探して、ID と正式な名前を返します。記録・予定・タスクを誰かに紐付けるときは、必ずこれで ID を確かめます。電話番号だけ分かっているときは番号をそのまま渡します。',
@@ -220,7 +227,7 @@ function readTools(sources: SearchHit[]): AgentTool[] {
     }),
     agentTool({
       name: 'propose',
-      description: '調べ終わったら、これを呼んで終わります。登録したいことがあれば actions に入れ、聞くだけ・答えるだけのときは actions を空にして reply だけ書きます。',
+      description: '調べ終わったら、これを呼んで終わります。登録・変更・送信したいことがあれば actions に入れ、聞くだけ・答えるだけのときは actions を空にして reply だけ書きます。',
       schema: proposalSchema,
       // run を持たないので、これが呼ばれた時点で往復が終わる
     }),
@@ -236,13 +243,22 @@ function systemPrompt(): string {
     `あなたは日本の法律事務所（${office || '法律事務所'}）の秘書です。${lawyer ? `弁護士の${lawyer}先生` : '弁護士本人'}から口頭で頼まれた内容を、事務システムに登録する形に整えます。`,
     `今は ${p.year}年${p.month}月${p.day}日(${WD[p.weekday]}) ${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')}（日本時間）です。「来週火曜」「あさって」はこれを基準に読みます。`,
     '',
-    '【できること】記録の追加・予定の登録・タスクの作成の 3 つです。メッセージの送信や、依頼者・事件そのものの作成はできません。頼まれたら、その旨を reply に書いてください。',
+    '【できること（どれも案を出すだけで、弁護士が確認して「登録」を押したときに実行されます）】',
+    '・記録の追加（note）、予定の登録（event）、タスクの作成（task）',
+    '・事件の変更（case_update: 担当事務局・区分・段階・事件類型・裁判所・事件番号・方針・紹介者・事件名）、事件の新規登録（case_create）',
+    '・依頼者の新規登録（client_create）、依頼者の変更（client_update: 氏名・ふりがな・電話・メール・連絡手段・メモ）',
+    '・事件の関係者（相手方代理人など）の追加（contact_create）・変更（contact_update）',
+    '・タスクの変更（task_update: 完了・起案・検討完了・待ちなどの状態、期限、名前）、タスクの削除（task_delete）',
+    '・予定の変更（event_update: 日時・件名・場所・種類・仮/確定）、予定の削除（event_delete）',
+    '・メッセージの送信（message_send: 依頼者・窓口へ Gmail/LINE/Chatwork、関係者へ Gmail/LINE、事務局へ Chatwork）',
+    'できないこと: 記録の書き換え・削除、依頼者・事件の削除、ファイルの操作、書面の作成。頼まれたら、その旨を reply に書き、どの画面でできるかを添えてください。',
     '',
     '【手順】',
     '1. 誰の・どの事件の話かを find_client と find_case で確かめます。ID を推測してはいけません。',
-    '2. 予定を入れるときは check_calendar でその日の前後を見て、重なっていれば reply で知らせます。',
-    '3. 過去の経緯が要るときは search_data で調べます。',
-    '4. 最後に必ず propose を呼びます。',
+    '2. 事件・依頼者を変えるときは get_case・get_client でいまの内容を見ます。担当事務局・事件類型は list_staff_and_types で ID・キーを確かめます。タスクは find_tasks、予定は check_calendar で ID を確かめます。',
+    '3. 予定を入れる・動かすときは check_calendar でその日の前後を見て、重なっていれば reply で知らせます。',
+    '4. 過去の経緯が要るときは search_data で調べます。',
+    '5. 最後に必ず propose を呼びます。',
     '',
     '【決まりごと】',
     '・記録は必ず事件（caseId）に付けます。事件が 1 つに絞れないときは、案を作らずに questions で尋ねます。',
@@ -251,6 +267,9 @@ function systemPrompt(): string {
     '・言われていないことを足しません。金額・期限・相手の名前を作ってはいけません。分からないことは questions に書きます。',
     '・記録の本文（rawText）は、頼まれた内容を落とさずにそのまま書きます。要旨や決定事項への整理はアプリが行うので、あなたが作文する必要はありません。',
     '・予定の件名は「名字　内容」の形（例「佐藤　打合せ」）にします。',
+    '・変更の案（〜_update）には、変える項目だけを書きます。変えない項目は書きません。項目を空にする（担当事務局を外す など）ときだけ clear に項目名を書きます。',
+    '・削除（task_delete・event_delete）は、はっきり頼まれたときだけ案にします。',
+    '・メッセージの送信は、送ってほしいとはっきり頼まれたときだけ案にします。宛先と手段は get_client・get_case の送れる宛先から選びます。本文は弁護士本人から送る文として、頼まれた内容だけを書きます（事実・期限・金額を足さない）。メールで、その相手とのメールがまだ無いときは件名を付けます。',
     '・質問された（「どうなっている？」など）だけのときは、search_data で調べて reply に答えを書き、actions は空にします。',
     '・reply は 2〜4 文。登録したい内容は画面に一覧で出るので、繰り返しません。',
   ].join('\n');
@@ -282,11 +301,11 @@ export async function planSecretary(text: string, history: { role: 'user' | 'ass
   if (!parsed?.success) {
     // propose を呼ばずに終わった（聞き返しなど）。文章だけ返す
     logger.info({ used: r.used }, 'AI 秘書: 案なしで終わりました');
-    return { reply: r.text || 'うまく聞き取れませんでした。もう一度、具体的に書いてください。', actions: [], questions: [], sources, used: r.used };
+    return { reply: r.text || 'うまく聞き取れませんでした。もう一度、具体的に書いてください。', actions: [], previews: [], questions: [], sources, used: r.used };
   }
   const plan = parsed.data;
   logger.info({ used: r.used, actions: plan.actions.length }, 'AI 秘書が案を作りました');
-  return { reply: plan.reply.trim(), actions: plan.actions, questions: plan.questions, sources, used: r.used };
+  return { reply: plan.reply.trim(), actions: plan.actions, previews: plan.actions.map(previewAction), questions: plan.questions, sources, used: r.used };
 }
 
 // ---- 確認のあとに実行する ----
@@ -301,15 +320,25 @@ export interface AppliedAction {
   error?: string;
 }
 
+/** 案の説明と変更の一覧（確認画面に出す） */
+export function previewAction(a: SecretaryAction): { label: string; changes: Change[] } {
+  return isExtended(a) ? previewExtended(a) : { label: describeAction(a), changes: [] };
+}
+
 /** 案 1 件を、人が読める一行にする（確認画面と結果に出す） */
 export function describeAction(a: SecretaryAction): string {
+  if (isExtended(a)) return previewExtended(a).label;
   if (a.type === 'note') return `記録（${CASE_NOTE_KIND_LABEL[a.kind]}）: ${shorten(a.rawText, 40)}`;
   if (a.type === 'event') return `予定（${EVENT_KIND_LABEL[a.kind]}）: ${a.title}　${formatJaDateTime(new Date(a.startAt), { withWeekday: true })}`;
   return `タスク（${TASK_STATUS_LABEL[a.status]}）: ${a.title}`;
 }
 
-/** 案をひとつ実行する。ここで初めてデータが増える */
+/** 案をひとつ実行する。ここで初めてデータが増える（変わる・送られる） */
 async function applyOne(a: SecretaryAction): Promise<AppliedAction> {
+  if (isExtended(a)) {
+    const r = await applyExtended(a);
+    return { type: a.type, ok: true, label: r.label, link: r.link };
+  }
   if (a.type === 'note') {
     const input = {
       caseId: a.caseId,
