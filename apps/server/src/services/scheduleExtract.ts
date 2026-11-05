@@ -234,12 +234,17 @@ export async function confirmHoldFromConversation(
   conversationId: number,
   sessionId: number,
   eventId: number,
-  opts: { meetingBy?: 'us' | 'them'; meeting?: ExternalMeeting | null; time?: { startAt: string; endAt: string } | null } = {},
+  opts: { meetingBy?: 'us' | 'them'; meeting?: ExternalMeeting | null; time?: { startAt: string; endAt: string } | null; web?: boolean | null } = {},
 ) {
   const hold = holdOfConversation(conversationId, sessionId);
   if (!hold.candidates.some((c) => c.eventId === eventId)) throw new Error('選んだ日時はこの仮押さえの候補ではありません');
   // 相手が URL を発行するなら、こちらでは会議を作らずに相手の URL を入れる。枠の候補は決めた時間で確定する
-  const r = await confirmHold(sessionId, eventId, { ...(opts.meetingBy === 'them' ? { theirs: { meeting: opts.meeting?.url ? opts.meeting : null } } : {}), time: opts.time ?? null });
+  // 来所で確定するなら会議 URL は扱わない。WEB なら、相手が発行するときは相手の URL を入れる
+  const r = await confirmHold(sessionId, eventId, {
+    ...(opts.web !== false && opts.meetingBy === 'them' ? { theirs: { meeting: opts.meeting?.url ? opts.meeting : null } } : {}),
+    time: opts.time ?? null,
+    web: opts.web ?? null,
+  });
   logger.info({ conversationId, sessionId, eventId }, '会話から仮押さえを確定しました');
   return { event: r, webText: r?.webText ?? '', rescheduled: hold.rescheduleOf };
 }
