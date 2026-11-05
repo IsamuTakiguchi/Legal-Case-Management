@@ -80,6 +80,38 @@ describe('AI 秘書: 事件の変更', () => {
   });
 });
 
+describe('AI 秘書: 担当事務局を名前で決める・事務局を登録する', () => {
+  it('名前（「藤田さん」）でも担当事務局にできる', async () => {
+    const s = seed();
+    const a = parse({ type: 'case_update', summary: 'x', caseId: s.kase.id, staffName: `${s.fujita.name}さん` });
+    expect(previewAction(a).changes).toEqual([{ field: 'staffName', label: '担当事務局', before: '（なし）', after: s.fujita.name }]);
+    expect((await applySecretaryActions([a])).applied[0]!.ok).toBe(true);
+    expect(db().select().from(schema.cases).where(eq(schema.cases.id, s.kase.id)).get()!.staffId).toBe(s.fujita.id);
+  });
+
+  it('まだ登録されていない人は、同じ案の中で事務局に登録してから担当にする（二重には登録しない）', async () => {
+    const s = seed();
+    const name = `梅本${n}`;
+    const acts = [parse({ type: 'staff_create', summary: 'x', name }), parse({ type: 'case_update', summary: 'y', caseId: s.kase.id, staffName: name })];
+    expect(previewAction(acts[1]!).changes[0]!.after).toBe(`${name}（登録のときに探します）`);
+    const r = await applySecretaryActions(acts);
+    expect(r.applied.map((x) => x.ok)).toEqual([true, true]);
+    const staff = db().select().from(schema.staffMembers).all().filter((x) => x.name === name);
+    expect(staff).toHaveLength(1);
+    expect(db().select().from(schema.cases).where(eq(schema.cases.id, s.kase.id)).get()!.staffId).toBe(staff[0]!.id);
+    await applySecretaryActions([parse({ type: 'staff_create', summary: 'x', name })]);
+    expect(db().select().from(schema.staffMembers).all().filter((x) => x.name === name)).toHaveLength(1);
+  });
+
+  it('見つからない名前なら、担当を変えずに知らせる', async () => {
+    const s = seed();
+    const r = await applySecretaryActions([parse({ type: 'case_update', summary: 'x', caseId: s.kase.id, staffName: 'いない人' })]);
+    expect(r.applied[0]).toMatchObject({ ok: false });
+    expect(r.applied[0]!.error).toContain('事務局メンバー「いない人」が見つかりません');
+    expect(db().select().from(schema.cases).where(eq(schema.cases.id, s.kase.id)).get()!.staffId).toBeNull();
+  });
+});
+
 describe('AI 秘書: 依頼者・関係者', () => {
   it('依頼者を登録し、電話を足す・メールを外すことができる（ほかの電話は残す）', async () => {
     const s = seed();

@@ -25,7 +25,7 @@ import { createClientRecord, updateClientRecord } from './clientWrite.js';
 import { createContact, updateContact, getContact, listContacts } from './contacts.js';
 import { updateTask, deleteTask } from './tasks.js';
 import { editCalendarEvent, removeCalendarEvent } from './court.js';
-import { listStaff } from './staff.js';
+import { listStaff, createStaff, updateStaff } from './staff.js';
 import { clientSendTargets, contactSendTargets, staffSendTargets, startClientConversation, startContactConversation, startRoomConversation } from './newMessage.js';
 import { sendToConversation } from './send.js';
 import { listClientPersons } from './clientPersons.js';
@@ -52,6 +52,7 @@ export const caseUpdateSchema = z.object({
   courtName: z.string().optional(),
   caseNumber: z.string().optional(),
   staffId: z.number().int().optional().describe('担当事務局の ID（list_staff_and_types で確かめたもの）'),
+  staffName: z.string().optional().describe('担当事務局の名前。ID がまだ無いとき（同じ案の中の staff_create で登録する人）だけ使う。登録のときに名前で事務局を探す'),
   policy: z.string().optional().describe('方針メモ（全文を置き換える）'),
   referrer: z.string().optional().describe('紹介者'),
   clear: z.array(z.enum(['staffId', 'stage', 'courtName', 'caseNumber', 'policy', 'referrer'])).optional().describe('空にする項目（担当事務局を外す、など）'),
@@ -67,7 +68,15 @@ export const caseCreateSchema = z.object({
   courtName: z.string().optional(),
   caseNumber: z.string().optional(),
   staffId: z.number().int().optional(),
+  staffName: z.string().optional().describe('担当事務局の名前（ID がまだ無いとき）'),
   referrer: z.string().optional(),
+});
+
+export const staffCreateSchema = z.object({
+  type: z.literal('staff_create'),
+  summary,
+  name: z.string().describe('事務局メンバーの名前（例「藤田」「藤田 花子」）'),
+  kana: z.string().optional().describe('ふりがな'),
 });
 
 export const clientCreateSchema = z.object({
@@ -164,6 +173,7 @@ export const messageSendSchema = z.object({
 });
 
 export const extendedActionSchemas = [
+  staffCreateSchema,
   caseUpdateSchema,
   caseCreateSchema,
   clientCreateSchema,
@@ -178,6 +188,7 @@ export const extendedActionSchemas = [
 ] as const;
 
 export type ExtendedAction =
+  | z.infer<typeof staffCreateSchema>
   | z.infer<typeof caseUpdateSchema>
   | z.infer<typeof caseCreateSchema>
   | z.infer<typeof clientCreateSchema>
@@ -204,6 +215,40 @@ const nameOf = {
   client: (id: number) => db().select({ name: schema.clients.name }).from(schema.clients).where(eq(schema.clients.id, id)).get()?.name ?? `依頼者 ${id}`,
 };
 
+const squash = (s: string) => s.normalize('NFKC').replace(/[\s　]+/g, '').replace(/(さん|様|氏)$/, '');
+
+/**
+ * 名前から事務局メンバーを探す（空白・「さん」の違いは無視）。
+ * 名前がそのまま一致する人 → 名前がその語で始まる人（「藤田」で「藤田 花子」）の順。1 人に決まらなければ null
+ */
+export function findStaffByName(name: string) {
+  const q = squash(name);
+  if (!q) return null;
+  const all = db().select().from(schema.staffMembers).all();
+  const exact = all.filter((s) => squash(s.name) === q);
+  const pick = (list: typeof all) => list.find((s) => s.active) ?? list[0] ?? null;
+  if (exact.length) return pick(exact);
+  const prefix = all.filter((s) => squash(s.name).startsWith(q) || q.startsWith(squash(s.name)));
+  const active = prefix.filter((s) => s.active);
+  if (active.length === 1) return active[0]!;
+  if (!active.length && prefix.length === 1) return prefix[0]!;
+  return null;
+}
+
+/** 担当事務局を ID か名前で決める。名前のときは実行の時点で探す（同じ案で登録した人も見つかる） */
+function resolveStaffId(a: { staffId?: number; staffName?: string }): number | undefined {
+  if (a.staffId !== undefined) {
+    if (!db().select().from(schema.staffMembers).where(eq(schema.staffMembers.id, a.staffId)).get()) throw new Error('担当事務局が見つかりません');
+    return a.staffId;
+  }
+  if (a.staffName?.trim()) {
+    const s = findStaffByName(a.staffName);
+    if (!s) throw new Error(`事務局メンバー「${a.staffName}」が見つかりません（設定の「事務局メンバー」で登録するか、同じ案で「事務局の登録」を入れてください）`);
+    return s.id;
+  }
+  return undefined;
+}
+
 /** 変更の一覧（項目・いま・変更後）。画面で「いま: …」と並べて見せる */
 export interface Change {
   field: string;
@@ -222,6 +267,10 @@ export function previewExtended(a: ExtendedAction): { label: string; changes: Ch
     if (show(before) !== show(after)) ch.push({ field, label, before: show(before), after: show(after) });
   };
   switch (a.type) {
+    case 'staff_create': {
+      const same = findStaffByName(a.name);
+      return { label: same && squash(same.name) === squash(a.name) ? `事務局メンバーの登録: ${a.name}（すでに登録されています。登録のときは何もしません）` : `事務局メンバーの登録: ${a.name}`, changes: [] };
+    }
     case 'case_update': {
       const k = d.select().from(schema.cases).where(eq(schema.cases.id, a.caseId)).get();
       if (!k) return { label: `事件の変更（事件 ${a.caseId} が見つかりません）`, changes: [] };
@@ -232,7 +281,8 @@ export function previewExtended(a: ExtendedAction): { label: string; changes: Ch
       if (a.caseType !== undefined) push('caseType', '事件類型', nameOf.caseType(k.caseType), nameOf.caseType(a.caseType));
       if (a.courtName !== undefined || cl.has('courtName')) push('courtName', '裁判所', k.courtName, cl.has('courtName') ? null : a.courtName);
       if (a.caseNumber !== undefined || cl.has('caseNumber')) push('caseNumber', '事件番号', k.caseNumber, cl.has('caseNumber') ? null : a.caseNumber);
-      if (a.staffId !== undefined || cl.has('staffId')) push('staffId', '担当事務局', nameOf.staff(k.staffId), cl.has('staffId') ? '（なし）' : nameOf.staff(a.staffId));
+      if (a.staffId !== undefined || a.staffName !== undefined || cl.has('staffId'))
+        push(a.staffName !== undefined && a.staffId === undefined ? 'staffName' : 'staffId', '担当事務局', nameOf.staff(k.staffId), cl.has('staffId') ? '（なし）' : a.staffId !== undefined ? nameOf.staff(a.staffId) : (findStaffByName(a.staffName!)?.name ?? `${a.staffName}（登録のときに探します）`));
       if (a.policy !== undefined || cl.has('policy')) push('policy', '方針メモ', k.policy, cl.has('policy') ? null : a.policy);
       if (a.referrer !== undefined || cl.has('referrer')) push('referrer', '紹介者', k.referrer, cl.has('referrer') ? null : a.referrer);
       return { label: `事件の変更: ${nameOf.case(a.caseId)}`, changes: ch };
@@ -244,6 +294,7 @@ export function previewExtended(a: ExtendedAction): { label: string; changes: Ch
           ...(a.caseType ? [{ field: 'caseType', label: '事件類型', before: '', after: nameOf.caseType(a.caseType) }] : []),
           ...(a.status ? [{ field: 'status', label: '区分', before: '', after: CASE_STATUS_LABEL[a.status] }] : []),
           ...(a.staffId ? [{ field: 'staffId', label: '担当事務局', before: '', after: nameOf.staff(a.staffId) }] : []),
+          ...(!a.staffId && a.staffName ? [{ field: 'staffName', label: '担当事務局', before: '', after: findStaffByName(a.staffName)?.name ?? `${a.staffName}（登録のときに探します）` }] : []),
         ],
       };
     case 'client_create':
@@ -332,7 +383,6 @@ function casePatch(a: z.infer<typeof caseUpdateSchema>) {
   if (a.stage !== undefined) p.stage = a.stage;
   if (a.courtName !== undefined) p.courtName = a.courtName;
   if (a.caseNumber !== undefined) p.caseNumber = a.caseNumber;
-  if (a.staffId !== undefined) p.staffId = a.staffId;
   if (a.policy !== undefined) p.policy = a.policy;
   if (a.referrer !== undefined) p.referrer = a.referrer;
   for (const k of cl) (p as Record<string, unknown>)[k] = null;
@@ -344,14 +394,26 @@ export async function applyExtended(a: ExtendedAction): Promise<{ label: string;
   const label = previewExtended(a).label;
   const d = db();
   switch (a.type) {
+    case 'staff_create': {
+      const same = findStaffByName(a.name);
+      // 同じ名前の人がいれば作らない（二重登録しない）。止めている人なら戻す
+      if (same && squash(same.name) === squash(a.name)) {
+        if (!same.active) updateStaff(same.id, { active: true });
+        return { label: `事務局メンバーの登録: ${same.name}（すでに登録されていました）`, link: '/settings' };
+      }
+      createStaff({ name: a.name, kana: a.kana ?? null });
+      return { label, link: '/settings' };
+    }
     case 'case_update': {
-      if (a.staffId !== undefined && !d.select().from(schema.staffMembers).where(eq(schema.staffMembers.id, a.staffId)).get()) throw new Error('担当事務局が見つかりません');
+      if (!d.select().from(schema.cases).where(eq(schema.cases.id, a.caseId)).get()) throw new Error('事件が見つかりません');
       if (a.caseType !== undefined && !listCaseTypes().some((t) => t.key === a.caseType)) throw new Error('事件類型が見つかりません');
-      updateCase(a.caseId, casePatch(a));
-      return { label, link: `/cases/${a.caseId}` };
+      const staffId = resolveStaffId(a);
+      updateCase(a.caseId, { ...casePatch(a), ...(staffId !== undefined && !(a.clear ?? []).includes('staffId') ? { staffId } : {}) });
+      return { label: previewExtended({ ...a, ...(staffId !== undefined ? { staffId, staffName: undefined } : {}) }).label, link: `/cases/${a.caseId}` };
     }
     case 'case_create': {
-      const row = createCase({ clientId: a.clientId, title: a.title, status: a.status ?? 'active', courtName: a.courtName ?? null, caseNumber: a.caseNumber ?? null, caseType: a.caseType, staffId: a.staffId ?? null, referrer: a.referrer ?? null });
+      const staffId = resolveStaffId(a) ?? null;
+      const row = createCase({ clientId: a.clientId, title: a.title, status: a.status ?? 'active', courtName: a.courtName ?? null, caseNumber: a.caseNumber ?? null, caseType: a.caseType, staffId, referrer: a.referrer ?? null });
       return { label, link: `/cases/${row.id}` };
     }
     case 'client_create': {
@@ -539,10 +601,12 @@ export function extendedReadTools(): AgentTool[] {
     }),
     agentTool({
       name: 'list_staff_and_types',
-      description: '事務局（担当者）の一覧と ID、事件類型のキーと名前を返します。担当事務局を決めるとき・事件類型を決めるときは、これで ID・キーを確かめます。',
+      description:
+        '事務局メンバー（事件の担当事務局になる人）の一覧と ID、事件類型のキーと名前を返します。「担当」「担当事務」「担当事務局」を決めるとき・事件類型を決めるときは、これで ID・キーを確かめます。一覧にいない人を担当にするときは、staff_create でその人を登録する案と、staffName で名前を書いた case_update の案を続けて出します。',
       schema: z.object({}),
       run: () => ({
-        staff: listStaff().map((s) => ({ id: s.id, name: s.name, kana: s.kana })),
+        // 止めている人も出す（担当に戻すことがある）
+        staff: listStaff({ includeInactive: true }).map((s) => ({ id: s.id, name: s.name, kana: s.kana, active: s.active })),
         caseTypes: listCaseTypes().map((t) => ({ key: t.key, label: t.label })),
         caseStatuses: CASE_STATUSES.map((s) => ({ key: s, label: CASE_STATUS_LABEL[s] })),
       }),
