@@ -1567,14 +1567,14 @@ interface MeetingChoice {
 const meetingBody = (m: MeetingChoice) => ({ meetingBy: m.by, meeting: m.by === 'them' && m.url.trim() ? { url: m.url.trim(), meetingId: m.meetingId.trim() || null, passcode: m.passcode.trim() || null } : null });
 
 /** WEB 会議の URL をこちらで発行するか、相手が発行したものを使うか */
-function MeetingByFields({ value, onChange, provider, detected, holdMode }: { value: MeetingChoice; onChange: (v: MeetingChoice) => void; provider: 'zoom' | 'meet' | 'none'; detected: Extracted['externalMeeting']; holdMode?: boolean }) {
+function MeetingByFields({ value, onChange, provider, detected }: { value: MeetingChoice; onChange: (v: MeetingChoice) => void; provider: 'zoom' | 'meet' | 'none'; detected: Extracted['externalMeeting'] }) {
   return (
     <div className="space-y-1.5 rounded border border-slate-200 p-2">
       <div className="flex flex-wrap items-center gap-3 text-sm">
         <span className="text-xs text-slate-500">会議 URL</span>
         <label className="flex items-center gap-1">
           <input type="radio" checked={value.by === 'us'} onChange={() => onChange({ ...value, by: 'us' })} />
-          {holdMode ? 'こちらで発行（WEB の仮押さえなら確定時に発行）' : `こちらで発行（${WEB_PROVIDER_LABEL[provider]}）`}
+          {provider === 'none' ? 'こちらで発行（会議サービスは未設定）' : `こちらで発行（${WEB_PROVIDER_LABEL[provider]}）`}
         </label>
         <label className="flex items-center gap-1">
           <input type="radio" checked={value.by === 'them'} onChange={() => onChange({ ...value, by: 'them' })} />
@@ -1615,6 +1615,8 @@ interface PendingHold {
   candidates: { eventId: number; startAt: string; endAt: string }[];
   /** 所要時間（分）。候補が枠なら、確定するときにこの長さで時間を決める */
   durationMinutes?: number | null;
+  /** WEB 会議で仮押さえしたか */
+  web?: boolean;
 }
 
 interface Replaced {
@@ -1645,6 +1647,8 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
   // 相手が発行した会議の URL を予定に入れたとき（「発行しました」ではなく「入れました」と出す）
   const [webTextTheirs, setWebTextTheirs] = useState(false);
   const [meeting, setMeeting] = useState<MeetingChoice>({ by: 'us', url: '', meetingId: '', passcode: '' });
+  // 仮押さえの候補で確定するとき、来所か WEB か（既定は仮押さえのときの設定）
+  const [holdWeb, setHoldWeb] = useState(false);
   // 後から届いた会議 URL を入れる、すでに入っている予定
   const [meetingEventId, setMeetingEventId] = useState('');
   const [err, setErr] = useState('');
@@ -1660,7 +1664,10 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
       const holds = r.holds ?? [];
       // 読み取った日時が仮押さえの候補と同じなら、その候補で確定するのを既定にする
       setMode(r.holdMatch ? 'hold' : r.status === 'confirmed' || r.slots.length <= 1 ? 'confirmed' : 'holds');
-      setPick(r.holdMatch ?? (holds[0]?.candidates[0] ? { sessionId: holds[0].sessionId, eventId: holds[0].candidates[0].eventId } : null));
+      const firstPick = r.holdMatch ?? (holds[0]?.candidates[0] ? { sessionId: holds[0].sessionId, eventId: holds[0].candidates[0].eventId } : null);
+      setPick(firstPick);
+      // 来所か WEB かは、仮押さえのときの設定から始める（相手のメッセージに会議 URL があれば WEB）
+      setHoldWeb(!!holds.find((h) => h.sessionId === firstPick?.sessionId)?.web || !!r.externalMeeting);
       // 候補に無い日時で決まったようなら、この会話の仮押さえは取り消す設定にしておく（画面で外せる）
       setCancelHoldId(r.status === 'confirmed' && holds[0] ? String(holds[0].sessionId) : '');
       setTitle(r.title);
@@ -1693,6 +1700,7 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
             setRes((prev) => (prev ? { ...prev, holds } : prev));
             setMode('hold');
             setPick({ sessionId: holds[0]!.sessionId, eventId: holds[0]!.candidates[0]!.eventId });
+            setHoldWeb(!!holds[0]!.web);
           })
           .catch(() => undefined);
       }
@@ -1740,7 +1748,12 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
   const confirmHold = useMutation({
     // 枠で押さえた候補は、その中で決めた時間（time）で確定する
     mutationFn: (time?: { startAt: string; endAt: string }) =>
-      api.post<{ webText: string; rescheduled: { title: string; startAt: string } | null }>(`/conversations/${conversationId}/schedule/confirm-hold`, { ...pick, ...(meeting.by === 'them' ? meetingBody(meeting) : {}), ...(time ?? {}) }),
+      api.post<{ webText: string; rescheduled: { title: string; startAt: string } | null }>(`/conversations/${conversationId}/schedule/confirm-hold`, {
+        ...pick,
+        web: holdWeb,
+        ...(holdWeb && meeting.by === 'them' ? meetingBody(meeting) : {}),
+        ...(time ?? {}),
+      }),
     onSuccess: (r) => {
       setWebText(r.webText ?? '');
       setWebTextTheirs(meeting.by === 'them');
@@ -1856,7 +1869,16 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
                       const matched = res.holdMatch?.eventId === c.eventId;
                       return (
                         <label key={c.eventId} className="flex flex-wrap items-center gap-2">
-                          <input type="radio" name="hold-pick" checked={pick?.eventId === c.eventId} onChange={() => setPick({ sessionId: h.sessionId, eventId: c.eventId })} />
+                          <input
+                            type="radio"
+                            name="hold-pick"
+                            checked={pick?.eventId === c.eventId}
+                            onChange={() => {
+                              setPick({ sessionId: h.sessionId, eventId: c.eventId });
+                              // 来所か WEB かは、仮押さえのときの設定から始める
+                              if (pick?.sessionId !== h.sessionId) setHoldWeb(!!h.web);
+                            }}
+                          />
                           <span>{isAllDayRange(c.startAt, c.endAt) ? fmtEventTime(c.startAt, c.endAt) : `${fmtDateTime(c.startAt)}〜${fmtDateTime(c.endAt).split(' ').pop()}`}</span>
                           {matched && <span className="badge badge-blue">やり取りで決まった日時</span>}
                         </label>
@@ -1865,7 +1887,18 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
                   </div>
                 </div>
               ))}
-              <MeetingByFields value={meeting} onChange={setMeeting} provider={res.webProvider} detected={res.externalMeeting} holdMode />
+              <div className="space-y-1.5 rounded border border-slate-200 p-2">
+                <div className="flex flex-wrap items-center gap-3 text-sm" role="radiogroup" aria-label="来所か WEB か">
+                  <span className="text-xs text-slate-500">打合せの方法</span>
+                  <label className="flex items-center gap-1">
+                    <input type="radio" checked={!holdWeb} onChange={() => setHoldWeb(false)} /> 来所・対面（会議 URL なし）
+                  </label>
+                  <label className="flex items-center gap-1">
+                    <input type="radio" checked={holdWeb} onChange={() => setHoldWeb(true)} /> WEB 会議
+                  </label>
+                </div>
+                {holdWeb && <MeetingByFields value={meeting} onChange={setMeeting} provider={res.webProvider} detected={res.externalMeeting} />}
+              </div>
               <div className="flex flex-wrap items-center gap-2">
                 {(() => {
                   const h = holds.find((x) => x.sessionId === pick?.sessionId);
@@ -1896,7 +1929,7 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
                     </button>
                   );
                 })()}
-                <span className="text-xs text-slate-500">「仮」が外れて確定の予定になります。{meeting.by === 'them' ? '会議 URL はこちらでは発行せず、相手方のものを入れます。' : 'WEB 会議の仮押さえなら、ここで会議 URL を発行します。'}</span>
+                <span className="text-xs text-slate-500">「仮」が外れて確定の予定になります。{!holdWeb ? '会議 URL は作りません。' : meeting.by === 'them' ? '会議 URL はこちらでは発行せず、相手方のものを入れます。' : 'ここで会議 URL を発行します。'}</span>
               </div>
             </div>
           )}

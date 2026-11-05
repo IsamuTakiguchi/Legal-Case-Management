@@ -539,7 +539,16 @@ const holdMeta = new Map<number, { kind: EventKind; confirmedTitle: string }>();
  * 仮押さえの候補の 1 つで確定する。
  * theirs を渡すと、WEB 会議の URL はこちらで発行せず、相手が発行したもの（まだ届いていなければ null）を予定に入れる
  */
-export async function confirmHold(sessionId: number, eventId: number, opts: { theirs?: { meeting: ExternalMeeting | null }; time?: { startAt: string; endAt: string } | null } = {}) {
+export async function confirmHold(
+  sessionId: number,
+  eventId: number,
+  opts: {
+    theirs?: { meeting: ExternalMeeting | null };
+    time?: { startAt: string; endAt: string } | null;
+    /** 確定するときに WEB 会議にするか（false で来所。会議 URL を作らない）。省略すれば仮押さえのときの設定のまま */
+    web?: boolean | null;
+  } = {},
+) {
   const session = db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, sessionId)).get();
   if (!session) throw new Error('日程調整が見つかりません');
   if (session.state !== 'proposing') throw new Error('この日程調整はすでに確定または取消されています');
@@ -571,8 +580,10 @@ export async function confirmHold(sessionId: number, eventId: number, opts: { th
     description = withExternalMeeting(description, opts.theirs.meeting);
     location = externalLocation(opts.theirs.meeting, session.location);
     theirsText = externalMeetingText(opts.theirs.meeting);
-  } else if (session.web) {
+  } else if (opts.web ?? session.web) {
     const provider = webMeetingProvider();
+    // 仮押さえのときは来所のつもりだったものを WEB にしたら、場所にも会議の種類を入れる
+    if (!session.web) location = webLocation(provider, session.location);
     const startAt = time?.startAt ?? chosen.startAt;
     const endAt = time?.endAt ?? chosen.endAt;
     web = await issueZoomIfNeeded(provider, { topic: title, startAt: new Date(startAt), durationMinutes: Math.max(15, Math.round((new Date(endAt).getTime() - new Date(startAt).getTime()) / 60_000)) });
@@ -582,6 +593,9 @@ export async function confirmHold(sessionId: number, eventId: number, opts: { th
     }
     const text = webMeetingText(web);
     if (text) description = [text, description].filter(Boolean).join('\n');
+  } else if (session.web) {
+    // WEB のつもりで仮押さえしたが、来所で確定する: 会議 URL は作らず、場所から会議の種類を外す
+    location = session.location ?? null;
   }
   const updated = await editCalendarEvent(chosen.id, { title, kind, tentative: false, description, ...(location !== undefined ? { location } : {}), ...(time ?? {}) });
   if (web?.provider === 'zoom' && web.id) {
@@ -663,6 +677,8 @@ export interface PendingHoldSet {
   candidates: { eventId: number; startAt: string; endAt: string }[];
   /** 所要時間（分）。候補が枠なら、確定するときにこの長さで時間を決める */
   durationMinutes: number | null;
+  /** WEB 会議で仮押さえしたか（確定の画面で、来所／WEB の既定にする） */
+  web: boolean;
 }
 
 /**
@@ -687,6 +703,7 @@ export function pendingHoldsFor(opts: { conversationId: number; clientId: number
       title: rows[0]!.title.replace(/\s*仮$/, ''),
       fromThisConversation,
       rescheduleOf: original ? { eventId: original.id, title: original.title, startAt: original.startAt } : null,
+      web: s.web,
       candidates: rows.map((r) => ({ eventId: r.id, startAt: r.startAt, endAt: r.endAt })).sort((a, b) => a.startAt.localeCompare(b.startAt)),
       durationMinutes: s.durationMinutes ?? null,
     });

@@ -76,10 +76,19 @@ schedulingRoutes.get('/conversations/:id/schedule/holds', (c) => c.json(conversa
 /** 会話の画面から、仮押さえの候補の 1 つで確定する */
 schedulingRoutes.post('/conversations/:id/schedule/confirm-hold', async (c) => {
   const body = z
-    .object({ sessionId: z.number().int(), eventId: z.number().int(), meetingBy: z.enum(['us', 'them']).optional(), meeting: externalMeetingSchema.nullable().optional(), startAt: z.string().optional(), endAt: z.string().optional() })
+    .object({
+      sessionId: z.number().int(),
+      eventId: z.number().int(),
+      meetingBy: z.enum(['us', 'them']).optional(),
+      meeting: externalMeetingSchema.nullable().optional(),
+      startAt: z.string().optional(),
+      endAt: z.string().optional(),
+      // 来所（false）か WEB（true）か。省略すれば仮押さえのときの設定のまま
+      web: z.boolean().nullable().optional(),
+    })
     .parse(await c.req.json());
   const time = body.startAt && body.endAt ? { startAt: body.startAt, endAt: body.endAt } : null;
-  return c.json(await confirmHoldFromConversation(Number(c.req.param('id')), body.sessionId, body.eventId, { meetingBy: body.meetingBy, meeting: body.meeting, time }));
+  return c.json(await confirmHoldFromConversation(Number(c.req.param('id')), body.sessionId, body.eventId, { meetingBy: body.meetingBy, meeting: body.meeting, time, web: body.web ?? null }));
 });
 
 /** 相手から後で届いた WEB 会議の URL を、すでに入っている予定に入れる */
