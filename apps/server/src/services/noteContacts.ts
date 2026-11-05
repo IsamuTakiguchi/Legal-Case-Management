@@ -4,8 +4,9 @@ import { CASE_CONTACT_ROLE_LABEL, phoneDigits, type CaseContactRole } from '@lcm
 
 /**
  * 記録の「相手」「電話番号」の候補。
- * 過去の記録に入れた相手・電話番号と、登録してある依頼者・担当者・事件の関係者の電話番号から作り、
- * 画面でボタンを押すとそのまま入力できるようにする
+ * その事件の過去の記録に入れた相手・電話番号と、その事件の関係者・依頼者・担当者の電話番号から作り、
+ * 画面でボタンを押すとそのまま入力できるようにする。
+ * 別の事件（同じ依頼者のほかの事件も含む）の相手は出さない。事件が決まっていなければ候補は無し
  */
 export interface NoteContactSuggestion {
   name: string;
@@ -78,10 +79,7 @@ export function noteContactSuggestions(caseId: number | null, limit = 150): Note
         if (p.phones.length) for (const ph of p.phones) add(p.name, ph, hint);
         else add(p.name, null, hint);
       }
-      history(and(eq(schema.caseNotes.clientId, client.id), inArray(schema.caseNotes.kind, CONTACT_KINDS)), '同じ依頼者の記録');
     }
   }
-  // ほかの事件の記録（裁判所の書記官や保険会社など、事件をまたいで電話する相手）
-  history(inArray(schema.caseNotes.kind, CONTACT_KINDS), 'ほかの事件の記録');
   return out.slice(0, limit).map(({ key: _key, ...s }) => s);
 }

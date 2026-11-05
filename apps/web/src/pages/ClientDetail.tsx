@@ -11,6 +11,7 @@ import { EVENT_KIND_LABEL, TASK_STATUS_LABEL, type EventKind, type TaskStatus, C
 import { CaseStatusBadge } from './Cases';
 import { ClientPicker } from '../lib/ClientPicker';
 import { LineInvitePanel } from '../lib/LineInvite';
+import { EventForm } from '../lib/EventForm';
 import { ClientPersonsCard, type ClientPerson } from '../lib/ClientPersons';
 
 interface Detail extends ClientRow {
@@ -18,7 +19,7 @@ interface Detail extends ClientRow {
   cases: { id: number; title: string; caseTypeLabel: string; status: string; nextHearingAt: string | null; stage: string | null; folderRel?: string; folderOwn?: boolean }[];
   conversations: { id: number; channel: string; subject: string | null; lastMessageAt: string | null; needsReply: boolean; contact?: { name: string; roleLabel: string; caseTitle: string } | null }[];
   tasks: { id: number; title: string; status: string; followUpAt: string | null }[];
-  events: { id: number; title: string; startAt: string; endAt: string; kind: string }[];
+  events: { id: number; title: string; startAt: string; endAt: string; kind: string; location: string | null; description: string | null; status: string | null; clientId: number | null; caseId: number | null }[];
   /** 法人の担当者・個人の窓口（ご家族など） */
   persons?: ClientPerson[];
 }
@@ -26,6 +27,9 @@ interface Detail extends ClientRow {
 export default function ClientDetail() {
   const { id } = useParams();
   const qc = useQueryClient();
+  // 中身（件名・日時・場所など）を直している予定
+  const [editingEvent, setEditingEvent] = useState<number | null>(null);
+  const [eventMsg, setEventMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const nav = useNavigate();
   const [edit, setEdit] = useState(false);
   const [newCase, setNewCase] = useState(false);
@@ -228,13 +232,39 @@ export default function ClientDetail() {
           <h2 className="mb-2 font-semibold">予定</h2>
           <ul className="space-y-1 text-sm">
             {c.events.map((e) => (
-              <li key={e.id} className="flex items-center gap-2">
-                <span className="w-32 text-slate-500">{fmtEventTime(e.startAt, e.endAt)}</span>
-                <span className="badge badge-gray">{EVENT_KIND_LABEL[e.kind as EventKind]}</span>
-                <span>{e.title}</span>
+              <li key={e.id}>
+                <div className="flex items-center gap-2">
+                  <span className="w-32 shrink-0 text-slate-500">{fmtEventTime(e.startAt, e.endAt)}</span>
+                  <span className="badge badge-gray">{EVENT_KIND_LABEL[e.kind as EventKind]}</span>
+                  <span className="min-w-0 flex-1 break-words">{e.title}</span>
+                  <button
+                    className="shrink-0 text-xs text-blue-700 hover:underline"
+                    onClick={() => setEditingEvent(editingEvent === e.id ? null : e.id)}
+                    title="件名・日時・場所・メモなどを直します（Google カレンダーにも反映）"
+                  >
+                    編集
+                  </button>
+                </div>
+                {editingEvent === e.id && (
+                  <div className="mt-1">
+                    <EventForm
+                      initial={e}
+                      defaultDay={e.startAt.slice(0, 10)}
+                      onClose={() => setEditingEvent(null)}
+                      onSaved={(text) => {
+                        setEditingEvent(null);
+                        setEventMsg({ kind: 'ok', text });
+                        qc.invalidateQueries({ queryKey: ['client', id] });
+                        qc.invalidateQueries({ queryKey: ['calendar'] });
+                      }}
+                      onError={(text) => setEventMsg({ kind: 'err', text })}
+                    />
+                  </div>
+                )}
               </li>
             ))}
           </ul>
+          {eventMsg && <div className={`fade-in mt-1 text-xs ${eventMsg.kind === 'ok' ? 'text-green-700' : 'text-red-600'}`}>{eventMsg.text}</div>}
         </section>
         <section className="card md:col-span-2">
           <div className="mb-2 flex items-center gap-2">

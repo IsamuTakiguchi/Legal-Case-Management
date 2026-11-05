@@ -7,6 +7,7 @@ import { useSpotlight } from '../lib/spotlight';
 import { useDraftRecord, useDraftGroup, useDraft, DraftHint } from '../lib/draft';
 import { RoomPicker } from '../lib/RoomPicker';
 import { CASE_DELETE_NOTE } from '../lib/caseDelete';
+import { EventForm } from '../lib/EventForm';
 import { ClientPicker } from '../lib/ClientPicker';
 import { HoldForm, HoldLocationEditor, HoldAddCandidates, fmtEventRange, WindowConfirm, isHoldWindow, type RescheduleTarget } from '../lib/HoldForm';
 import { LongText } from '../lib/LongText';
@@ -73,7 +74,7 @@ interface CaseData {
   staff: { id: number; name: string } | null;
   notes: Note[];
   tasks: { id: number; title: string; note: string | null; status: string; dueAt: string | null; followUpAt: string | null; chatworkTaskId: number | null; chatworkReplyable?: boolean; chatworkAssignedByName?: string | null; chatworkRepliedAt?: string | null; trigger?: string | null; reviewAt?: string | null }[];
-  events: { id: number; title: string; startAt: string; endAt: string; kind: string; location: string | null; status: string | null }[];
+  events: { id: number; title: string; startAt: string; endAt: string; kind: string; location: string | null; status: string | null; clientId: number | null; caseId: number | null; description: string | null }[];
 }
 /** 次のアクションの期限を YYYY-MM-DD に（古い記録の ISO もその日本時間の日付に） */
 /** 次のアクション・タスク案の期限の表示（「締切 11/10(火)・返信期限 11/5(木)」） */
@@ -136,6 +137,9 @@ export default function CaseDetail() {
   const [taskStaffAsk, setTaskStaffAsk] = useState<number | null>(null);
   // 紐付けを直している予定
   const [relinking, setRelinking] = useState<number | null>(null);
+  // 中身（件名・日時・場所など）を直している予定
+  const [editingEvent, setEditingEvent] = useState<number | null>(null);
+  const [eventMsg, setEventMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   // 中身（タスク名・メモ）を直している未了タスク
   const [editingTask, setEditingTask] = useState<number | null>(null);
   const d = useQuery({ queryKey: ['case', id], queryFn: () => api.get<CaseData>(`/cases/${id}`) });
@@ -504,6 +508,16 @@ export default function CaseDetail() {
                       <span className="text-slate-500">{fmtEventTime(e.startAt, e.endAt)}</span>
                       <span className="badge badge-gray">{EVENT_KIND_LABEL[e.kind as EventKind]}</span>
                       <span className="ml-auto flex flex-wrap items-center gap-2">
+                      <button
+                        className="text-xs text-blue-700 hover:underline"
+                        onClick={() => {
+                          setEditingEvent(editingEvent === e.id ? null : e.id);
+                          setRelinking(null);
+                        }}
+                        title="件名・日時・場所・メモなどを直します（Google カレンダーにも反映）"
+                      >
+                        編集
+                      </button>
                       <button className="text-xs text-slate-500 hover:text-blue-700 hover:underline" onClick={() => setRelinking(relinking === e.id ? null : e.id)} title="別の依頼者・事件に紐付けてしまったときに直します">
                         紐付けを直す
                       </button>
@@ -530,6 +544,23 @@ export default function CaseDetail() {
                       </span>
                       </div>
                       <div className="break-words">{e.title}</div>
+                      {editingEvent === e.id && (
+                        <div className="mt-1">
+                          <EventForm
+                            initial={e}
+                            defaultDay={e.startAt.slice(0, 10)}
+                            narrow
+                            onClose={() => setEditingEvent(null)}
+                            onSaved={(text) => {
+                              setEditingEvent(null);
+                              setEventMsg({ kind: 'ok', text });
+                              qc.invalidateQueries({ queryKey: ['case', id] });
+                              qc.invalidateQueries({ queryKey: ['calendar'] });
+                            }}
+                            onError={(text) => setEventMsg({ kind: 'err', text })}
+                          />
+                        </div>
+                      )}
                       {relinking === e.id && (
                         <EventRelink
                           eventId={e.id}
@@ -548,6 +579,7 @@ export default function CaseDetail() {
                 })}
                 {c.events.length === 0 && <li className="text-slate-500">なし</li>}
               </ul>
+              {eventMsg && <div className={`fade-in mt-1 text-xs ${eventMsg.kind === 'ok' ? 'text-green-700' : 'text-red-600'}`}>{eventMsg.text}</div>}
             </section>
           </aside>
         </div>
