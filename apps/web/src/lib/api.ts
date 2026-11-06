@@ -28,6 +28,31 @@ async function handle<T>(res: Response): Promise<T> {
   return json as T;
 }
 
+/** サーバーが決めた時間内に答えなかった（止まっている・更新の途中など） */
+export class ServerTimeoutError extends Error {
+  constructor() {
+    super('サーバーが応答していません');
+    this.name = 'ServerTimeoutError';
+  }
+}
+
+/** 決めた時間で待つのをやめる（返事が来ないまま「読み込み中」で止まらないように） */
+export function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new ServerTimeoutError()), ms);
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
+}
+
 export const api = {
   get: <T>(url: string) => fetch(`/api${url}`, { credentials: 'same-origin' }).then((r) => handle<T>(r)),
   post: <T>(url: string, body?: unknown) =>
