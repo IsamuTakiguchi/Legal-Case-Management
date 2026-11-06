@@ -1,7 +1,7 @@
 import { Routes, Route, NavLink, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api } from './lib/api';
+import { api, ApiError, ServerTimeoutError, withTimeout } from './lib/api';
 import { applyAppBadge, badgeSource, badgeToApply } from './lib/badge';
 import { useTheme, THEME_CHOICES, THEME_LABEL, useFont, FONT_CHOICES, FONT_LABEL } from './lib/theme';
 import { fmtDateTime } from './lib/format';
@@ -57,7 +57,8 @@ const NAV: { to: string; label: string; icon: IconName }[] = [
 export default function App() {
   const loc = useLocation();
   useServiceWorkerMessages();
-  const me = useQuery({ queryKey: ['me'], queryFn: () => api.get<{ authenticated: boolean }>('/auth/me'), retry: false });
+  // サーバーが答えないときに「読み込み中」のまま止まらないよう、20 秒で待つのをやめて知らせる
+  const me = useQuery({ queryKey: ['me'], queryFn: () => withTimeout(api.get<{ authenticated: boolean }>('/auth/me'), ME_TIMEOUT_MS), retry: false });
   // メニューの件数（受信箱の要返信・未完了タスク・要確認）
   const counts = useQuery({ queryKey: ['nav-counts'], queryFn: () => api.get<NavCounts>('/nav-counts'), enabled: me.data?.authenticated === true, refetchInterval: 60_000 });
   const nav = counts.data ?? EMPTY_COUNTS;
@@ -84,6 +85,8 @@ export default function App() {
 
   if (loc.pathname === '/login') return <Login />;
   if (me.isLoading) return <div className="loading-text p-8 text-slate-500">読み込み中…</div>;
+  // 返事が来ない・つながらない（ログインが必要、の 401 はログイン画面へ）
+  if (me.isError && !(me.error instanceof ApiError)) return <ServerNotResponding timedOut={me.error instanceof ServerTimeoutError} />;
   if (!me.data?.authenticated) return <Navigate to="/login" replace />;
 
   return (
@@ -404,6 +407,30 @@ function BackupStatus() {
       バックアップ: {last.at ? fmtDateTime(last.at) : '未実施'}
       {last.ok === false ? '（失敗）' : ''}
     </NavLink>
+  );
+}
+
+/** サーバーの返事を待つ時間（起動時のログイン確認） */
+const ME_TIMEOUT_MS = 20_000;
+
+/** サーバーが答えない・つながらないときの画面（「読み込み中」のまま止めない） */
+function ServerNotResponding({ timedOut }: { timedOut: boolean }) {
+  return (
+    <div className="mx-auto max-w-md space-y-3 p-8">
+      <h1 className="text-lg font-semibold">サーバーが応答していません</h1>
+      <p className="text-sm text-slate-600">
+        {timedOut ? '20 秒待ちましたが、T-Lex のサーバーから返事がありませんでした。' : 'T-Lex のサーバーにつながりませんでした。'}
+        更新（再起動）の途中か、サーバーを置いている Railway で障害が起きている可能性があります。少し待ってから、もう一度読み込んでください。
+      </p>
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="button" className="btn btn-primary" onClick={() => location.reload()}>
+          もう一度読み込む
+        </button>
+        <a href="https://status.railway.com" target="_blank" rel="noreferrer" className="text-sm text-blue-700 hover:underline">
+          Railway の障害情報を見る
+        </a>
+      </div>
+    </div>
   );
 }
 
