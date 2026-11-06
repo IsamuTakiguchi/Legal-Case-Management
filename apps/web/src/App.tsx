@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './lib/api';
 import { applyAppBadge, badgeSource, badgeToApply } from './lib/badge';
-import { useTheme, THEME_CHOICES, THEME_LABEL } from './lib/theme';
+import { useTheme, THEME_CHOICES, THEME_LABEL, useFont, FONT_CHOICES, FONT_LABEL } from './lib/theme';
 import { fmtDateTime } from './lib/format';
 import { Icon, type IconName } from './lib/icons';
 import Login from './pages/Login';
@@ -407,18 +407,31 @@ function BackupStatus() {
   );
 }
 
-/** 表示テーマの切り替え（端末に合わせる／昼／夜） */
+/** 表示テーマの切り替え（端末に合わせる／昼／夜）と、文字の大きさ（標準／大／特大） */
 function ThemeSwitch() {
   const [choice, choose] = useTheme();
+  const [font, chooseFont] = useFont();
   return (
-    <div className="flex items-center gap-2 px-0.5">
-      <span className="text-[11px] text-slate-500">表示</span>
-      <div className="segmented ml-auto" role="group" aria-label="表示テーマ">
-        {THEME_CHOICES.map((c) => (
-          <button key={c} type="button" aria-pressed={choice === c} onClick={() => choose(c)} title={THEME_LABEL[c]}>
-            {c === 'auto' ? '自動' : THEME_LABEL[c]}
-          </button>
-        ))}
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2 px-0.5">
+        <span className="text-[11px] text-slate-500">表示</span>
+        <div className="segmented ml-auto" role="group" aria-label="表示テーマ">
+          {THEME_CHOICES.map((c) => (
+            <button key={c} type="button" aria-pressed={choice === c} onClick={() => choose(c)} title={THEME_LABEL[c]}>
+              {c === 'auto' ? '自動' : THEME_LABEL[c]}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="flex items-center gap-2 px-0.5">
+        <span className="text-[11px] text-slate-500">文字</span>
+        <div className="segmented ml-auto" role="group" aria-label="文字の大きさ">
+          {FONT_CHOICES.map((c) => (
+            <button key={c} type="button" aria-pressed={font === c} onClick={() => chooseFont(c)} title={`文字の大きさ: ${FONT_LABEL[c]}（この端末だけに効きます）`}>
+              {FONT_LABEL[c]}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -484,7 +497,7 @@ function MobileTabs({ counts }: { counts: NavCounts }) {
             <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-slate-300" />
             <div className="grid grid-cols-3 gap-2">
               {rest.map((n) => (
-                <NavLink key={n.to} to={n.to} className={({ isActive }) => `card-press flex flex-col items-center gap-1.5 rounded-2xl px-2 py-3 text-xs ${isActive ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'bg-black/[0.04] text-slate-700'}`}>
+                <NavLink key={n.to} to={n.to} className={({ isActive }) => `card-press flex flex-col items-center gap-1.5 whitespace-nowrap rounded-2xl px-1 py-3 text-xs tracking-tight ${isActive ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'bg-black/[0.04] text-slate-700'}`}>
                   <Icon name={n.icon} className="h-6 w-6" strokeWidth={1.6} />
                   {n.label}
                 </NavLink>
