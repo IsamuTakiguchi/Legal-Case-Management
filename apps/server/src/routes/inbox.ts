@@ -21,11 +21,11 @@ import { draftReply } from '../services/style.js';
 import { judgeWaiting } from '../services/tasks.js';
 import { listTemplates } from '../services/templates.js';
 import { getSetting } from '../services/settings.js';
-import { activeCasesForClient } from '../services/cases.js';
+import { activeCasesForClient, taskDeadlinesOf } from '../services/cases.js';
 import { memoSuggestionsFor, openMemos } from '../services/memos.js';
 import { suggestConversationTasks, createConversationTasks } from '../services/conversationTasks.js';
 import { clientSendTargets, startClientConversation, staffSendTargets, startRoomConversation, contactSendTargets, startContactConversation } from '../services/newMessage.js';
-import { sendMessageSchema, draftRequestSchema, caseContactInputSchema, parseChatworkReactions, staffAskDraftSchema, staffAskSendSchema, TASK_STATUSES, type Channel } from '@lcm/shared';
+import { sendMessageSchema, draftRequestSchema, caseContactInputSchema, parseChatworkReactions, staffAskDraftSchema, staffAskSendSchema, TASK_STATUSES, NEW_TASK_STATUSES, type Channel } from '@lcm/shared';
 
 export const inboxRoutes = new Hono();
 
@@ -69,21 +69,54 @@ inboxRoutes.put('/messages/:id/link', async (c) => {
   return c.json(linkMessage(Number(c.req.param('id')), body));
 });
 
-/** メッセージをそのままタスクにする（伝言のタスク化） */
+/**
+ * メッセージをそのままタスクにする（伝言・メール・LINE のタスク化）。
+ * 事件は、指定があればそれ → メッセージの事件 → 会話の事件（関係者との会話ならその事件）
+ */
 inboxRoutes.post('/messages/:id/task', async (c) => {
-  const body = z.object({ title: z.string().optional(), followUpAt: z.string().nullable().optional(), syncToChatwork: z.boolean().default(false) }).parse(await c.req.json().catch(() => ({})));
+  const body = z
+    .object({
+      title: z.string().max(200).optional(),
+      /** 締切（日付だけ YYYY-MM-DD でも可） */
+      due: z.string().nullable().optional(),
+      /** 返信期限（連絡待ちのとき。空なら設定の営業日数後） */
+      replyBy: z.string().nullable().optional(),
+      /** 旧形式（締切、または連絡待ちなら返信期限） */
+      followUpAt: z.string().nullable().optional(),
+      note: z.string().max(4000).nullable().optional(),
+      syncToChatwork: z.boolean().default(false),
+      caseId: z.number().int().nullable().optional(),
+      status: z.enum(NEW_TASK_STATUSES).optional(),
+    })
+    .parse(await c.req.json().catch(() => ({})));
   const m = db().select().from(schema.messages).where(eq(schema.messages.id, Number(c.req.param('id')))).get();
   if (!m) return c.json({ error: 'not found' }, 404);
   const conv = db().select().from(schema.conversations).where(eq(schema.conversations.id, m.conversationId)).get();
-  const title = (body.title?.trim() || m.body.split('\n').map((l) => l.trim()).find(Boolean) || '伝言').slice(0, 120);
+  // 題名の既定: メールなら件名、無ければ本文の最初の行
+  const firstLine = m.body.split('\n').map((l) => l.trim()).find(Boolean);
+  const title = (body.title?.trim() || (conv?.channel === 'gmail' ? conv.subject?.trim() : '') || firstLine || '伝言').slice(0, 120);
+  // 事件: 指定があればそれ（null は「事件に付けない」）、無ければメッセージ・会話の事件
+  const caseId = body.caseId !== undefined ? body.caseId : (m.caseId ?? conv?.caseId ?? null);
+  const clientId = m.clientId ?? conv?.clientId ?? null;
+  if (caseId) {
+    const k = db().select({ clientId: schema.cases.clientId }).from(schema.cases).where(eq(schema.cases.id, caseId)).get();
+    if (!k) return c.json({ error: '事件が見つかりません' }, 400);
+    if (clientId && k.clientId !== clientId) return c.json({ error: 'このメッセージの依頼者の事件ではありません' }, 400);
+  }
+  const status = body.status ?? 'open';
+  const deadlines =
+    body.due !== undefined || body.replyBy !== undefined
+      ? taskDeadlinesOf({ due: body.due ?? null, replyBy: body.replyBy ?? null }, status)
+      : { followUpAt: body.followUpAt ?? null };
   const task = await createTask({
     title,
-    note: m.body,
-    clientId: m.clientId ?? conv?.clientId ?? null,
-    caseId: m.caseId ?? null,
+    note: body.note?.trim() || m.body,
+    clientId: caseId ? null : clientId,
+    caseId,
     conversationId: m.conversationId,
-    status: 'open',
-    followUpAt: body.followUpAt ?? null,
+    status,
+    ...deadlines,
+    sourceMessageId: m.id,
     syncToChatwork: body.syncToChatwork,
   });
   return c.json(task);

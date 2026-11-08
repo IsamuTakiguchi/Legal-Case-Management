@@ -8,6 +8,7 @@ import { useDraft, DraftHint } from '../lib/draft';
 import { ClientPicker } from '../lib/ClientPicker';
 import { ConversationLinkForm } from '../lib/ConversationLinkForm';
 import { ConversationTaskPanel } from '../lib/ConversationTaskPanel';
+import { MessageTaskForm } from '../lib/MessageTaskForm';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { MemoBadge, MemoPanel, MemoSuggestionCard, type MemoSuggestion } from '../lib/Memo';
 import { ClientConfirmPanel } from '../lib/ClientConfirmPanel';
@@ -17,7 +18,7 @@ import { Icon } from '../lib/icons';
 import { useSpotlight } from '../lib/spotlight';
 import { quickSendTimes } from '../lib/sendTimes';
 import { TaskDeadlines, NewTaskDeadlines, WaitDeadlineSelect, fmtDeadline } from '../lib/Deadline';
-import { dateOnlyDeadline, SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply, messageLink, type EventKind, isAllDayRange, isWaitingStatus } from '@lcm/shared';
+import { SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply, messageLink, type EventKind, isAllDayRange, isWaitingStatus } from '@lcm/shared';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 import { AttachmentImage, canPreviewImage } from '../lib/AttachmentImage';
 import { WindowConfirm, isHoldWindow } from '../lib/HoldForm';
@@ -164,6 +165,9 @@ export default function Conversation() {
   const [relinking, setRelinking] = useState(false);
   // 依頼者からの連絡を相手方代理人などに／相手方代理人などからの連絡を依頼者に伝えるパネルを開いているメッセージ
   const [relayFor, setRelayFor] = useState<number | null>(null);
+  // メッセージ 1 通をタスクにする欄を開いているメッセージ（メール・LINE。Chatwork は伝言の欄から）と、作ったあとの知らせ
+  const [taskFor, setTaskFor] = useState<number | null>(null);
+  const [taskDone, setTaskDone] = useState<{ id: number; text: string } | null>(null);
   const [quoteOf, setQuoteOf] = useState<Message | null>(null);
   const [showTimer, setShowTimer] = useState(false);
   // LINE アプリで送った分を記録する欄（送った時刻）
@@ -619,6 +623,16 @@ export default function Conversation() {
                       {c.contact ? '📨 依頼者に伝える' : '📤 相手方代理人に伝える'}
                     </button>
                   )}
+                  {m.direction === 'in' && c.channel !== 'chatwork' && (
+                    <button
+                      type="button"
+                      className="font-medium text-blue-700 hover:underline"
+                      onClick={() => setTaskFor(taskFor === m.id ? null : m.id)}
+                      title="このメッセージで頼まれたこと・確認することを、そのままタスクにします（本文はタスクのメモに残ります）"
+                    >
+                      ✅ タスク化
+                    </button>
+                  )}
                   <button type="button" className="hover:underline" onClick={() => setQuoteOf(m)} title={c.channel === 'chatwork' ? 'Chatwork の引用として本文に付けます' : '「> 」付きの引用文として本文に付けます'}>
                     ❝ 引用
                   </button>
@@ -706,6 +720,29 @@ export default function Conversation() {
               />
             )}
             {relayFor === m.id && <RelayPanel messageId={m.id} onClose={() => setRelayFor(null)} onSent={invalidate} />}
+            {taskFor === m.id && (
+              <MessageTaskForm
+                messageId={m.id}
+                defaultTitle={(c.channel === 'gmail' && c.subject?.trim()) || m.body.split('\n').map((l) => l.trim()).find(Boolean) || ''}
+                cases={c.cases}
+                defaultCaseId={m.caseId ?? c.contact?.caseId ?? (c.cases.length === 1 ? c.cases[0]!.id : null)}
+                onClose={() => setTaskFor(null)}
+                onDone={(text) => {
+                  setTaskFor(null);
+                  setTaskDone({ id: m.id, text });
+                  invalidate();
+                }}
+              />
+            )}
+            {taskDone?.id === m.id && taskFor !== m.id && (
+              <div className="fade-in text-xs text-green-700">
+                ✓ {taskDone.text}（
+                <Link to="/tasks" className="underline">
+                  タスク一覧
+                </Link>
+                ）
+              </div>
+            )}
             </Fragment>
           ))}
           {c.messages.length === 0 && <div className="text-sm text-slate-500">まだやり取りはありません。下の欄で書いて送ると、ここに残ります。</div>}
@@ -2117,13 +2154,10 @@ function CaseTag({ m, cases, out, onChanged }: { m: Message; cases: { id: number
 }
 
 function MessageTools({ m, onChanged }: { m: Message; onChanged: () => void }) {
-  const qc = useQueryClient();
   const [mode, setMode] = useState<'link' | 'task' | null>(null);
   const [clientId, setClientId] = useState(m.clientId ? String(m.clientId) : '');
   const [caseId, setCaseId] = useState(m.caseId ? String(m.caseId) : '');
-  const [title, setTitle] = useState(m.body.split('\n').map((l) => l.trim()).find(Boolean)?.slice(0, 120) ?? '');
-  const [due, setDue] = useState('');
-  const [sync, setSync] = useState(false);
+  const [done, setDone] = useState('');
   const [err, setErr] = useState('');
   const cases = useQuery({ queryKey: ['cases', 'open'], queryFn: () => api.get<{ id: number; title: string; clientId: number; clientName: string }[]>('/cases?status=open'), enabled: mode === 'link' });
   const caseOptions = (cases.data ?? []).filter((k) => !clientId || k.clientId === Number(clientId));
@@ -2132,16 +2166,6 @@ function MessageTools({ m, onChanged }: { m: Message; onChanged: () => void }) {
     onSuccess: () => {
       setMode(null);
       setErr('');
-      onChanged();
-    },
-    onError: (e) => setErr((e as Error).message),
-  });
-  const task = useMutation({
-    mutationFn: () => api.post<{ id: number }>(`/messages/${m.id}/task`, { title, followUpAt: due ? dateOnlyDeadline(due) : null, syncToChatwork: sync }),
-    onSuccess: () => {
-      setMode(null);
-      setErr('');
-      qc.invalidateQueries({ queryKey: ['tasks'] });
       onChanged();
     },
     onError: (e) => setErr((e as Error).message),
@@ -2199,22 +2223,19 @@ function MessageTools({ m, onChanged }: { m: Message; onChanged: () => void }) {
         </div>
       )}
       {mode === 'task' && (
-        <div className="mt-1 space-y-1 rounded border border-slate-200 bg-white p-2">
-          <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="タスク名" />
-          <div className="flex flex-wrap items-center gap-2">
-            <label className="flex items-center gap-1">
-              締切 <input type="date" className="input w-auto py-0.5" title="このタスクの締切（日付だけ）" value={due} onChange={(e) => setDue(e.target.value)} />
-            </label>
-            <label className="flex items-center gap-1">
-              <input type="checkbox" checked={sync} onChange={(e) => setSync(e.target.checked)} /> 担当事務局の Chatwork タスクにも登録
-            </label>
-            <button type="button" className="btn btn-primary btn-sm ml-auto" onClick={() => task.mutate()} disabled={!title.trim() || task.isPending}>
-              タスクを作る
-            </button>
-          </div>
-          <div className="text-slate-400">紐付いている依頼者・事件のタスクになります。Chatwork に登録する場合、事件に担当事務局と専用ルームが設定されていればその担当者に振ります。</div>
-        </div>
+        <MessageTaskForm
+          messageId={m.id}
+          defaultTitle={m.body.split('\n').map((l) => l.trim()).find(Boolean) ?? ''}
+          onClose={() => setMode(null)}
+          onDone={(text) => {
+            setMode(null);
+            setErr('');
+            setDone(text);
+            onChanged();
+          }}
+        />
       )}
+      {done && mode !== 'task' && <div className="fade-in text-green-700">✓ {done}</div>}
       {err && <div className="fade-in text-red-600">{err}</div>}
     </div>
   );
