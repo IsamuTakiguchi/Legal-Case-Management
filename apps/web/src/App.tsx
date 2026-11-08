@@ -1,9 +1,9 @@
 import { Routes, Route, NavLink, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api } from './lib/api';
+import { api, ApiError, ServerTimeoutError, withTimeout } from './lib/api';
 import { applyAppBadge, badgeSource, badgeToApply } from './lib/badge';
-import { useTheme, THEME_CHOICES, THEME_LABEL } from './lib/theme';
+import { useTheme, THEME_CHOICES, THEME_LABEL, useFont, FONT_CHOICES, FONT_LABEL } from './lib/theme';
 import { fmtDateTime } from './lib/format';
 import { Icon, type IconName } from './lib/icons';
 import Login from './pages/Login';
@@ -57,7 +57,8 @@ const NAV: { to: string; label: string; icon: IconName }[] = [
 export default function App() {
   const loc = useLocation();
   useServiceWorkerMessages();
-  const me = useQuery({ queryKey: ['me'], queryFn: () => api.get<{ authenticated: boolean }>('/auth/me'), retry: false });
+  // サーバーが答えないときに「読み込み中」のまま止まらないよう、20 秒で待つのをやめて知らせる
+  const me = useQuery({ queryKey: ['me'], queryFn: () => withTimeout(api.get<{ authenticated: boolean }>('/auth/me'), ME_TIMEOUT_MS), retry: false });
   // メニューの件数（受信箱の要返信・未完了タスク・要確認）
   const counts = useQuery({ queryKey: ['nav-counts'], queryFn: () => api.get<NavCounts>('/nav-counts'), enabled: me.data?.authenticated === true, refetchInterval: 60_000 });
   const nav = counts.data ?? EMPTY_COUNTS;
@@ -84,6 +85,8 @@ export default function App() {
 
   if (loc.pathname === '/login') return <Login />;
   if (me.isLoading) return <div className="loading-text p-8 text-slate-500">読み込み中…</div>;
+  // 返事が来ない・つながらない（ログインが必要、の 401 はログイン画面へ）
+  if (me.isError && !(me.error instanceof ApiError)) return <ServerNotResponding timedOut={me.error instanceof ServerTimeoutError} />;
   if (!me.data?.authenticated) return <Navigate to="/login" replace />;
 
   return (
@@ -407,18 +410,55 @@ function BackupStatus() {
   );
 }
 
-/** 表示テーマの切り替え（端末に合わせる／昼／夜） */
+/** サーバーの返事を待つ時間（起動時のログイン確認） */
+const ME_TIMEOUT_MS = 20_000;
+
+/** サーバーが答えない・つながらないときの画面（「読み込み中」のまま止めない） */
+function ServerNotResponding({ timedOut }: { timedOut: boolean }) {
+  return (
+    <div className="mx-auto max-w-md space-y-3 p-8">
+      <h1 className="text-lg font-semibold">サーバーが応答していません</h1>
+      <p className="text-sm text-slate-600">
+        {timedOut ? '20 秒待ちましたが、T-Lex のサーバーから返事がありませんでした。' : 'T-Lex のサーバーにつながりませんでした。'}
+        更新（再起動）の途中か、サーバーを置いている Railway で障害が起きている可能性があります。少し待ってから、もう一度読み込んでください。
+      </p>
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="button" className="btn btn-primary" onClick={() => location.reload()}>
+          もう一度読み込む
+        </button>
+        <a href="https://status.railway.com" target="_blank" rel="noreferrer" className="text-sm text-blue-700 hover:underline">
+          Railway の障害情報を見る
+        </a>
+      </div>
+    </div>
+  );
+}
+
+/** 表示テーマの切り替え（端末に合わせる／昼／夜）と、文字の大きさ（標準／大／特大） */
 function ThemeSwitch() {
   const [choice, choose] = useTheme();
+  const [font, chooseFont] = useFont();
   return (
-    <div className="flex items-center gap-2 px-0.5">
-      <span className="text-[11px] text-slate-500">表示</span>
-      <div className="segmented ml-auto" role="group" aria-label="表示テーマ">
-        {THEME_CHOICES.map((c) => (
-          <button key={c} type="button" aria-pressed={choice === c} onClick={() => choose(c)} title={THEME_LABEL[c]}>
-            {c === 'auto' ? '自動' : THEME_LABEL[c]}
-          </button>
-        ))}
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2 px-0.5">
+        <span className="text-[11px] text-slate-500">表示</span>
+        <div className="segmented ml-auto" role="group" aria-label="表示テーマ">
+          {THEME_CHOICES.map((c) => (
+            <button key={c} type="button" aria-pressed={choice === c} onClick={() => choose(c)} title={THEME_LABEL[c]}>
+              {c === 'auto' ? '自動' : THEME_LABEL[c]}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="flex items-center gap-2 px-0.5">
+        <span className="text-[11px] text-slate-500">文字</span>
+        <div className="segmented ml-auto" role="group" aria-label="文字の大きさ">
+          {FONT_CHOICES.map((c) => (
+            <button key={c} type="button" aria-pressed={font === c} onClick={() => chooseFont(c)} title={`文字の大きさ: ${FONT_LABEL[c]}（この端末だけに効きます）`}>
+              {FONT_LABEL[c]}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -484,7 +524,7 @@ function MobileTabs({ counts }: { counts: NavCounts }) {
             <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-slate-300" />
             <div className="grid grid-cols-3 gap-2">
               {rest.map((n) => (
-                <NavLink key={n.to} to={n.to} className={({ isActive }) => `card-press flex flex-col items-center gap-1.5 rounded-2xl px-2 py-3 text-xs ${isActive ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'bg-black/[0.04] text-slate-700'}`}>
+                <NavLink key={n.to} to={n.to} className={({ isActive }) => `card-press flex flex-col items-center gap-1.5 whitespace-nowrap rounded-2xl px-1 py-3 text-xs tracking-tight ${isActive ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'bg-black/[0.04] text-slate-700'}`}>
                   <Icon name={n.icon} className="h-6 w-6" strokeWidth={1.6} />
                   {n.label}
                 </NavLink>

@@ -97,8 +97,46 @@
   --sidebar: linear-gradient(180deg, rgba(22, 30, 39, 0.82), rgba(14, 20, 27, 0.72));
 }
 
+/*
+ * 文字の大きさ（標準・大・特大）。text-xs・text-sm などはこの変数を見るので、ここを差し替えると画面全体が大きくなる。
+ * 選んでいなければ（data-font なし）、スマホは「大」（Chatwork くらい）、パソコンは「標準」
+ */
+:root[data-font='large'] {
+  --text-xs: 0.875rem;
+  --text-sm: 1rem;
+  --text-base: 1.0625rem;
+  --text-lg: 1.1875rem;
+  --text-xl: 1.3125rem;
+  --fs-body: 1.0625rem;
+  --fs-small: 13px;
+  --fs-h2: 17px;
+}
+@media (max-width: 767px) {
+  :root:not([data-font]) {
+    --text-xs: 0.875rem;
+    --text-sm: 1rem;
+    --text-base: 1.0625rem;
+    --text-lg: 1.1875rem;
+    --text-xl: 1.3125rem;
+    --fs-body: 1.0625rem;
+    --fs-small: 13px;
+    --fs-h2: 17px;
+  }
+}
+:root[data-font='xlarge'] {
+  --text-xs: 0.9375rem;
+  --text-sm: 1.0625rem;
+  --text-base: 1.125rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.375rem;
+  --fs-body: 1.125rem;
+  --fs-small: 14px;
+  --fs-h2: 18px;
+}
+
 body {
   @apply antialiased;
+  font-size: var(--fs-body, 1rem);
   background: var(--bg-tint), var(--bg);
   background-attachment: fixed;
   color: var(--text);
@@ -130,6 +168,7 @@ main h1 {
 }
 main h2 {
   @apply text-[15px] font-semibold tracking-[-0.01em];
+  font-size: var(--fs-h2, 15px);
   color: var(--text);
 }
 main h3 {
@@ -240,6 +279,7 @@ main h3 {
   }
   .badge {
     @apply inline-flex items-center whitespace-nowrap rounded-full px-2 py-[3px] text-[11px] font-semibold leading-none tracking-wide;
+    font-size: var(--fs-small, 11px);
   }
   .badge-line {
     background: var(--ok-soft);

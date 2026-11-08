@@ -1,7 +1,5 @@
 import { and, eq, desc, inArray, sql } from 'drizzle-orm';
-import mammoth from 'mammoth';
-import { PDFParse } from 'pdf-parse';
-import ExcelJS from 'exceljs';
+import { extractTextInline } from './textExtract.js';
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } from 'docx';
 import { db, schema } from '../db/index.js';
 import { storage } from '../integrations/storage.js';
@@ -19,36 +17,43 @@ export type FormRow = typeof schema.formTemplates.$inferSelect;
 const INDEXABLE = /\.(docx|doc|pdf|xlsx|xlsm|txt)$/i;
 const MAX_TEXT = 60_000;
 
-export async function extractText(name: string, data: Buffer): Promise<string> {
-  const ext = name.toLowerCase().split('.').pop();
-  if (ext === 'docx') {
-    const r = await mammoth.extractRawText({ buffer: data });
-    return r.value;
-  }
-  if (ext === 'pdf') {
-    const parser = new PDFParse({ data: new Uint8Array(data) });
-    try {
-      const r = await parser.getText();
-      return r.text;
-    } finally {
-      await parser.destroy().catch(() => undefined);
-    }
-  }
-  if (ext === 'xlsx' || ext === 'xlsm') {
-    const wb = new ExcelJS.Workbook();
-    await wb.xlsx.load(data as unknown as ArrayBuffer);
-    const parts: string[] = [];
-    wb.eachSheet((ws) => {
-      parts.push(`# ${ws.name}`);
-      ws.eachRow((row) => {
-        const vals = (row.values as unknown[]).slice(1).map((v) => (v === null || v === undefined ? '' : typeof v === 'object' && 'text' in (v as object) ? String((v as { text: unknown }).text) : String(v)));
-        if (vals.some((v) => v)) parts.push(vals.join('\t'));
-      });
-    });
-    return parts.join('\n');
-  }
-  if (ext === 'txt') return data.toString('utf8');
-  throw new Error(`本文抽出に未対応の形式: ${ext}`);
+/** 本文を取り出す時間の上限（これを超えたら打ち切る） */
+const EXTRACT_TIMEOUT_MS = 30_000;
+/** 本文を取り出す別スレッドが使ってよいメモリ（MB） */
+const EXTRACT_MAX_HEAP_MB = 384;
+/** Excel は中身を展開すると何倍にもふくらむので、これより大きいものは読まない */
+const EXTRACT_MAX_XLSX_BYTES = 3 * 1024 * 1024;
+/** それ以外の形式の上限 */
+const EXTRACT_MAX_BYTES = 30 * 1024 * 1024;
+
+/**
+ * ファイルの本文を取り出す。
+ * 大きな Excel・PDF の読み取りでサーバー全体が固まらないよう、本番（ビルド済み）では別スレッドで動かし、
+ * 時間（30 秒）とメモリに上限を付ける。開発・テストでは、その場で読む
+ */
+export async function extractText(name: string, data: Buffer, opts: { timeoutMs?: number } = {}): Promise<string> {
+  const ext = name.toLowerCase().split('.').pop() ?? '';
+  if ((ext === 'xlsx' || ext === 'xlsm') && data.length > EXTRACT_MAX_XLSX_BYTES) throw new Error('Excel が大きすぎるため本文を取り出していません');
+  if (data.length > EXTRACT_MAX_BYTES) throw new Error('ファイルが大きすぎるため本文を取り出していません');
+  const workerUrl = new URL('./extractWorker.js', import.meta.url);
+  // TypeScript のまま動いているとき（開発・テスト）は別スレッドを起動できないので、その場で読む
+  if (!import.meta.url.endsWith('.js') || process.env.EXTRACT_INLINE === '1') return extractTextInline(name, data);
+  const { Worker } = await import('node:worker_threads');
+  return new Promise<string>((resolve, reject) => {
+    const worker = new Worker(workerUrl, { workerData: { name, data }, execArgv: [], resourceLimits: { maxOldGenerationSizeMb: EXTRACT_MAX_HEAP_MB } });
+    let settled = false;
+    const done = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      void worker.terminate();
+      fn();
+    };
+    const timer = setTimeout(() => done(() => reject(new Error('時間がかかりすぎるため本文の取り出しを打ち切りました'))), opts.timeoutMs ?? EXTRACT_TIMEOUT_MS);
+    worker.once('message', (m: { ok: boolean; text?: string; error?: string }) => done(() => (m.ok ? resolve(m.text ?? '') : reject(new Error(m.error ?? '本文を取り出せませんでした')))));
+    worker.once('error', (err) => done(() => reject(err)));
+    worker.once('exit', (code) => done(() => reject(new Error(`本文の取り出しが途中で止まりました（${code}）`))));
+  });
 }
 
 /** 文書種別の手がかり（既定の言葉に、事件類型ごとに足した言葉を加える） */
