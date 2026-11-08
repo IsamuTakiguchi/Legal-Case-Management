@@ -58,11 +58,51 @@ export function existingEventsForReschedule(clientId: number | null, now = new D
 
 const WD = ['日', '月', '火', '水', '木', '金', '土'];
 
+/**
+ * 日程の読み取りに渡すやり取り（古い順）。送った・届いたメッセージに加えて、まだ送っていない送信予約も入れる
+ * （「その日でお願いします」と返事を予約していれば、日程は決まったものとして読む）
+ */
+export function scheduleTranscript(conversationId: number, opts: { me: string; who: string; maxMessages?: number }): { transcript: string; count: number; scheduled: number } {
+  const d = db();
+  const msgs = d
+    .select()
+    .from(schema.messages)
+    .where(eq(schema.messages.conversationId, conversationId))
+    .orderBy(desc(schema.messages.sentAt))
+    .limit(opts.maxMessages ?? 20)
+    .all()
+    .map((m) => ({ at: m.sentAt, speaker: m.direction === 'out' ? `${opts.me}（自分）` : (m.senderName ?? opts.who), body: m.body, scheduled: false }));
+  // 送信予約（予約中・送信中・失敗して送り直せるもの）。送る予定の時刻の位置に並べる
+  const pending = d
+    .select()
+    .from(schema.scheduledMessages)
+    .where(and(eq(schema.scheduledMessages.conversationId, conversationId), inArray(schema.scheduledMessages.status, ['pending', 'sending', 'failed'])))
+    .all()
+    .map((m) => ({ at: m.scheduledAt, speaker: `${opts.me}（自分）`, body: m.text, scheduled: true }));
+  const all = [...msgs, ...pending].sort((a, b) => a.at.localeCompare(b.at));
+  const when = (iso: string) => {
+    const p = toJstParts(new Date(iso));
+    return `${p.year}/${p.month}/${p.day}(${WD[p.weekday]}) ${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')}`;
+  };
+  const transcript = all
+    .map((m) => `[${when(m.at)}${m.scheduled ? ' 送信予約（まだ送っていないが、この時刻に送る）' : ''}] ${m.speaker}:\n${m.body.slice(0, 1500)}`)
+    .join('\n\n');
+  return { transcript, count: all.length, scheduled: pending.length };
+}
+
+/** 送信予約の読み方（AI への指示に添える） */
+const SCHEDULED_NOTE = '「送信予約」と書かれたものは、自分がまだ送っていないが、その時刻に送ることが決まっているメッセージです。送ったものとして読んでください（例: 相手の候補に「その日でお願いします」と予約していれば合意したものとする。予約で候補を出していれば、こちらが出した候補とする）。';
+
 export async function extractScheduleFromConversation(conversationId: number, opts: { maxMessages?: number } = {}) {
   const d = db();
   const conv = d.select().from(schema.conversations).where(eq(schema.conversations.id, conversationId)).get();
   if (!conv) throw new Error('会話が見つかりません');
   const client = conv.clientId ? d.select().from(schema.clients).where(eq(schema.clients.id, conv.clientId)).get() : null;
+  const me = getSetting('lawyer_name') || '自分';
+  const who = client?.name ?? conv.counterpartName ?? '相手';
+  const { transcript, count } = scheduleTranscript(conversationId, { me, who, maxMessages: opts.maxMessages });
+  if (count === 0) throw new Error('メッセージがありません');
+  // 相手のメッセージに書かれた会議 URL を探すのに使う（送信予約は相手のものではないので入れない）
   const msgs = d
     .select()
     .from(schema.messages)
@@ -71,17 +111,6 @@ export async function extractScheduleFromConversation(conversationId: number, op
     .limit(opts.maxMessages ?? 20)
     .all()
     .reverse();
-  if (msgs.length === 0) throw new Error('メッセージがありません');
-  const me = getSetting('lawyer_name') || '自分';
-  const who = client?.name ?? conv.counterpartName ?? '相手';
-  const transcript = msgs
-    .map((m) => {
-      const p = toJstParts(new Date(m.sentAt));
-      const when = `${p.year}/${p.month}/${p.day}(${WD[p.weekday]}) ${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')}`;
-      const speaker = m.direction === 'out' ? `${me}（自分）` : (m.senderName ?? who);
-      return `[${when}] ${speaker}:\n${m.body.slice(0, 1500)}`;
-    })
-    .join('\n\n');
   const now = new Date();
   const np = toJstParts(now);
   const today = `${np.year}年${np.month}月${np.day}日(${WD[np.weekday]})`;
@@ -122,6 +151,7 @@ export async function extractScheduleFromConversation(conversationId: number, op
       'すでに決まっている予定の日時を変える話（「◯日の打合せを別日にしたい」「都合が悪くなった」「延期」など）なら reschedule.isReschedule=true とし、変更前の予定を「すでに入っている予定」の番号で originalIndex に入れます。slots には新しい日時（候補）だけを入れ、変更前の日時は入れません。',
       '新しく予定を決める話なら isReschedule=false です。変更前の予定が一覧に無い・どれか分からないときは originalIndex=null にします。',
       '「仮押さえ中の候補」は、こちらが相手に出している候補です。相手がそのうちの 1 つを選んで合意した（「2 番目でお願いします」「◯日で大丈夫です」など）なら confirmed とし、その候補の日時を slots に入れます。',
+      SCHEDULED_NOTE,
       '本文にない情報は作らないでください。',
       eventStyleHints(),
     ]
@@ -279,25 +309,10 @@ export async function extractSchedulePreferences(conversationId: number, opts: {
   const conv = d.select().from(schema.conversations).where(eq(schema.conversations.id, conversationId)).get();
   if (!conv) throw new Error('会話が見つかりません');
   const client = conv.clientId ? d.select().from(schema.clients).where(eq(schema.clients.id, conv.clientId)).get() : null;
-  const msgs = d
-    .select()
-    .from(schema.messages)
-    .where(eq(schema.messages.conversationId, conversationId))
-    .orderBy(desc(schema.messages.sentAt))
-    .limit(opts.maxMessages ?? 20)
-    .all()
-    .reverse();
-  if (msgs.length === 0) throw new Error('メッセージがありません');
   const me = getSetting('lawyer_name') || '自分';
   const who = client?.name ?? conv.counterpartName ?? '相手';
-  const transcript = msgs
-    .map((m) => {
-      const p = toJstParts(new Date(m.sentAt));
-      const when = `${p.year}/${p.month}/${p.day}(${WD[p.weekday]}) ${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')}`;
-      const speaker = m.direction === 'out' ? `${me}（自分）` : (m.senderName ?? who);
-      return `[${when}] ${speaker}:\n${m.body.slice(0, 1500)}`;
-    })
-    .join('\n\n');
+  const { transcript, count } = scheduleTranscript(conversationId, { me, who, maxMessages: opts.maxMessages });
+  if (count === 0) throw new Error('メッセージがありません');
   const np = toJstParts(new Date());
   const today = `${np.year}年${np.month}月${np.day}日(${WD[np.weekday]})`;
   const bh = businessHours();
@@ -309,6 +324,7 @@ export async function extractSchedulePreferences(conversationId: number, opts: {
       `今日は ${today} です。「来週」「月末」「再来週の火曜」などの相対表現は今日を基準に日本時間の日付に直してください。年が無ければ今日以降で最も近い日付とします。`,
       `事務所の営業時間は ${fmtHm(bh.startMin)}〜${fmtHm(bh.endMin)} です。時間帯の希望はこの範囲で具体化してください。`,
       '抽出するのは相手の発言に基づく希望だけです。自分（弁護士）が出した候補は、相手がそれを受けた・断ったかを判断する文脈としてだけ使ってください。',
+      SCHEDULED_NOTE,
       '相手が具体的な日時を挙げていれば requested に、都合が悪い日時を挙げていれば avoid に入れます。曖昧な希望（午後がよい、平日は難しい等）は timeRanges / weekdays / earliest / latest に反映します。',
       '本文にない情報は作らないでください。希望が読み取れなければ found=false にし、他は空・null にしてください。',
     ].join('\n'),

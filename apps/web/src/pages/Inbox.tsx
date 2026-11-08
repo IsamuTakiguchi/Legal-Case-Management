@@ -5,6 +5,7 @@ import { NewMessagePanel } from '../lib/NewMessagePanel';
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { LongText } from '../lib/LongText';
+import { ConversationTaskPanel } from '../lib/ConversationTaskPanel';
 import { channelBadge, channelLabel, fmtRelative } from '../lib/format';
 
 interface ConversationListItem {
@@ -55,6 +56,9 @@ export default function Inbox() {
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [msg, setMsg] = useState('');
+  // 会話からタスクを登録する欄を開いている行と、登録したあとの知らせ
+  const [taskFor, setTaskFor] = useState<number | null>(null);
+  const [taskDone, setTaskDone] = useState<{ id: number; text: string } | null>(null);
   // 入力しながら探す（日本語入力の確定の Enter では送られないため、少し待ってから自動で探す）
   useEffect(() => {
     if (q === filter.q) return;
@@ -195,60 +199,107 @@ export default function Inbox() {
         )}
         <ul className="divide-y divide-slate-100">
           {query.data?.map((c) => (
-            <li key={c.id} className={`flex items-start ${selected.has(c.id) ? 'bg-blue-50' : ''}`}>
-              <label className="flex shrink-0 cursor-pointer items-center self-stretch px-2 md:px-3" title="選択">
-                <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)} />
-              </label>
-              <Link to={`/inbox/${c.id}`} className={`flex min-w-0 flex-1 items-start gap-3 py-3 pr-3 hover:bg-slate-50 md:pr-4 ${c.unread ? 'bg-blue-50/40' : ''}`}>
-                <span className="hidden shrink-0 md:block">
-                  <span className={`${channelBadge(c.channel)} mt-0.5 w-20 justify-center`}>{channelLabel(c.channel)}</span>
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="shrink-0 md:hidden">
-                      <span className={channelBadge(c.channel)}>{channelLabel(c.channel)}</span>
-                    </span>
-                    <span className={`min-w-0 truncate ${c.unread ? 'font-bold' : 'font-medium'}`}>
-                      {c.contact ? c.contact.name : (c.client?.name ?? (c.channel === 'chatwork' && c.subject ? c.subject : null) ?? c.counterpartName ?? c.counterpartAddress ?? '（不明）')}
-                    </span>
-                    {c.lineGroup && (
-                      <span className="badge badge-gray shrink-0 whitespace-nowrap" title="このやり取りは LINE のグループです。返信はグループ全員に届きます">
-                        グループ
+            <li key={c.id} className={selected.has(c.id) ? 'bg-blue-50' : ''}>
+              <div className="flex items-start">
+                <label className="flex shrink-0 cursor-pointer items-center self-stretch px-2 md:px-3" title="選択">
+                  <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)} />
+                </label>
+                <Link to={`/inbox/${c.id}`} className={`flex min-w-0 flex-1 items-start gap-3 py-3 pr-3 hover:bg-slate-50 md:pr-4 ${c.unread ? 'bg-blue-50/40' : ''}`}>
+                  <span className="hidden shrink-0 md:block">
+                    <span className={`${channelBadge(c.channel)} mt-0.5 w-20 justify-center`}>{channelLabel(c.channel)}</span>
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="shrink-0 md:hidden">
+                        <span className={channelBadge(c.channel)}>{channelLabel(c.channel)}</span>
                       </span>
-                    )}
-                    {c.contact && <span className="badge badge-orange shrink-0 whitespace-nowrap">{c.contact.roleLabel}</span>}
-                    {c.contact && c.client && <span className="min-w-0 truncate text-xs text-slate-500">{c.client.name} / {c.contact.caseTitle}</span>}
-                    <span className="ml-auto shrink-0 whitespace-nowrap text-xs text-slate-400">{fmtRelative(c.lastMessageAt)}</span>
-                  </div>
-                  {(!c.clientId || c.needsReply || c.unread > 0 || c.subject || c.staff || (searching && c.archived)) && (
-                    <div className="mt-0.5 flex items-center gap-2">
-                      {c.staff && <span className="badge badge-gray shrink-0 whitespace-nowrap">事務局</span>}
-                      {!c.clientId && !c.staff && <span className="badge badge-orange shrink-0 whitespace-nowrap">未紐付け</span>}
-                      {c.needsReply && <span className="badge badge-blue shrink-0 whitespace-nowrap">要返信</span>}
-                      {searching && c.archived && <span className="badge badge-gray shrink-0 whitespace-nowrap">アーカイブ</span>}
-                      {c.unread > 0 && <span className="badge badge-blue shrink-0">{c.unread}</span>}
-                      {c.subject && !(c.channel === 'chatwork' && !c.client) && <span className="min-w-0 truncate text-xs text-slate-500">{c.subject}</span>}
+                      <span className={`min-w-0 truncate ${c.unread ? 'font-bold' : 'font-medium'}`}>
+                        {c.contact ? c.contact.name : (c.client?.name ?? (c.channel === 'chatwork' && c.subject ? c.subject : null) ?? c.counterpartName ?? c.counterpartAddress ?? '（不明）')}
+                      </span>
+                      {c.lineGroup && (
+                        <span className="badge badge-gray shrink-0 whitespace-nowrap" title="このやり取りは LINE のグループです。返信はグループ全員に届きます">
+                          グループ
+                        </span>
+                      )}
+                      {c.contact && <span className="badge badge-orange shrink-0 whitespace-nowrap">{c.contact.roleLabel}</span>}
+                      {c.contact && c.client && <span className="min-w-0 truncate text-xs text-slate-500">{c.client.name} / {c.contact.caseTitle}</span>}
+                      <span className="ml-auto shrink-0 whitespace-nowrap text-xs text-slate-400">{fmtRelative(c.lastMessageAt)}</span>
                     </div>
+                    {(!c.clientId || c.needsReply || c.unread > 0 || c.subject || c.staff || (searching && c.archived)) && (
+                      <div className="mt-0.5 flex items-center gap-2">
+                        {c.staff && <span className="badge badge-gray shrink-0 whitespace-nowrap">事務局</span>}
+                        {!c.clientId && !c.staff && <span className="badge badge-orange shrink-0 whitespace-nowrap">未紐付け</span>}
+                        {c.needsReply && <span className="badge badge-blue shrink-0 whitespace-nowrap">要返信</span>}
+                        {searching && c.archived && <span className="badge badge-gray shrink-0 whitespace-nowrap">アーカイブ</span>}
+                        {c.unread > 0 && <span className="badge badge-blue shrink-0">{c.unread}</span>}
+                        {c.subject && !(c.channel === 'chatwork' && !c.client) && <span className="min-w-0 truncate text-xs text-slate-500">{c.subject}</span>}
+                      </div>
+                    )}
+                    {c.lastMessage && <MessagePreview body={c.lastMessage.body} truncated={!!c.lastMessage.truncated} mine={c.lastMessage.direction === 'out'} sender={c.channel === 'chatwork' && c.lastMessage.direction === 'in' ? c.lastMessage.senderName ?? null : null} />}
+                  </div>
+                </Link>
+                <div className="flex shrink-0 flex-col gap-1 self-center px-2 md:px-3">
+                  {!c.archived && c.needsReply && (
+                    <button type="button" className="btn btn-sm whitespace-nowrap" onClick={() => rowAction.mutate({ id: c.id, action: 'resolve' })} disabled={rowAction.isPending} title="要返信を外して既読にします">
+                      対応済み
+                    </button>
                   )}
-                  {c.lastMessage && <MessagePreview body={c.lastMessage.body} truncated={!!c.lastMessage.truncated} mine={c.lastMessage.direction === 'out'} sender={c.channel === 'chatwork' && c.lastMessage.direction === 'in' ? c.lastMessage.senderName ?? null : null} />}
-                </div>
-              </Link>
-              <div className="flex shrink-0 flex-col gap-1 self-center px-2 md:px-3">
-                {!c.archived && c.needsReply && (
-                  <button type="button" className="btn btn-sm whitespace-nowrap" onClick={() => rowAction.mutate({ id: c.id, action: 'resolve' })} disabled={rowAction.isPending} title="要返信を外して既読にします">
-                    対応済み
+                  <button
+                    type="button"
+                    className="btn btn-sm whitespace-nowrap text-slate-600"
+                    onClick={() => rowAction.mutate({ id: c.id, action: c.archived ? 'unarchive' : 'archive' })}
+                    disabled={rowAction.isPending}
+                    title={c.archived ? 'アーカイブを解除して受信箱に戻します' : '受信箱から外します（「アーカイブ」で見られます）'}
+                  >
+                    {c.archived ? '解除' : 'アーカイブ'}
                   </button>
-                )}
-                <button
-                  type="button"
-                  className="btn btn-sm whitespace-nowrap text-slate-600"
-                  onClick={() => rowAction.mutate({ id: c.id, action: c.archived ? 'unarchive' : 'archive' })}
-                  disabled={rowAction.isPending}
-                  title={c.archived ? 'アーカイブを解除して受信箱に戻します' : '受信箱から外します（「アーカイブ」で見られます）'}
-                >
-                  {c.archived ? '解除' : 'アーカイブ'}
-                </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm whitespace-nowrap ${taskFor === c.id ? 'btn-primary' : 'text-slate-600'}`}
+                    onClick={() => setTaskFor(taskFor === c.id ? null : c.id)}
+                    title="この会話のやり取りから、頼まれたこと・返事待ちのことをタスクにします（AI が案を作り、直してから登録します）"
+                  >
+                    タスク化
+                  </button>
+                </div>
               </div>
+              {taskFor === c.id && (
+                <div className="px-2 pb-3 md:px-3">
+                  <ConversationTaskPanel
+                    conversationId={c.id}
+                    onClose={() => setTaskFor(null)}
+                    onDone={(text) => {
+                      setTaskFor(null);
+                      setTaskDone({ id: c.id, text });
+                    }}
+                  />
+                </div>
+              )}
+              {taskDone?.id === c.id && taskFor !== c.id && (
+                <div className="fade-in flex flex-wrap items-center gap-2 px-3 pb-2 text-xs text-green-700 md:px-4">
+                  <span>✓ {taskDone.text}</span>
+                  <Link to="/tasks" className="underline">
+                    タスク一覧
+                  </Link>
+                  {!c.archived && c.needsReply && (
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => {
+                        rowAction.mutate({ id: c.id, action: 'resolve' });
+                        setTaskDone(null);
+                      }}
+                      disabled={rowAction.isPending}
+                      title="タスクで追いかけるので、この会話の要返信を外して既読にします"
+                    >
+                      この会話は対応済みにする
+                    </button>
+                  )}
+                  <button type="button" className="text-slate-400 hover:text-slate-700" onClick={() => setTaskDone(null)}>
+                    ×
+                  </button>
+                </div>
+              )}
             </li>
           ))}
         </ul>
