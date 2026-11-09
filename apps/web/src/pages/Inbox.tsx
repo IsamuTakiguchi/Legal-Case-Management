@@ -56,6 +56,8 @@ export default function Inbox() {
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [msg, setMsg] = useState('');
+  // 行のボタンでアーカイブした直後は「元に戻す」を出す（押し間違えたときにすぐ戻せるように）
+  const [undoArchive, setUndoArchive] = useState<number | null>(null);
   // 会話からタスクを登録する欄を開いている行と、登録したあとの知らせ
   const [taskFor, setTaskFor] = useState<number | null>(null);
   const [taskDone, setTaskDone] = useState<{ id: number; text: string } | null>(null);
@@ -85,13 +87,18 @@ export default function Inbox() {
       qc.invalidateQueries({ queryKey: ['conversations'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
       setMsg(v.action === 'resolve' ? '対応済みにしました' : v.action === 'archive' ? 'アーカイブしました' : 'アーカイブを解除しました');
+      setUndoArchive(v.action === 'archive' ? v.id : null);
     },
-    onError: (e) => setMsg((e as Error).message),
+    onError: (e) => {
+      setMsg((e as Error).message);
+      setUndoArchive(null);
+    },
   });
   const bulk = useMutation({
     mutationFn: (action: 'resolve' | 'archive' | 'unarchive' | 'read') => api.post<{ updated: number }>('/conversations/bulk', { ids: [...selected], action }),
     onSuccess: (r, action) => {
       setSelected(new Set());
+      setUndoArchive(null);
       qc.invalidateQueries({ queryKey: ['conversations'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
       const label = action === 'resolve' ? '対応済みにしました' : action === 'archive' ? 'アーカイブしました' : action === 'unarchive' ? 'アーカイブを解除しました' : '既読にしました';
@@ -157,7 +164,7 @@ export default function Inbox() {
         </div>
       )}
       <StaleUnanswered compact />
-      {(query.data?.length ?? 0) > 0 && (
+      {((query.data?.length ?? 0) > 0 || undoArchive !== null) && (
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <label className="flex items-center gap-1">
             <input type="checkbox" checked={allSelected} onChange={(e) => setSelected(e.target.checked ? new Set(ids) : new Set())} /> すべて選択
@@ -187,7 +194,16 @@ export default function Inbox() {
           ) : (
             <span className="text-xs text-slate-400">チェックを付けると、まとめて対応済み・アーカイブにできます</span>
           )}
-          {msg && <span className="fade-in ml-auto text-xs text-slate-600">{msg}</span>}
+          {msg && (
+            <span className="fade-in ml-auto flex items-center gap-2 text-xs text-slate-600">
+              {msg}
+              {undoArchive !== null && (
+                <button type="button" className="btn btn-sm" onClick={() => rowAction.mutate({ id: undoArchive, action: 'unarchive' })} disabled={rowAction.isPending} title="アーカイブを取り消して受信箱に戻します">
+                  元に戻す
+                </button>
+              )}
+            </span>
+          )}
         </div>
       )}
       <div className="card p-0">
@@ -238,7 +254,16 @@ export default function Inbox() {
                     {c.lastMessage && <MessagePreview body={c.lastMessage.body} truncated={!!c.lastMessage.truncated} mine={c.lastMessage.direction === 'out'} sender={c.channel === 'chatwork' && c.lastMessage.direction === 'in' ? c.lastMessage.senderName ?? null : null} />}
                   </div>
                 </Link>
-                <div className="flex shrink-0 flex-col gap-1 self-center px-2 md:px-3">
+                {/* タスク化（足す操作）を上に、アーカイブ（受信箱から外す操作）は間を空けて一番下に置き、押し間違えないようにする */}
+                <div className="flex shrink-0 flex-col gap-1 self-center px-2 py-2 md:px-3">
+                  <button
+                    type="button"
+                    className={`btn btn-sm whitespace-nowrap ${taskFor === c.id ? 'btn-primary' : 'border-blue-200 text-blue-700'}`}
+                    onClick={() => setTaskFor(taskFor === c.id ? null : c.id)}
+                    title="この会話のやり取りから、頼まれたこと・返事待ちのことをタスクにします（AI が案を作り、直してから登録します）"
+                  >
+                    ✅ タスク化
+                  </button>
                   {!c.archived && c.needsReply && (
                     <button type="button" className="btn btn-sm whitespace-nowrap" onClick={() => rowAction.mutate({ id: c.id, action: 'resolve' })} disabled={rowAction.isPending} title="要返信を外して既読にします">
                       対応済み
@@ -246,20 +271,12 @@ export default function Inbox() {
                   )}
                   <button
                     type="button"
-                    className="btn btn-sm whitespace-nowrap text-slate-600"
+                    className="btn btn-sm mt-4 whitespace-nowrap text-slate-500"
                     onClick={() => rowAction.mutate({ id: c.id, action: c.archived ? 'unarchive' : 'archive' })}
                     disabled={rowAction.isPending}
                     title={c.archived ? 'アーカイブを解除して受信箱に戻します' : '受信箱から外します（「アーカイブ」で見られます）'}
                   >
                     {c.archived ? '解除' : 'アーカイブ'}
-                  </button>
-                  <button
-                    type="button"
-                    className={`btn btn-sm whitespace-nowrap ${taskFor === c.id ? 'btn-primary' : 'text-slate-600'}`}
-                    onClick={() => setTaskFor(taskFor === c.id ? null : c.id)}
-                    title="この会話のやり取りから、頼まれたこと・返事待ちのことをタスクにします（AI が案を作り、直してから登録します）"
-                  >
-                    タスク化
                   </button>
                 </div>
               </div>
