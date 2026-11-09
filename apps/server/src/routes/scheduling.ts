@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { proposeSlotsSchema, confirmSlotSchema, nextHearingInputSchema, EVENT_KINDS, schedulePreferencesSchema } from '@lcm/shared';
 import { proposeSlots, confirmSlot, cancelSession, listSessions, findFreeSlots, extractChosenSlot } from '../services/scheduling.js';
-import { syncCalendar, checkPostEvents, resolveNextHearing, listCourtDocs, listClientFolder, upcomingEvents, relinkEvent, listCalendarEvents, createCalendarEvent, editCalendarEvent, removeCalendarEvent, createHoldSet, confirmHold, cancelHoldSet, cancelHoldCandidate, addHoldCandidates, startReschedule, setHoldSetLocation } from '../services/court.js';
+import { syncCalendar, checkPostEvents, resolveNextHearing, listCourtDocs, listClientFolder, upcomingEvents, relinkEvent, listCalendarEvents, createCalendarEvent, editCalendarEvent, removeCalendarEvent, createHoldSet, confirmHold, cancelHoldSet, cancelHoldCandidate, addHoldCandidates, updateHoldCandidate, startReschedule, setHoldSetLocation } from '../services/court.js';
 import { createZoomMeeting } from '../integrations/zoom.js';
 import { extractScheduleFromConversation, registerScheduleFromConversation, extractSchedulePreferences, confirmHoldFromConversation, conversationHolds, setEventMeetingFromConversation } from '../services/scheduleExtract.js';
 
@@ -243,6 +243,12 @@ schedulingRoutes.post('/calendar/holds/:sessionId/cancel', async (c) => {
 schedulingRoutes.post('/calendar/holds/:sessionId/candidates', async (c) => {
   const body = z.object({ slots: z.array(z.object({ startAt: z.string(), endAt: z.string() })).min(1).max(10) }).parse(await c.req.json());
   return c.json(await addHoldCandidates(Number(c.req.param('sessionId')), body.slots));
+});
+
+/** 仮押さえの候補 1 つの日時を変える */
+schedulingRoutes.post('/calendar/holds/:sessionId/candidates/:eventId', async (c) => {
+  const body = z.object({ startAt: z.string(), endAt: z.string() }).parse(await c.req.json());
+  return c.json(await updateHoldCandidate(Number(c.req.param('sessionId')), Number(c.req.param('eventId')), body));
 });
 
 /** 仮押さえの候補を 1 つだけ取り消す */

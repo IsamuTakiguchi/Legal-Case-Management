@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { EVENT_KIND_LABEL, type EventKind, isAllDayRange } from '@lcm/shared';
 import { api } from '../lib/api';
-import { HoldForm, HoldLocationEditor, HoldAddCandidates, WindowConfirm, isHoldWindow, type RescheduleTarget } from '../lib/HoldForm';
+import { HoldForm, HoldLocationEditor, HoldAddCandidates, HoldCandidateEdit, WindowConfirm, isHoldWindow, type RescheduleTarget } from '../lib/HoldForm';
 import { EventForm } from '../lib/EventForm';
 
 interface Ev {
@@ -105,6 +105,8 @@ export default function Calendar() {
   const [rescheduling, setRescheduling] = useState<RescheduleTarget | null>(null);
   // 候補を足すフォームを開いている予定（その予定の行の下に出す）
   const [addingAt, setAddingAt] = useState<number | null>(null);
+  // 日時を変えている仮押さえの候補（予定の ID）
+  const [movingAt, setMovingAt] = useState<number | null>(null);
   // 枠で押さえた候補を確定する時間を選んでいる予定
   const [windowFor, setWindowFor] = useState<number | null>(null);
   const range = useMemo(() => rangeFor(view, anchor), [view, anchor]);
@@ -322,6 +324,9 @@ export default function Calendar() {
                           >
                             この候補を取消
                           </button>
+                          <button className="btn btn-sm" onClick={() => setMovingAt(movingAt === e.id ? null : e.id)} title="この候補の日時だけを変えます（ほかの候補はそのまま）">
+                            日時を変更
+                          </button>
                           <button
                             className="btn btn-sm"
                             disabled={cancelHold.isPending}
@@ -406,6 +411,22 @@ export default function Calendar() {
                         note={`ほかの候補（${Math.max(e.sessionCandidates - 1, 0)} 件）の仮押さえは削除されます。`}
                         onConfirm={(t) => confirmHold.mutate({ sessionId: e.sessionId!, eventId: e.id, ...t })}
                         onCancel={() => setWindowFor(null)}
+                      />
+                    </div>
+                  )}
+                  {movingAt === e.id && e.sessionId && (
+                    <div className="md:pl-[6.5rem]">
+                      <HoldCandidateEdit
+                        sessionId={e.sessionId}
+                        candidate={{ eventId: e.id, startAt: e.startAt, endAt: e.endAt }}
+                        minutes={e.sessionDurationMinutes ?? Math.round((new Date(e.endAt).getTime() - new Date(e.startAt).getTime()) / 60_000)}
+                        onClose={() => setMovingAt(null)}
+                        onSaved={(text) => {
+                          setMovingAt(null);
+                          invalidate();
+                          setMsg({ kind: 'ok', text });
+                        }}
+                        onError={(text) => setMsg({ kind: 'err', text })}
                       />
                     </div>
                   )}

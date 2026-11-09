@@ -408,7 +408,20 @@ export async function editCalendarEvent(id: number, patch: Partial<CalendarEvent
     .run();
   refreshNextHearing(row.caseId);
   if (caseId !== row.caseId) refreshNextHearing(caseId);
+  // 仮押さえの候補の日時を変えたら、日程調整の候補一覧も合わせる（打診文・確定の候補がずれないように）
+  if (s.toISOString() !== row.startAt || e.toISOString() !== row.endAt) syncHoldCandidateTime(row.googleEventId, s.toISOString(), e.toISOString());
   return db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, id)).get();
+}
+
+/** 調整中の日程調整の候補一覧にある予定の日時を、予定に合わせて直す（早い順に並べ直す） */
+function syncHoldCandidateTime(googleEventId: string, startAt: string, endAt: string) {
+  for (const session of db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.state, 'proposing')).all()) {
+    if (!session.candidates.some((c) => c.eventId === googleEventId)) continue;
+    const candidates = session.candidates
+      .map((c) => (c.eventId === googleEventId ? { ...c, startAt, endAt } : c))
+      .sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime());
+    db().update(schema.schedulingSessions).set({ candidates, updatedAt: new Date().toISOString() }).where(eq(schema.schedulingSessions.id, session.id)).run();
+  }
 }
 
 export async function removeCalendarEvent(id: number) {
@@ -762,6 +775,24 @@ export async function addHoldCandidates(sessionId: number, slots: { startAt: str
   db().update(schema.schedulingSessions).set({ candidates, updatedAt: new Date().toISOString() }).where(eq(schema.schedulingSessions.id, sessionId)).run();
   logger.info({ sessionId, added: events.length }, '仮押さえに候補を追加しました');
   return { sessionId, events, skipped: slots.length - fresh.length, total: candidates.length };
+}
+
+/**
+ * 仮押さえた候補の 1 つの日時を変える（カレンダーの予定も書き換える）。
+ * ほかの候補と同じ開始日時にはしない
+ */
+export async function updateHoldCandidate(sessionId: number, eventId: number, slot: { startAt: string; endAt: string }) {
+  const session = db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, sessionId)).get();
+  if (!session) throw new Error('日程調整が見つかりません');
+  if (session.state !== 'proposing') throw new Error('この日程調整はすでに確定・取消済みです');
+  const ev = db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, eventId)).get();
+  if (!ev || !session.candidates.some((c) => c.eventId === ev.googleEventId)) throw new Error('この日程調整の候補ではありません');
+  const { s, e } = assertRange(slot.startAt, slot.endAt);
+  const minute = (iso: string) => Math.floor(new Date(iso).getTime() / 60_000);
+  if (session.candidates.some((c) => c.eventId !== ev.googleEventId && minute(c.startAt) === minute(s.toISOString()))) throw new Error('同じ日時の候補がすでにあります');
+  const updated = await editCalendarEvent(ev.id, { startAt: s.toISOString(), endAt: e.toISOString() });
+  logger.info({ sessionId, eventId, from: ev.startAt, to: s.toISOString() }, '仮押さえの候補の日時を変更しました');
+  return { sessionId, event: updated };
 }
 
 /**

@@ -21,7 +21,7 @@ import { TaskDeadlines, NewTaskDeadlines, WaitDeadlineSelect, fmtDeadline } from
 import { SCHEDULING_KINDS, EVENT_KIND_LABEL, splitQuotedReply, messageLink, type EventKind, isAllDayRange, isWaitingStatus } from '@lcm/shared';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 import { AttachmentImage, canPreviewImage } from '../lib/AttachmentImage';
-import { WindowConfirm, isHoldWindow } from '../lib/HoldForm';
+import { WindowConfirm, isHoldWindow, HoldCandidateEdit, HoldAddCandidates } from '../lib/HoldForm';
 import { useLocalUploads, LocalFileButton, LocalFileBadges, FileDropZone } from '../lib/LocalFileAttach';
 import { CcField, EMPTY_CC, ccPayload, type CcValue } from '../lib/CcField';
 
@@ -1800,6 +1800,34 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
     },
     onError: (e) => setErr((e as Error).message),
   });
+  // 仮押さえの候補を、この画面で足す・日時を変える・取り消す
+  const [holdEdit, setHoldEdit] = useState<{ sessionId: number; eventId?: number } | null>(null);
+  const [holdMsg, setHoldMsg] = useState('');
+  const refreshHolds = () =>
+    api
+      .get<PendingHold[]>(`/conversations/${conversationId}/schedule/holds`)
+      .then((holds) => {
+        setRes((prev) => (prev ? { ...prev, holds } : prev));
+        // 選んでいた候補が無くなったら、残っている最初の候補にする
+        setPick((prev) => (prev && holds.some((h) => h.sessionId === prev.sessionId && h.candidates.some((c) => c.eventId === prev.eventId)) ? prev : holds[0]?.candidates[0] ? { sessionId: holds[0].sessionId, eventId: holds[0].candidates[0].eventId } : null));
+        if (!holds.length) setMode('confirmed');
+      })
+      .catch(() => undefined);
+  const cancelCandidate = useMutation({
+    mutationFn: (v: { sessionId: number; eventId: number }) => api.post<{ remaining: number }>(`/calendar/holds/${v.sessionId}/candidates/${v.eventId}/cancel`),
+    onSuccess: (r) => {
+      setHoldMsg(r.remaining ? `候補を 1 件取り消しました（残り ${r.remaining} 件）` : '最後の候補だったので、日程調整も取り消しました');
+      void refreshHolds();
+      onDone();
+    },
+    onError: (e) => setErr((e as Error).message),
+  });
+  const holdSaved = (text: string) => {
+    setHoldEdit(null);
+    setHoldMsg(text);
+    void refreshHolds();
+    onDone();
+  };
   // 後から届いた会議 URL を、すでに入っている予定に入れる
   const setEventMeeting = useMutation({
     mutationFn: () => api.post<{ webText: string; event: { title: string; startAt: string } }>(`/conversations/${conversationId}/schedule/meeting`, { eventId: Number(meetingEventId), meeting: meetingBody({ ...meeting, by: 'them' }).meeting }),
@@ -1904,8 +1932,11 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
                   <div className="space-y-0.5">
                     {h.candidates.map((c) => {
                       const matched = res.holdMatch?.eventId === c.eventId;
+                      const editing = holdEdit?.sessionId === h.sessionId && holdEdit.eventId === c.eventId;
                       return (
-                        <label key={c.eventId} className="flex flex-wrap items-center gap-2">
+                        <div key={c.eventId}>
+                        <div className="flex flex-wrap items-center gap-2">
+                        <label className="flex flex-wrap items-center gap-2">
                           <input
                             type="radio"
                             name="hold-pick"
@@ -1919,11 +1950,54 @@ function ExtractSchedulePanel({ conversationId, cases, onText, onDone }: { conve
                           <span>{isAllDayRange(c.startAt, c.endAt) ? fmtEventTime(c.startAt, c.endAt) : `${fmtDateTime(c.startAt)}〜${fmtDateTime(c.endAt).split(' ').pop()}`}</span>
                           {matched && <span className="badge badge-blue">やり取りで決まった日時</span>}
                         </label>
+                        <span className="ml-auto flex gap-2 text-xs">
+                          <button type="button" className="text-blue-700 hover:underline" onClick={() => setHoldEdit(editing ? null : { sessionId: h.sessionId, eventId: c.eventId })} title="この候補の日時だけを変えます">
+                            日時を変更
+                          </button>
+                          <button
+                            type="button"
+                            className="text-slate-500 hover:text-red-600"
+                            disabled={cancelCandidate.isPending}
+                            title="この候補だけ仮押さえを取り消します（ほかの候補は残ります）"
+                            onClick={() => {
+                              if (window.confirm(`${fmtEventTime(c.startAt, c.endAt)} の仮押さえだけを取り消しますか？${h.candidates.length <= 1 ? '\n最後の候補なので、日程調整も取り消されます。' : ''}`)) cancelCandidate.mutate({ sessionId: h.sessionId, eventId: c.eventId });
+                            }}
+                          >
+                            取消
+                          </button>
+                        </span>
+                        </div>
+                        {editing && (
+                          <HoldCandidateEdit
+                            sessionId={h.sessionId}
+                            candidate={c}
+                            minutes={h.durationMinutes ?? Math.round((new Date(c.endAt).getTime() - new Date(c.startAt).getTime()) / 60_000)}
+                            onClose={() => setHoldEdit(null)}
+                            onSaved={holdSaved}
+                            onError={setErr}
+                          />
+                        )}
+                        </div>
                       );
                     })}
                   </div>
+                  {holdEdit?.sessionId === h.sessionId && holdEdit.eventId === undefined ? (
+                    <HoldAddCandidates
+                      sessionId={h.sessionId}
+                      after={h.candidates[h.candidates.length - 1]?.startAt ?? new Date().toISOString()}
+                      minutes={h.durationMinutes ?? (h.candidates[0] ? Math.round((new Date(h.candidates[0].endAt).getTime() - new Date(h.candidates[0].startAt).getTime()) / 60_000) : 60)}
+                      onClose={() => setHoldEdit(null)}
+                      onSaved={holdSaved}
+                      onError={setErr}
+                    />
+                  ) : (
+                    <button type="button" className="mt-1 text-xs text-blue-700 hover:underline" onClick={() => setHoldEdit({ sessionId: h.sessionId })} title="この日程調整に候補日時を足します">
+                      ＋ 候補を追加
+                    </button>
+                  )}
                 </div>
               ))}
+              {holdMsg && <div className="fade-in text-xs text-green-700">✓ {holdMsg}</div>}
               <div className="space-y-1.5 rounded border border-slate-200 p-2">
                 <div className="flex flex-wrap items-center gap-3 text-sm" role="radiogroup" aria-label="来所か WEB か">
                   <span className="text-xs text-slate-500">打合せの方法</span>
