@@ -9,7 +9,7 @@ import { RoomPicker } from '../lib/RoomPicker';
 import { CASE_DELETE_NOTE } from '../lib/caseDelete';
 import { EventForm } from '../lib/EventForm';
 import { ClientPicker } from '../lib/ClientPicker';
-import { HoldForm, HoldLocationEditor, HoldAddCandidates, fmtEventRange, WindowConfirm, isHoldWindow, type RescheduleTarget } from '../lib/HoldForm';
+import { HoldForm, HoldLocationEditor, HoldAddCandidates, HoldCandidateEdit, fmtEventRange, WindowConfirm, isHoldWindow, type RescheduleTarget } from '../lib/HoldForm';
 import { LongText } from '../lib/LongText';
 import { TaskDeadlines, NewTaskDeadlines, TaskDeadlineSelect, FOLLOW_LABEL, DUE_HINT, FOLLOW_HINT } from '../lib/Deadline';
 import { MemoBadge, MemoForm, MEMO_HINT } from '../lib/Memo';
@@ -824,6 +824,8 @@ function CaseHolds({
   const [adding, setAdding] = useState(false);
   // 候補を足している日程調整
   const [addingTo, setAddingTo] = useState<number | null>(null);
+  // 日時を変えている候補（googleEventId）
+  const [moving, setMoving] = useState<string | null>(null);
   // 候補日の打診を開いている日程調整
   const [proposing, setProposing] = useState<number | null>(null);
   // 枠で押さえた候補を確定する時間を選んでいる候補（googleEventId）
@@ -1037,8 +1039,27 @@ function CaseHolds({
                       この候補を取消
                     </button>
                   )}
+                  {v.eventId && (
+                    <button className="btn btn-sm" onClick={() => setMoving(moving === v.googleEventId ? null : v.googleEventId)} title="この候補の日時だけを変えます（ほかの候補はそのまま）">
+                      日時を変更
+                    </button>
+                  )}
                   {!v.eventId && (
                     <span className="ml-auto text-xs text-slate-400">カレンダーにありません</span>
+                  )}
+                  {moving === v.googleEventId && v.eventId && (
+                    <HoldCandidateEdit
+                      sessionId={s.sessionId}
+                      candidate={{ eventId: v.eventId, startAt: v.startAt, endAt: v.endAt }}
+                      minutes={s.durationMinutes ?? Math.round((new Date(v.endAt).getTime() - new Date(v.startAt).getTime()) / 60_000)}
+                      onClose={() => setMoving(null)}
+                      onSaved={(text) => {
+                        setMoving(null);
+                        refresh();
+                        setMsg({ kind: 'ok', text });
+                      }}
+                      onError={(text) => setMsg({ kind: 'err', text })}
+                    />
                   )}
                   {windowFor === v.googleEventId && v.eventId && s.durationMinutes && (
                     <WindowConfirm

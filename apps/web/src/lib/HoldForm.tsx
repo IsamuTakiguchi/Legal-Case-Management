@@ -70,7 +70,7 @@ function parsedToSlot(x: { startAt: string; endAt: string; allDay?: boolean }): 
  * 候補 1 行の入力（開始〜終了、または終日）。
  * 所要時間より長い時間帯は「枠」として押さえ、確定するときにその中で時間を決められる
  */
-function SlotRow({ v, mins, onChange, onRemove, canRemove, label }: { v: SlotDraft; mins: number; onChange: (v: SlotDraft) => void; onRemove: () => void; canRemove: boolean; label: string }) {
+function SlotRow({ v, mins, onChange, onRemove, canRemove, label }: { v: SlotDraft; mins: number; onChange: (v: SlotDraft) => void; onRemove?: () => void; canRemove?: boolean; label: string }) {
   const lenMin = !v.allDay && v.start && v.end ? (new Date(fromLocalInput(v.end)).getTime() - new Date(fromLocalInput(v.start)).getTime()) / 60_000 : 0;
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -110,9 +110,11 @@ function SlotRow({ v, mins, onChange, onRemove, canRemove, label }: { v: SlotDra
         終日
       </label>
       {lenMin > mins && <span className="badge badge-blue" title={`この時間帯の中で ${mins} 分を、確定するときに決めます`}>枠（この中で {mins} 分）</span>}
-      <button type="button" className="btn btn-sm" onClick={onRemove} disabled={!canRemove} aria-label={`${label}を外す`}>
-        ×
-      </button>
+      {onRemove && (
+        <button type="button" className="btn btn-sm" onClick={onRemove} disabled={!canRemove} aria-label={`${label}を外す`}>
+          ×
+        </button>
+      )}
     </div>
   );
 }
@@ -510,6 +512,66 @@ export function HoldAddCandidates({ sessionId, after, minutes, onClose, onSaved,
       <div className="flex gap-2">
         <button className="btn btn-sm btn-primary" disabled={save.isPending || !slots.some((v) => v.start)}>
           {save.isPending ? '仮押さえ中…' : `${slots.filter((v) => v.start).length} 件を候補に追加`}
+        </button>
+        <button type="button" className="btn btn-sm" onClick={onClose}>
+          やめる
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/**
+ * 仮押さえた候補 1 つの日時を変える（カレンダーの予定も書き換わる）。
+ * 終日にしたり、所要時間より長い時間帯（枠）にしたりもできる
+ */
+export function HoldCandidateEdit({
+  sessionId,
+  candidate,
+  minutes,
+  onClose,
+  onSaved,
+  onError,
+}: {
+  sessionId: number;
+  candidate: { eventId: number; startAt: string; endAt: string };
+  /** 所要時間（分）。枠の表示と、開始を変えたときの既定の長さに使う */
+  minutes: number;
+  onClose: () => void;
+  onSaved: (msg: string) => void;
+  onError: (msg: string) => void;
+}) {
+  const qc = useQueryClient();
+  const dur = Math.max(5, minutes || 60);
+  const [v, setV] = useState<SlotDraft>(() =>
+    isAllDayRange(candidate.startAt, candidate.endAt)
+      ? { start: toLocalInput(candidate.startAt).slice(0, 10), end: allDayLastYmd(candidate.endAt), allDay: true }
+      : { start: toLocalInput(candidate.startAt), end: toLocalInput(candidate.endAt) },
+  );
+  const save = useMutation({
+    mutationFn: () => api.post<{ event: { startAt: string; endAt: string } }>(`/calendar/holds/${sessionId}/candidates/${candidate.eventId}`, slotRange(v, dur)),
+    onSuccess: (r) => {
+      // 候補日の打診文にも日時が入るので、開いていれば作り直す
+      qc.invalidateQueries({ queryKey: ['hold-proposal', sessionId] });
+      onSaved(`候補を ${fmtEventRange(r.event.startAt, r.event.endAt)} に変更しました`);
+    },
+    onError: (e) => onError((e as Error).message),
+  });
+  return (
+    <form
+      className="fade-in mt-1 w-full space-y-2 rounded-md border border-blue-200 bg-blue-50/40 p-2 text-sm"
+      onSubmit={(e) => {
+        e.preventDefault();
+        save.mutate();
+      }}
+    >
+      <div className="text-xs text-slate-600">
+        いまの候補: {fmtEventRange(candidate.startAt, candidate.endAt)}。変えるとカレンダーの仮押さえも書き換わります（件名・場所はそのまま）。
+      </div>
+      <SlotRow v={v} mins={dur} label="変更後の候補" onChange={setV} />
+      <div className="flex gap-2">
+        <button className="btn btn-sm btn-primary" disabled={save.isPending || !v.start}>
+          {save.isPending ? '変更中…' : 'この日時に変更'}
         </button>
         <button type="button" className="btn btn-sm" onClick={onClose}>
           やめる

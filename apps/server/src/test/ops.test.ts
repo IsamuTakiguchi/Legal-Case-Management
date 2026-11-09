@@ -559,6 +559,41 @@ describe('仮押さえの候補追加', () => {
   });
 });
 
+describe('仮押さえの候補の日時変更', () => {
+  it('候補の日時を変えると予定と候補一覧の両方が変わり、並び順も直る。同じ日時の候補にはできない', async () => {
+    const { createHoldSet, updateHoldCandidate, editCalendarEvent, confirmHold, cancelHoldSet } = await import('../services/court.js');
+    const client = db().insert(schema.clients).values({ name: '変更 三郎', kana: 'へんこう さぶろう' }).returning().get();
+    const base = Math.floor(Date.now() / 60_000) * 60_000;
+    const day = (n: number, h: number) => new Date(base + n * 86400_000 + h * 3600_000).toISOString();
+    const r = await createHoldSet({ title: '打合せ', kind: 'meeting', clientId: client.id, slots: [{ startAt: day(2, 1), endAt: day(2, 2) }, { startAt: day(4, 1), endAt: day(4, 2) }] });
+    const session = () => db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, r.sessionId)).get()!;
+    const event = (id: number) => db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, id)).get()!;
+
+    // 2 件目を 1 件目より前に動かす（枠にもできる）
+    await updateHoldCandidate(r.sessionId, r.events[1].id, { startAt: day(1, 1), endAt: day(1, 4) });
+    expect(event(r.events[1].id).startAt).toBe(day(1, 1));
+    expect(event(r.events[1].id).endAt).toBe(day(1, 4));
+    expect(event(r.events[1].id).status).toBe('tentative');
+    expect(session().candidates.map((c) => [c.eventId, c.startAt])).toEqual([
+      [r.events[1].googleEventId, day(1, 1)],
+      [r.events[0].googleEventId, day(2, 1)],
+    ]);
+    await expect(updateHoldCandidate(r.sessionId, r.events[0].id, { startAt: day(1, 1), endAt: day(1, 2) })).rejects.toThrow('同じ日時の候補');
+
+    // 予定の「編集」から日時を変えても、候補一覧が合う
+    await editCalendarEvent(r.events[0].id, { startAt: day(3, 1), endAt: day(3, 2) });
+    expect(session().candidates.find((c) => c.eventId === r.events[0].googleEventId)?.startAt).toBe(day(3, 1));
+
+    await confirmHold(r.sessionId, r.events[0].id);
+    await expect(updateHoldCandidate(r.sessionId, r.events[0].id, { startAt: day(5, 1), endAt: day(5, 2) })).rejects.toThrow('確定・取消済み');
+
+    await cancelHoldSet(r.sessionId).catch(() => undefined);
+    db().delete(schema.calendarEvents).where(eq(schema.calendarEvents.clientId, client.id)).run();
+    db().delete(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, r.sessionId)).run();
+    db().delete(schema.clients).where(eq(schema.clients.id, client.id)).run();
+  });
+});
+
 describe('会話からの予定登録', () => {
   it('確定なら 1 件を依頼者・進行中の事件に紐付けて登録し、候補なら仮押さえにする', async () => {
     const { registerScheduleFromConversation } = await import('../services/scheduleExtract.js');
