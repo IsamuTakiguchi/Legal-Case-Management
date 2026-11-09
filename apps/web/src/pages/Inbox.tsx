@@ -220,50 +220,55 @@ export default function Inbox() {
                 <label className="flex shrink-0 cursor-pointer items-center self-stretch px-2 md:px-3" title="選択">
                   <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)} />
                 </label>
-                <Link to={`/inbox/${c.id}`} className={`flex min-w-0 flex-1 items-start gap-3 py-3 pr-3 hover:bg-slate-50 md:pr-4 ${c.unread ? 'bg-blue-50/40' : ''}`}>
-                  <span className="hidden shrink-0 md:block">
-                    <span className={`${channelBadge(c.channel)} mt-0.5 w-20 justify-center`}>{channelLabel(c.channel)}</span>
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="shrink-0 md:hidden">
-                        <span className={channelBadge(c.channel)}>{channelLabel(c.channel)}</span>
-                      </span>
-                      <span className={`min-w-0 truncate ${c.unread ? 'font-bold' : 'font-medium'}`}>
-                        {c.contact ? c.contact.name : (c.client?.name ?? (c.channel === 'chatwork' && c.subject ? c.subject : null) ?? c.counterpartName ?? c.counterpartAddress ?? '（不明）')}
-                      </span>
-                      {c.lineGroup && (
-                        <span className="badge badge-gray shrink-0 whitespace-nowrap" title="このやり取りは LINE のグループです。返信はグループ全員に届きます">
-                          グループ
+                <div className={`min-w-0 flex-1 ${c.unread ? 'bg-blue-50/40' : ''}`}>
+                  <Link to={`/inbox/${c.id}`} className="flex min-w-0 items-start gap-3 py-3 pr-3 hover:bg-slate-50 md:pr-4">
+                    <span className="hidden shrink-0 md:block">
+                      <span className={`${channelBadge(c.channel)} mt-0.5 w-20 justify-center`}>{channelLabel(c.channel)}</span>
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="shrink-0 md:hidden">
+                          <span className={channelBadge(c.channel)}>{channelLabel(c.channel)}</span>
                         </span>
-                      )}
-                      {c.contact && <span className="badge badge-orange shrink-0 whitespace-nowrap">{c.contact.roleLabel}</span>}
-                      {c.contact && c.client && <span className="min-w-0 truncate text-xs text-slate-500">{c.client.name} / {c.contact.caseTitle}</span>}
-                      <span className="ml-auto shrink-0 whitespace-nowrap text-xs text-slate-400">{fmtRelative(c.lastMessageAt)}</span>
-                    </div>
-                    {(!c.clientId || c.needsReply || c.unread > 0 || c.subject || c.staff || (searching && c.archived)) && (
-                      <div className="mt-0.5 flex items-center gap-2">
-                        {c.staff && <span className="badge badge-gray shrink-0 whitespace-nowrap">事務局</span>}
-                        {!c.clientId && !c.staff && <span className="badge badge-orange shrink-0 whitespace-nowrap">未紐付け</span>}
-                        {c.needsReply && <span className="badge badge-blue shrink-0 whitespace-nowrap">要返信</span>}
-                        {searching && c.archived && <span className="badge badge-gray shrink-0 whitespace-nowrap">アーカイブ</span>}
-                        {c.unread > 0 && <span className="badge badge-blue shrink-0">{c.unread}</span>}
-                        {c.subject && !(c.channel === 'chatwork' && !c.client) && <span className="min-w-0 truncate text-xs text-slate-500">{c.subject}</span>}
+                        <span className={`min-w-0 truncate ${c.unread ? 'font-bold' : 'font-medium'}`}>
+                          {c.contact ? c.contact.name : (c.client?.name ?? (c.channel === 'chatwork' && c.subject ? c.subject : null) ?? c.counterpartName ?? c.counterpartAddress ?? '（不明）')}
+                        </span>
+                        {c.lineGroup && (
+                          <span className="badge badge-gray shrink-0 whitespace-nowrap" title="このやり取りは LINE のグループです。返信はグループ全員に届きます">
+                            グループ
+                          </span>
+                        )}
+                        {c.contact && <span className="badge badge-orange shrink-0 whitespace-nowrap">{c.contact.roleLabel}</span>}
+                        {c.contact && c.client && <span className="min-w-0 truncate text-xs text-slate-500">{c.client.name} / {c.contact.caseTitle}</span>}
+                        <span className="ml-auto shrink-0 whitespace-nowrap text-xs text-slate-400">{fmtRelative(c.lastMessageAt)}</span>
                       </div>
-                    )}
-                    {c.lastMessage && <MessagePreview body={c.lastMessage.body} truncated={!!c.lastMessage.truncated} mine={c.lastMessage.direction === 'out'} sender={c.channel === 'chatwork' && c.lastMessage.direction === 'in' ? c.lastMessage.senderName ?? null : null} />}
+                      {(!c.clientId || c.needsReply || c.unread > 0 || c.subject || c.staff || (searching && c.archived)) && (
+                        <div className="mt-0.5 flex items-center gap-2">
+                          {c.staff && <span className="badge badge-gray shrink-0 whitespace-nowrap">事務局</span>}
+                          {!c.clientId && !c.staff && <span className="badge badge-orange shrink-0 whitespace-nowrap">未紐付け</span>}
+                          {c.needsReply && <span className="badge badge-blue shrink-0 whitespace-nowrap">要返信</span>}
+                          {searching && c.archived && <span className="badge badge-gray shrink-0 whitespace-nowrap">アーカイブ</span>}
+                          {c.unread > 0 && <span className="badge badge-blue shrink-0">{c.unread}</span>}
+                          {c.subject && !(c.channel === 'chatwork' && !c.client) && <span className="min-w-0 truncate text-xs text-slate-500">{c.subject}</span>}
+                        </div>
+                      )}
+                      {c.lastMessage && <MessagePreview body={c.lastMessage.body} truncated={!!c.lastMessage.truncated} mine={c.lastMessage.direction === 'out'} sender={c.channel === 'chatwork' && c.lastMessage.direction === 'in' ? c.lastMessage.senderName ?? null : null} />}
+                    </div>
+                  </Link>
+                  {/* タスク化（足す操作）は本文の下の左に置き、右端の対応済み・アーカイブ（一覧から外す操作）と離して押し間違えないようにする */}
+                  <div className="-mt-1 pb-2.5 md:pl-[5.75rem]">
+                    <button
+                      type="button"
+                      className={`btn btn-sm whitespace-nowrap ${taskFor === c.id ? 'btn-primary' : 'border-blue-200 text-blue-700'}`}
+                      onClick={() => setTaskFor(taskFor === c.id ? null : c.id)}
+                      title="この会話のやり取りから、頼まれたこと・返事待ちのことをタスクにします（AI が案を作り、直してから登録します）"
+                    >
+                      ✅ タスク化
+                    </button>
                   </div>
-                </Link>
-                {/* タスク化（足す操作）を上に、アーカイブ（受信箱から外す操作）は間を空けて一番下に置き、押し間違えないようにする */}
+                </div>
+                {/* 対応済みを上に、アーカイブは間を空けて下に置く */}
                 <div className="flex shrink-0 flex-col gap-1 self-center px-2 py-2 md:px-3">
-                  <button
-                    type="button"
-                    className={`btn btn-sm whitespace-nowrap ${taskFor === c.id ? 'btn-primary' : 'border-blue-200 text-blue-700'}`}
-                    onClick={() => setTaskFor(taskFor === c.id ? null : c.id)}
-                    title="この会話のやり取りから、頼まれたこと・返事待ちのことをタスクにします（AI が案を作り、直してから登録します）"
-                  >
-                    ✅ タスク化
-                  </button>
                   {!c.archived && c.needsReply && (
                     <button type="button" className="btn btn-sm whitespace-nowrap" onClick={() => rowAction.mutate({ id: c.id, action: 'resolve' })} disabled={rowAction.isPending} title="要返信を外して既読にします">
                       対応済み
@@ -271,7 +276,7 @@ export default function Inbox() {
                   )}
                   <button
                     type="button"
-                    className="btn btn-sm mt-4 whitespace-nowrap text-slate-500"
+                    className={`btn btn-sm whitespace-nowrap text-slate-500 ${!c.archived && c.needsReply ? 'mt-4' : ''}`}
                     onClick={() => rowAction.mutate({ id: c.id, action: c.archived ? 'unarchive' : 'archive' })}
                     disabled={rowAction.isPending}
                     title={c.archived ? 'アーカイブを解除して受信箱に戻します' : '受信箱から外します（「アーカイブ」で見られます）'}
