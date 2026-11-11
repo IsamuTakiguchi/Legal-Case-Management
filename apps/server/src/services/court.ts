@@ -20,6 +20,10 @@ export async function syncCalendar(): Promise<{ synced: number }> {
   const events = await cal.listEvents(from, to);
   const clients = db().select().from(schema.clients).where(eq(schema.clients.archived, false)).all();
   const d = db();
+  // Google 側の紐付けが、あとで削除・統合した依頼者や事件を指していることがある。
+  // そのまま入れると外部キーの制約で同期全体が止まるので、残っているものだけを使う
+  const clientIds = new Set(d.select({ id: schema.clients.id }).from(schema.clients).all().map((r) => r.id));
+  const caseClient = new Map(d.select({ id: schema.cases.id, clientId: schema.cases.clientId }).from(schema.cases).all().map((r) => [r.id, r.clientId] as const));
   const seen = new Set<string>();
   for (const e of events) {
     seen.add(e.id);
@@ -27,8 +31,12 @@ export async function syncCalendar(): Promise<{ synced: number }> {
     // 0 は手で「紐付けなし」にしたもの。件名から推し量って付け直さない
     const noClient = e.tag.clientId === 0;
     const noCase = e.tag.caseId === 0;
-    let clientId = noClient ? null : (e.tag.clientId ?? null);
     let caseId = noCase ? null : (e.tag.caseId ?? null);
+    if (caseId && !caseClient.has(caseId)) caseId = null;
+    let clientId = noClient ? null : (e.tag.clientId ?? null);
+    if (clientId && !clientIds.has(clientId)) clientId = null;
+    // 事件が分かっていて依頼者が分からない（削除した依頼者を指している）なら、事件の依頼者にする
+    if (caseId && !clientId && !noClient) clientId = caseClient.get(caseId) ?? null;
     if (!clientId && !noClient && !isNonClientTitle(e.title)) {
       // 姓が長い順に照合し、同姓の依頼者は別名（フルネーム等）で区別できるようにする
       const hit = clients
