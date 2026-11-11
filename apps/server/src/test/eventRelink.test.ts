@@ -100,3 +100,21 @@ describe('予定の紐付けを直す', () => {
     expect([tagValue(0), tagValue(null), tagValue(undefined), tagValue(12)]).toEqual(['0', '', '', '12']);
   });
 });
+
+describe('削除した依頼者・事件を指す予定の同期', () => {
+  it('Google 側の紐付けが、削除済みの依頼者・事件を指していても同期が止まらない（件名から付け直すか、紐付けなしにする）', async () => {
+    const ito = db().insert(schema.clients).values({ name: '伊藤 誠' }).returning().get();
+    const iCase = db().insert(schema.cases).values({ clientId: ito.id, title: '債務整理', caseType: 'civil', status: 'active' }).returning().get();
+    // 削除した依頼者・事件の ID が Google 側に残っている
+    google.set('g-del1', { title: '伊藤 打合せ', startAt: start.toISOString(), endAt: end.toISOString(), priv: { kind: 'meeting', clientId: '999901', caseId: '999902' } });
+    google.set('g-del2', { title: '社内研修', startAt: start.toISOString(), endAt: end.toISOString(), priv: { kind: 'other', clientId: '999903', caseId: '' } });
+    // 事件だけ残っていて依頼者の紐付けが消えたもの → 事件の依頼者に合わせる
+    google.set('g-del3', { title: '期日', startAt: start.toISOString(), endAt: end.toISOString(), priv: { kind: 'hearing', clientId: '999904', caseId: String(iCase.id) } });
+    await syncCalendar();
+    const get = (g: string) => db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.googleEventId, g)).get()!;
+    expect(get('g-del1')).toMatchObject({ clientId: ito.id, caseId: iCase.id });
+    expect(get('g-del2')).toMatchObject({ clientId: null, caseId: null });
+    expect(get('g-del3')).toMatchObject({ clientId: ito.id, caseId: iCase.id });
+    for (const g of ['g-del1', 'g-del2', 'g-del3']) google.delete(g);
+  });
+});
