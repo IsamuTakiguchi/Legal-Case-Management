@@ -855,48 +855,77 @@ export interface CaseHoldSet {
 export function listCaseHolds(caseId: number): CaseHoldSet[] {
   const kase = db().select().from(schema.cases).where(eq(schema.cases.id, caseId)).get();
   if (!kase) throw new Error('事件が見つかりません');
-  const sessions = db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.state, 'proposing')).all();
   const out: CaseHoldSet[] = [];
-  for (const s of sessions) {
-    const withEvent = s.candidates.filter((c) => c.eventId);
-    if (withEvent.length === 0) continue;
-    const rows = withEvent.map((c) => ({ c, ev: db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.googleEventId, c.eventId!)).get() ?? null }));
-    const caseIds = new Set(rows.map((r) => r.ev?.caseId ?? null));
-    const original = s.rescheduleEventId ? (db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, s.rescheduleEventId)).get() ?? null) : null;
-    const linkedToCase = caseIds.has(caseId) || original?.caseId === caseId;
+  for (const s of db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.state, 'proposing')).all()) {
+    const v = holdSetView(s);
+    if (!v) continue;
+    const linkedToCase = v.caseIds.has(caseId) || v.original?.caseId === caseId;
     // この事件のもの、または「依頼者が同じでまだ事件が決まっていないもの」だけを出す
-    if (!linkedToCase && !(s.clientId === kase.clientId && caseIds.size === 1 && caseIds.has(null))) continue;
-    const client = s.clientId ? (db().select().from(schema.clients).where(eq(schema.clients.id, s.clientId)).get() ?? null) : null;
-    const places = new Set(rows.map((r) => r.ev?.location?.trim() || ''));
-    out.push({
-      sessionId: s.id,
-      kind: s.kind,
-      proposedAt: s.proposedAt ?? null,
-      rescheduleOf: original ? { eventId: original.id, title: original.title, startAt: original.startAt, endAt: original.endAt } : null,
-      clientId: s.clientId ?? null,
-      clientName: client?.name ?? null,
-      conversationId: s.conversationId ?? null,
-      linkedToCase,
-      location: s.location?.trim() || (places.size === 1 ? [...places][0]! : '') || null,
-      web: s.web,
-      durationMinutes: s.durationMinutes ?? null,
-      candidates: rows
-        .map(({ c, ev }) => ({
-          eventId: ev?.id ?? null,
-          googleEventId: c.eventId!,
-          startAt: ev?.startAt ?? c.startAt,
-          endAt: ev?.endAt ?? c.endAt,
-          title: ev?.title ?? null,
-          location: ev?.location ?? null,
-        }))
-        .sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime()),
-    });
+    if (!linkedToCase && !(s.clientId === kase.clientId && v.caseIds.size === 1 && v.caseIds.has(null))) continue;
+    out.push({ ...v.set, linkedToCase });
   }
-  return out.sort((a, b) => {
-    const at = a.candidates[0]?.startAt ?? '';
-    const bt = b.candidates[0]?.startAt ?? '';
-    return at.localeCompare(bt);
-  });
+  return sortHoldSets(out);
+}
+
+export interface PendingHoldSetView extends CaseHoldSet {
+  /** 候補の予定（日程変更なら元の予定）の事件。決まっていなければ null */
+  caseId: number | null;
+  caseTitle: string | null;
+  /** 候補の予定の件名（末尾の「仮」は外す） */
+  title: string;
+}
+
+/** 調整中の仮押さえをすべて返す（予定ページで、週をまたいだ候補もまとめて確定・変更できるように） */
+export function listPendingHoldSets(): PendingHoldSetView[] {
+  const out: PendingHoldSetView[] = [];
+  for (const s of db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.state, 'proposing')).all()) {
+    const v = holdSetView(s);
+    if (!v) continue;
+    const caseId = [...v.caseIds].find((x): x is number => !!x) ?? v.original?.caseId ?? null;
+    const kase = caseId ? db().select().from(schema.cases).where(eq(schema.cases.id, caseId)).get() : null;
+    const title = (v.set.candidates.find((c) => c.title)?.title ?? v.original?.title ?? s.kind).replace(/\s*仮$/, '');
+    out.push({ ...v.set, linkedToCase: !!caseId, caseId, caseTitle: kase?.title ?? null, title });
+  }
+  return sortHoldSets(out);
+}
+
+/** 候補の早い順 */
+function sortHoldSets<T extends CaseHoldSet>(list: T[]): T[] {
+  return list.sort((a, b) => (a.candidates[0]?.startAt ?? '').localeCompare(b.candidates[0]?.startAt ?? ''));
+}
+
+/** 日程調整 1 件を、画面に出す形にする（カレンダーに予定のある候補が無ければ null） */
+function holdSetView(s: typeof schema.schedulingSessions.$inferSelect) {
+  const withEvent = s.candidates.filter((c) => c.eventId);
+  if (withEvent.length === 0) return null;
+  const rows = withEvent.map((c) => ({ c, ev: db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.googleEventId, c.eventId!)).get() ?? null }));
+  const caseIds = new Set(rows.map((r) => r.ev?.caseId ?? null));
+  const original = s.rescheduleEventId ? (db().select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, s.rescheduleEventId)).get() ?? null) : null;
+  const client = s.clientId ? (db().select().from(schema.clients).where(eq(schema.clients.id, s.clientId)).get() ?? null) : null;
+  const places = new Set(rows.map((r) => r.ev?.location?.trim() || ''));
+  const set: Omit<CaseHoldSet, 'linkedToCase'> = {
+    sessionId: s.id,
+    kind: s.kind,
+    proposedAt: s.proposedAt ?? null,
+    rescheduleOf: original ? { eventId: original.id, title: original.title, startAt: original.startAt, endAt: original.endAt } : null,
+    clientId: s.clientId ?? null,
+    clientName: client?.name ?? null,
+    conversationId: s.conversationId ?? null,
+    location: s.location?.trim() || (places.size === 1 ? [...places][0]! : '') || null,
+    web: s.web,
+    durationMinutes: s.durationMinutes ?? null,
+    candidates: rows
+      .map(({ c, ev }) => ({
+        eventId: ev?.id ?? null,
+        googleEventId: c.eventId!,
+        startAt: ev?.startAt ?? c.startAt,
+        endAt: ev?.endAt ?? c.endAt,
+        title: ev?.title ?? null,
+        location: ev?.location ?? null,
+      }))
+      .sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime()),
+  };
+  return { set, caseIds, original };
 }
 
 /** 会話から始めた仮押さえを、この事件のものとして紐付ける（確定した予定が事件に残るように） */

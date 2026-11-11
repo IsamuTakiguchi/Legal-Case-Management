@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { proposeSlotsSchema, confirmSlotSchema, nextHearingInputSchema, EVENT_KINDS, schedulePreferencesSchema } from '@lcm/shared';
 import { proposeSlots, confirmSlot, cancelSession, listSessions, findFreeSlots, extractChosenSlot } from '../services/scheduling.js';
-import { syncCalendar, checkPostEvents, resolveNextHearing, listCourtDocs, listClientFolder, upcomingEvents, relinkEvent, listCalendarEvents, createCalendarEvent, editCalendarEvent, removeCalendarEvent, createHoldSet, confirmHold, cancelHoldSet, cancelHoldCandidate, addHoldCandidates, updateHoldCandidate, startReschedule, setHoldSetLocation } from '../services/court.js';
+import { syncCalendar, checkPostEvents, resolveNextHearing, listCourtDocs, listClientFolder, upcomingEvents, relinkEvent, listCalendarEvents, createCalendarEvent, editCalendarEvent, removeCalendarEvent, createHoldSet, confirmHold, cancelHoldSet, cancelHoldCandidate, addHoldCandidates, updateHoldCandidate, startReschedule, setHoldSetLocation, listPendingHoldSets } from '../services/court.js';
 import { createZoomMeeting } from '../integrations/zoom.js';
 import { extractScheduleFromConversation, registerScheduleFromConversation, extractSchedulePreferences, confirmHoldFromConversation, conversationHolds, setEventMeetingFromConversation } from '../services/scheduleExtract.js';
 
@@ -13,6 +13,8 @@ const externalMeetingSchema = z.object({
   passcode: z.string().trim().max(100).nullable().optional(),
 });
 import { holdProposalContext, draftHoldProposal, sendHoldProposal } from '../services/holdProposal.js';
+import { prepareEventNotice } from '../services/eventNotice.js';
+import { ClientUnreachableError } from '../services/hearingNotice.js';
 import { db, schema } from '../db/index.js';
 import { eq } from 'drizzle-orm';
 
@@ -169,6 +171,21 @@ schedulingRoutes.put('/calendar/events/:id', async (c) => {
   }
   return c.json(await editCalendarEvent(id, body));
 });
+
+/** 決まった予定を依頼者に報告する下書きを用意する（送信は /conversations/:id/send） */
+schedulingRoutes.post('/calendar/events/:id/client-notice', async (c) => {
+  const body = z.object({ channel: z.enum(['gmail', 'line', 'chatwork']).optional(), personId: z.number().int().nullable().optional() }).parse(await c.req.json().catch(() => ({})));
+  try {
+    return c.json(await prepareEventNotice(Number(c.req.param('id')), body));
+  } catch (err) {
+    // 連絡先が無いときは、画面がその場で登録する欄を出せるよう依頼者を返す
+    if (err instanceof ClientUnreachableError) return c.json({ error: err.message, code: err.code, clientId: err.clientId }, 409);
+    throw err;
+  }
+});
+
+/** 調整中の仮押さえ（すべて） */
+schedulingRoutes.get('/calendar/holds', (c) => c.json(listPendingHoldSets()));
 
 /** 複数候補の仮押さえをまとめて登録 */
 schedulingRoutes.post('/calendar/holds', async (c) => {

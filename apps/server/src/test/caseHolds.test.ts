@@ -10,7 +10,7 @@ process.env.LOCAL_CLIENT_ROOT = path.join(tmp, 'clients');
 process.env.DATA_DIR = tmp;
 
 const { openTestDatabase, closeDatabase, db, schema } = await import('../db/index.js');
-const { listCaseHolds, attachHoldSetToCase } = await import('../services/court.js');
+const { listCaseHolds, attachHoldSetToCase, listPendingHoldSets } = await import('../services/court.js');
 const { eq } = await import('drizzle-orm');
 
 beforeAll(() => openTestDatabase());
@@ -81,6 +81,23 @@ describe('事件ページから見た仮押さえ', () => {
     const b = db().insert(schema.cases).values({ clientId: client.id, title: '鈴木 破産' }).returning().get();
     const s = makeHold({ clientId: client.id, caseId: a.id, slots: ['2026-12-01T01:00:00.000Z'] });
     expect(() => attachHoldSetToCase(s.id, b.id)).toThrow(/別の事件/);
+  });
+});
+
+describe('予定ページから見た仮押さえ', () => {
+  it('調整中の仮押さえをすべて、事件・件名付きで候補の早い順に出す（確定・取消済みは出さない）', () => {
+    const client = db().insert(schema.clients).values({ name: '鈴木 一郎' }).returning().get();
+    const kase = db().insert(schema.cases).values({ clientId: client.id, title: '鈴木 交通事故' }).returning().get();
+    const later = makeHold({ clientId: client.id, caseId: kase.id, slots: ['2027-03-10T01:00:00.000Z', '2027-03-11T01:00:00.000Z'], title: '鈴木 打合せ 仮' });
+    const earlier = makeHold({ clientId: null, caseId: null, slots: ['2027-03-01T01:00:00.000Z'], title: '田中 相談 仮' });
+    const cancelled = makeHold({ clientId: client.id, caseId: kase.id, slots: ['2027-02-01T01:00:00.000Z'] });
+    db().update(schema.schedulingSessions).set({ state: 'cancelled' }).where(eq(schema.schedulingSessions.id, cancelled.id)).run();
+
+    const sets = listPendingHoldSets().filter((s) => [later.id, earlier.id, cancelled.id].includes(s.sessionId));
+    expect(sets.map((s) => s.sessionId)).toEqual([earlier.id, later.id]);
+    expect(sets[0]).toMatchObject({ title: '田中 相談', caseId: null, caseTitle: null, clientName: null });
+    expect(sets[1]).toMatchObject({ title: '鈴木 打合せ', caseId: kase.id, caseTitle: '鈴木 交通事故', clientName: '鈴木 一郎', linkedToCase: true });
+    expect(sets[1]!.candidates.map((c) => c.startAt)).toEqual(['2027-03-10T01:00:00.000Z', '2027-03-11T01:00:00.000Z']);
   });
 });
 

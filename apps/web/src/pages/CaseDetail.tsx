@@ -8,6 +8,7 @@ import { useDraftRecord, useDraftGroup, useDraft, DraftHint } from '../lib/draft
 import { RoomPicker } from '../lib/RoomPicker';
 import { CASE_DELETE_NOTE } from '../lib/caseDelete';
 import { EventForm } from '../lib/EventForm';
+import { EventNoticePanel } from '../lib/EventNotice';
 import { ClientPicker } from '../lib/ClientPicker';
 import { HoldForm, HoldLocationEditor, HoldAddCandidates, HoldCandidateEdit, fmtEventRange, WindowConfirm, isHoldWindow, type RescheduleTarget } from '../lib/HoldForm';
 import { LongText } from '../lib/LongText';
@@ -140,6 +141,10 @@ export default function CaseDetail() {
   // 中身（件名・日時・場所など）を直している予定
   const [editingEvent, setEditingEvent] = useState<number | null>(null);
   const [eventMsg, setEventMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  // 依頼者に報告している予定
+  const [reportingEvent, setReportingEvent] = useState<number | null>(null);
+  // 予定の欄で過去の予定も出しているか
+  const [showPastEvents, setShowPastEvents] = useState(false);
   // 中身（タスク名・メモ）を直している未了タスク
   const [editingTask, setEditingTask] = useState<number | null>(null);
   const d = useQuery({ queryKey: ['case', id], queryFn: () => api.get<CaseData>(`/cases/${id}`) });
@@ -158,6 +163,10 @@ export default function CaseDetail() {
   const holds = useCaseHolds(id ? Number(id) : null);
   const types = useQuery({ queryKey: ['case-types'], queryFn: () => api.get<{ key: string; label: string }[]>('/case-types') });
   const c = d.data;
+  // 予定は、これからのもの（早い順）を先に出し、終わったもの（新しい順）は畳んでおく
+  const nowMs = Date.now();
+  const upcomingEvents = (c?.events ?? []).filter((e) => new Date(e.endAt).getTime() >= nowMs).sort((a, b) => a.startAt.localeCompare(b.startAt));
+  const pastEvents = (c?.events ?? []).filter((e) => new Date(e.endAt).getTime() < nowMs).sort((a, b) => b.startAt.localeCompare(a.startAt));
   const [form, setForm] = useState({ title: '', caseType: '', courtName: '', caseNumber: '', stage: '', policy: '', status: 'active', staffId: '', chatworkRoomId: '', accidentDate: '', referrer: '' });
   useEffect(() => {
     if (c) setForm({ title: c.title, caseType: c.caseType?.key ?? 'general_civil', courtName: c.courtName ?? '', caseNumber: c.caseNumber ?? '', stage: c.stage ?? '', policy: c.policy ?? '', status: c.status, staffId: c.staffId ? String(c.staffId) : '', chatworkRoomId: c.chatworkRoomId ? String(c.chatworkRoomId) : '', accidentDate: formatWareki(c.accidentDate, 'short'), referrer: c.referrer ?? '' });
@@ -274,6 +283,146 @@ export default function CaseDetail() {
             </section>
           </div>
           <aside className="space-y-4">
+            <section className="card text-sm" id="case-events">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <h2 className="font-semibold">予定</h2>
+                <button
+                  className="btn btn-sm ml-auto"
+                  onClick={() => {
+                    setEditingEvent(editingEvent === 0 ? null : 0);
+                    setRelinking(null);
+                  }}
+                  title="この事件の予定を追加します（Google カレンダーにも登録）"
+                >
+                  ＋ 予定を追加
+                </button>
+                <Link to={`/forms?caseType=${c.caseType?.key ?? ''}&caseId=${c.id}`} className="btn btn-sm">
+                  この類型の書式を探す
+                </Link>
+              </div>
+              {editingEvent === 0 && (
+                <div className="mb-2">
+                  <EventForm
+                    initial={{ id: 0, title: '', kind: 'meeting', startAt: newEventStart(), endAt: new Date(new Date(newEventStart()).getTime() + 3600_000).toISOString(), clientId: c.client?.id ?? null, caseId: c.id, location: null, description: null, status: 'confirmed' }}
+                    defaultDay={newEventStart().slice(0, 10)}
+                    narrow
+                    onClose={() => setEditingEvent(null)}
+                    onSaved={(text) => {
+                      setEditingEvent(null);
+                      setEventMsg({ kind: 'ok', text });
+                      qc.invalidateQueries({ queryKey: ['case', id] });
+                      qc.invalidateQueries({ queryKey: ['calendar'] });
+                    }}
+                    onError={(text) => setEventMsg({ kind: 'err', text })}
+                  />
+                </div>
+              )}
+              <ul className="space-y-1">
+                {[...upcomingEvents, ...(showPastEvents ? pastEvents : [])].map((e) => {
+                  const resch = holds.data?.find((h) => h.rescheduleOf?.eventId === e.id);
+                  const future = new Date(e.startAt).getTime() > Date.now();
+                  return (
+                    <li key={e.id} className={`border-b border-slate-100 pb-1 last:border-0 ${future || new Date(e.endAt).getTime() > Date.now() ? '' : 'opacity-70'}`}>
+                      {/* 狭い列でも件名がつぶれないよう、日時・ボタンの行と件名の行を分ける */}
+                      <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-slate-500">{fmtEventTime(e.startAt, e.endAt)}</span>
+                      <span className="badge badge-gray">{EVENT_KIND_LABEL[e.kind as EventKind]}</span>
+                      <span className="ml-auto flex flex-wrap items-center gap-2">
+                      <button
+                        className="text-xs text-blue-700 hover:underline"
+                        onClick={() => {
+                          setEditingEvent(editingEvent === e.id ? null : e.id);
+                          setRelinking(null);
+                        }}
+                        title="件名・日時・場所・メモなどを直します（Google カレンダーにも反映）"
+                      >
+                        編集
+                      </button>
+                      {e.kind !== 'hold' && e.status !== 'tentative' && (
+                        <button className="text-xs text-blue-700 hover:underline" onClick={() => setReportingEvent(reportingEvent === e.id ? null : e.id)} title="この予定の日時・場所・WEB 会議の URL を依頼者に知らせます">
+                          依頼者に報告
+                        </button>
+                      )}
+                      <button className="text-xs text-slate-500 hover:text-blue-700 hover:underline" onClick={() => setRelinking(relinking === e.id ? null : e.id)} title="別の依頼者・事件に紐付けてしまったときに直します">
+                        紐付けを直す
+                      </button>
+                      {resch ? (
+                        <span className="badge badge-blue" title="変更後の候補を仮押さえ中です">
+                          日程変更の調整中
+                        </span>
+                      ) : (
+                        future &&
+                        e.kind !== 'hold' && (
+                          <button
+                            className="btn btn-sm"
+                            onClick={() => {
+                              setRescheduling({ eventId: e.id, title: e.title, startAt: e.startAt, endAt: e.endAt, clientName: c.client?.name ?? null, caseTitle: c.title, location: e.location });
+                              // 入力欄は左側の「日程調整」にあるので、そこまで動かす
+                              setTimeout(() => document.getElementById('case-holds')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+                            }}
+                            title="この予定を別の日時に変更するため、候補をまとめて仮押さえします"
+                          >
+                            リスケ
+                          </button>
+                        )
+                      )}
+                      </span>
+                      </div>
+                      <div className="break-words">
+                        {e.title}
+                        {e.location && <span className="ml-2 text-xs text-slate-500">📍 {e.location}</span>}
+                      </div>
+                      {editingEvent === e.id && (
+                        <div className="mt-1">
+                          <EventForm
+                            initial={e}
+                            defaultDay={e.startAt.slice(0, 10)}
+                            narrow
+                            onClose={() => setEditingEvent(null)}
+                            onSaved={(text) => {
+                              setEditingEvent(null);
+                              setEventMsg({ kind: 'ok', text });
+                              qc.invalidateQueries({ queryKey: ['case', id] });
+                              qc.invalidateQueries({ queryKey: ['calendar'] });
+                            }}
+                            onError={(text) => setEventMsg({ kind: 'err', text })}
+                          />
+                        </div>
+                      )}
+                      {reportingEvent === e.id && (
+                        <EventNoticePanel
+                          eventId={e.id}
+                          onClose={() => setReportingEvent(null)}
+                          onSent={() => {
+                            qc.invalidateQueries({ queryKey: ['timeline', c.id] });
+                          }}
+                        />
+                      )}
+                      {relinking === e.id && (
+                        <EventRelink
+                          eventId={e.id}
+                          clientId={c.client?.id ?? null}
+                          caseId={c.id}
+                          onClose={() => setRelinking(null)}
+                          onDone={() => {
+                            setRelinking(null);
+                            qc.invalidateQueries({ queryKey: ['case', id] });
+                            qc.invalidateQueries({ queryKey: ['calendar'] });
+                          }}
+                        />
+                      )}
+                    </li>
+                  );
+                })}
+                {upcomingEvents.length === 0 && <li className="text-slate-500">これからの予定はありません</li>}
+              </ul>
+              {pastEvents.length > 0 && (
+                <button className="mt-1 text-xs text-blue-700 hover:underline" onClick={() => setShowPastEvents(!showPastEvents)}>
+                  {showPastEvents ? '過去の予定を隠す' : `過去の予定を見る（${pastEvents.length} 件）`}
+                </button>
+              )}
+              {eventMsg && <div className={`fade-in mt-1 text-xs ${eventMsg.kind === 'ok' ? 'text-green-700' : 'text-red-600'}`}>{eventMsg.text}</div>}
+            </section>
             <section className="card space-y-2 text-sm">
               <h2 className="font-semibold">事件情報</h2>
               <input className="input" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
@@ -489,97 +638,6 @@ export default function CaseDetail() {
                   qc.invalidateQueries({ queryKey: ['tasks'] });
                 }}
               />
-            </section>
-            <section className="card text-sm">
-              <div className="mb-2 flex items-center">
-                <h2 className="font-semibold">予定</h2>
-                <Link to={`/forms?caseType=${c.caseType?.key ?? ''}&caseId=${c.id}`} className="btn btn-sm ml-auto">
-                  この類型の書式を探す
-                </Link>
-              </div>
-              <ul className="space-y-1">
-                {c.events.slice(0, 8).map((e) => {
-                  const resch = holds.data?.find((h) => h.rescheduleOf?.eventId === e.id);
-                  const future = new Date(e.startAt).getTime() > Date.now();
-                  return (
-                    <li key={e.id} className="border-b border-slate-100 pb-1 last:border-0">
-                      {/* 狭い列でも件名がつぶれないよう、日時・ボタンの行と件名の行を分ける */}
-                      <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-slate-500">{fmtEventTime(e.startAt, e.endAt)}</span>
-                      <span className="badge badge-gray">{EVENT_KIND_LABEL[e.kind as EventKind]}</span>
-                      <span className="ml-auto flex flex-wrap items-center gap-2">
-                      <button
-                        className="text-xs text-blue-700 hover:underline"
-                        onClick={() => {
-                          setEditingEvent(editingEvent === e.id ? null : e.id);
-                          setRelinking(null);
-                        }}
-                        title="件名・日時・場所・メモなどを直します（Google カレンダーにも反映）"
-                      >
-                        編集
-                      </button>
-                      <button className="text-xs text-slate-500 hover:text-blue-700 hover:underline" onClick={() => setRelinking(relinking === e.id ? null : e.id)} title="別の依頼者・事件に紐付けてしまったときに直します">
-                        紐付けを直す
-                      </button>
-                      {resch ? (
-                        <span className="badge badge-blue" title="変更後の候補を仮押さえ中です">
-                          日程変更の調整中
-                        </span>
-                      ) : (
-                        future &&
-                        e.kind !== 'hold' && (
-                          <button
-                            className="btn btn-sm"
-                            onClick={() => {
-                              setRescheduling({ eventId: e.id, title: e.title, startAt: e.startAt, endAt: e.endAt, clientName: c.client?.name ?? null, caseTitle: c.title, location: e.location });
-                              // 入力欄は左側の「日程調整」にあるので、そこまで動かす
-                              setTimeout(() => document.getElementById('case-holds')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
-                            }}
-                            title="この予定を別の日時に変更するため、候補をまとめて仮押さえします"
-                          >
-                            リスケ
-                          </button>
-                        )
-                      )}
-                      </span>
-                      </div>
-                      <div className="break-words">{e.title}</div>
-                      {editingEvent === e.id && (
-                        <div className="mt-1">
-                          <EventForm
-                            initial={e}
-                            defaultDay={e.startAt.slice(0, 10)}
-                            narrow
-                            onClose={() => setEditingEvent(null)}
-                            onSaved={(text) => {
-                              setEditingEvent(null);
-                              setEventMsg({ kind: 'ok', text });
-                              qc.invalidateQueries({ queryKey: ['case', id] });
-                              qc.invalidateQueries({ queryKey: ['calendar'] });
-                            }}
-                            onError={(text) => setEventMsg({ kind: 'err', text })}
-                          />
-                        </div>
-                      )}
-                      {relinking === e.id && (
-                        <EventRelink
-                          eventId={e.id}
-                          clientId={c.client?.id ?? null}
-                          caseId={c.id}
-                          onClose={() => setRelinking(null)}
-                          onDone={() => {
-                            setRelinking(null);
-                            qc.invalidateQueries({ queryKey: ['case', id] });
-                            qc.invalidateQueries({ queryKey: ['calendar'] });
-                          }}
-                        />
-                      )}
-                    </li>
-                  );
-                })}
-                {c.events.length === 0 && <li className="text-slate-500">なし</li>}
-              </ul>
-              {eventMsg && <div className={`fade-in mt-1 text-xs ${eventMsg.kind === 'ok' ? 'text-green-700' : 'text-red-600'}`}>{eventMsg.text}</div>}
             </section>
           </aside>
         </div>
@@ -830,6 +888,8 @@ function CaseHolds({
   const [proposing, setProposing] = useState<number | null>(null);
   // 枠で押さえた候補を確定する時間を選んでいる候補（googleEventId）
   const [windowFor, setWindowFor] = useState<string | null>(null);
+  // 確定した予定（依頼者に報告するボタンを出す）と、報告の欄を開いているか
+  const [confirmed, setConfirmed] = useState<{ id: number; open: boolean } | null>(null);
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['case-holds', caseId] });
     qc.invalidateQueries({ queryKey: ['case', String(caseId)] });
@@ -839,11 +899,12 @@ function CaseHolds({
   const fail = (e: unknown) => setMsg({ kind: 'err', text: (e as Error).message });
   const confirmHold = useMutation({
     mutationFn: (v: { sessionId: number; eventId: number; startAt?: string; endAt?: string }) =>
-      api.post<{ webText?: string }>(`/calendar/holds/${v.sessionId}/confirm`, { eventId: v.eventId, startAt: v.startAt, endAt: v.endAt }),
+      api.post<{ id: number; webText?: string }>(`/calendar/holds/${v.sessionId}/confirm`, { eventId: v.eventId, startAt: v.startAt, endAt: v.endAt }),
     onSuccess: (r) => {
       setWindowFor(null);
       refresh();
       setMsg({ kind: 'ok', text: `確定しました。ほかの候補の仮押さえは削除しました${r.webText ? `\n${r.webText}` : ''}` });
+      setConfirmed({ id: r.id, open: false });
     },
     onError: fail,
   });
@@ -889,6 +950,17 @@ function CaseHolds({
         </Link>
       </div>
       {msg && <div className={`fade-in whitespace-pre-wrap break-words rounded-md px-3 py-2 text-sm ${msg.kind === 'ok' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700'}`}>{msg.text}</div>}
+      {confirmed && !confirmed.open && (
+        <div className="fade-in flex flex-wrap items-center gap-2 text-sm">
+          <button className="btn btn-sm btn-primary" onClick={() => setConfirmed({ ...confirmed, open: true })} title="確定した日時・場所・WEB 会議の URL を依頼者に知らせます">
+            確定した予定を依頼者に報告
+          </button>
+          <button className="text-xs text-slate-500 hover:text-slate-800" onClick={() => setConfirmed(null)}>
+            報告しない
+          </button>
+        </div>
+      )}
+      {confirmed?.open && <EventNoticePanel eventId={confirmed.id} onClose={() => setConfirmed(null)} onSent={() => qc.invalidateQueries({ queryKey: ['timeline', caseId] })} />}
       {reschedule && (
         <HoldForm
           defaultDay={new Date(new Date(reschedule.startAt).getTime() + 9 * 3600_000).toISOString().slice(0, 10)}
@@ -3117,4 +3189,10 @@ function ExcelImport({ caseId, onDone }: { caseId: number; onDone: () => void })
       {result && <div className="text-xs text-slate-700">{result}</div>}
     </div>
   );
+}
+
+/** 事件ページで予定を追加するときの既定の開始（明日の 10:00） */
+function newEventStart(): string {
+  const day = new Date(Date.now() + 9 * 3600_000 + 86400_000).toISOString().slice(0, 10);
+  return new Date(`${day}T10:00:00+09:00`).toISOString();
 }

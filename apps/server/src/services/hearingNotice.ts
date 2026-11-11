@@ -160,6 +160,14 @@ export function resolveNoteRecipient(noteId: number, opts: { channel?: Channel; 
   if (!kase) throw new Error('事件が見つかりません');
   const client = d.select().from(schema.clients).where(eq(schema.clients.id, kase.clientId)).get();
   if (!client) throw new Error('依頼者が見つかりません');
+  return { note, kase, ...resolveClientRecipient(client, opts) };
+}
+
+/**
+ * 依頼者へ連絡するときの宛先・会話・宛名を決める（記録からの連絡、予定の報告で共通）。
+ * 宛先: 画面で選んだもの（チャネル＋担当者） → 希望チャネル → 先頭（主担当がいれば主担当）
+ */
+export function resolveClientRecipient(client: ClientRow, opts: { channel?: Channel; personId?: number | null } = {}) {
   const channels = availableChannels(client);
   if (channels.length === 0) throw new ClientUnreachableError(client.id, `${client.name}さんの連絡先（メールアドレス・LINE・Chatwork ルーム）が登録されていないか、そのチャネルがアプリに接続されていません`);
   const preferred = client.preferredChannel as Channel | null;
@@ -175,7 +183,7 @@ export function resolveNoteRecipient(noteId: number, opts: { channel?: Channel; 
   const who = chosen.personId ? addressee : representativeLabel(client);
   // LINE・Chatwork は短く姓だけ
   const surname = corporate && chosen.channel === 'gmail' ? `${client.name}\n${who ? `${who}　` : 'ご担当者'}` : familyName(chosen.personId ? addressee : (client.representativeName ?? addressee));
-  return { note, kase, client, channels, chosen, conv, addressee, surname };
+  return { client, channels, chosen, conv, addressee, surname };
 }
 
 /** 会話の直近のやり取り（下書きの文脈に渡す） */
