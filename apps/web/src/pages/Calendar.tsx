@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { EVENT_KIND_LABEL, type EventKind, isAllDayRange } from '@lcm/shared';
 import { api } from '../lib/api';
+import { PendingHoldsPanel } from '../lib/PendingHolds';
+import { EventNoticePanel } from '../lib/EventNotice';
 import { HoldForm, HoldLocationEditor, HoldAddCandidates, HoldCandidateEdit, WindowConfirm, isHoldWindow, type RescheduleTarget } from '../lib/HoldForm';
 import { EventForm } from '../lib/EventForm';
 
@@ -109,6 +111,10 @@ export default function Calendar() {
   const [movingAt, setMovingAt] = useState<number | null>(null);
   // 枠で押さえた候補を確定する時間を選んでいる予定
   const [windowFor, setWindowFor] = useState<number | null>(null);
+  // 依頼者に報告している予定（行の下に出す）
+  const [reportFor, setReportFor] = useState<number | null>(null);
+  // 仮押さえを確定した直後の予定（上に「依頼者に報告」を出す）
+  const [confirmed, setConfirmed] = useState<{ id: number; open: boolean } | null>(null);
   const range = useMemo(() => rangeFor(view, anchor), [view, anchor]);
   const list = useQuery({
     queryKey: ['calendar', range.from, range.to],
@@ -138,11 +144,12 @@ export default function Calendar() {
   });
   const confirmHold = useMutation({
     mutationFn: (v: { sessionId: number; eventId: number; startAt?: string; endAt?: string }) =>
-      api.post<{ webText?: string }>(`/calendar/holds/${v.sessionId}/confirm`, { eventId: v.eventId, startAt: v.startAt, endAt: v.endAt }),
+      api.post<{ id: number; webText?: string }>(`/calendar/holds/${v.sessionId}/confirm`, { eventId: v.eventId, startAt: v.startAt, endAt: v.endAt }),
     onSuccess: (r) => {
       setWindowFor(null);
       invalidate();
       setMsg({ kind: 'ok', text: `確定しました。ほかの候補の仮押さえは削除しました${r.webText ? `\n${r.webText}` : ''}` });
+      setConfirmed({ id: r.id, open: false });
     },
     onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
   });
@@ -270,6 +277,20 @@ export default function Calendar() {
         />
       )}
 
+      {confirmed && !confirmed.open && (
+        <div className="fade-in flex flex-wrap items-center gap-2 text-sm">
+          <button className="btn btn-sm btn-primary" onClick={() => setConfirmed({ ...confirmed, open: true })} title="確定した日時・場所・WEB 会議の URL を依頼者に知らせます">
+            確定した予定を依頼者に報告
+          </button>
+          <button className="text-xs text-slate-500 hover:text-slate-800" onClick={() => setConfirmed(null)}>
+            報告しない
+          </button>
+        </div>
+      )}
+      {confirmed?.open && <EventNoticePanel eventId={confirmed.id} onClose={() => setConfirmed(null)} />}
+
+      <PendingHoldsPanel onMsg={setMsg} onConfirmed={(id) => setConfirmed({ id, open: false })} />
+
       {list.isLoading && <div className="loading-text text-sm text-slate-500">読み込み中…</div>}
       {!list.isLoading && days.length === 0 && <div className="card text-sm text-slate-500">この期間に予定はありません</div>}
       <div className="space-y-3">
@@ -369,6 +390,11 @@ export default function Calendar() {
                             リスケ
                           </button>
                         ))}
+                      {e.kind !== 'hold' && e.status !== 'tentative' && (e.clientId || e.caseId) && (
+                        <button className="btn btn-sm" onClick={() => setReportFor(reportFor === e.id ? null : e.id)} title="この予定の日時・場所・WEB 会議の URL を依頼者に知らせます">
+                          依頼者に報告
+                        </button>
+                      )}
                       <button className="btn btn-sm" onClick={() => setEditing(e)}>
                         編集
                       </button>
@@ -412,6 +438,11 @@ export default function Calendar() {
                         onConfirm={(t) => confirmHold.mutate({ sessionId: e.sessionId!, eventId: e.id, ...t })}
                         onCancel={() => setWindowFor(null)}
                       />
+                    </div>
+                  )}
+                  {reportFor === e.id && (
+                    <div className="md:pl-[6.5rem]">
+                      <EventNoticePanel eventId={e.id} onClose={() => setReportFor(null)} />
                     </div>
                   )}
                   {movingAt === e.id && e.sessionId && (
