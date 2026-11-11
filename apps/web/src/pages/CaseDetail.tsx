@@ -143,6 +143,9 @@ export default function CaseDetail() {
   const [eventMsg, setEventMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   // 依頼者に報告している予定
   const [reportingEvent, setReportingEvent] = useState<number | null>(null);
+  // 仮押さえを確定した直後の予定（「依頼者に報告」を出す）と、枠の中の時間を選んでいる予定
+  const [reportOffer, setReportOffer] = useState<number | null>(null);
+  const [windowEvent, setWindowEvent] = useState<number | null>(null);
   // 予定の欄で過去の予定も出しているか
   const [showPastEvents, setShowPastEvents] = useState(false);
   // 中身（タスク名・メモ）を直している未了タスク
@@ -161,6 +164,23 @@ export default function CaseDetail() {
   // 「予定」から選んだ、日程変更（リスケ）する予定
   const [rescheduling, setRescheduling] = useState<RescheduleTarget | null>(null);
   const holds = useCaseHolds(id ? Number(id) : null);
+  // 「予定」欄の仮押さえを確定する。日程調整の候補なら残りの候補を消して確定、単独の仮の予定なら「仮」を外す
+  const confirmEvent = useMutation({
+    mutationFn: (v: { e: { id: number; title: string; kind: string }; sessionId?: number; startAt?: string; endAt?: string }) =>
+      v.sessionId
+        ? api.post<{ id: number; webText?: string }>(`/calendar/holds/${v.sessionId}/confirm`, { eventId: v.e.id, startAt: v.startAt, endAt: v.endAt })
+        : api.put<{ id: number; webText?: string }>(`/calendar/events/${v.e.id}`, { tentative: false, title: v.e.title.replace(/\s*仮$/, ''), kind: v.e.kind === 'hold' ? 'meeting' : v.e.kind }),
+    onSuccess: (r, v) => {
+      setWindowEvent(null);
+      setReportOffer(r.id ?? v.e.id);
+      setEventMsg({ kind: 'ok', text: `確定しました${v.sessionId ? '。ほかの候補の仮押さえは削除しました' : ''}${r.webText ? `\n${r.webText}` : ''}` });
+      qc.invalidateQueries({ queryKey: ['case', id] });
+      qc.invalidateQueries({ queryKey: ['case-holds'] });
+      qc.invalidateQueries({ queryKey: ['calendar'] });
+      qc.invalidateQueries({ queryKey: ['timeline'] });
+    },
+    onError: (err) => setEventMsg({ kind: 'err', text: (err as Error).message }),
+  });
   const types = useQuery({ queryKey: ['case-types'], queryFn: () => api.get<{ key: string; label: string }[]>('/case-types') });
   const c = d.data;
   // 予定は、これからのもの（早い順）を先に出し、終わったもの（新しい順）は畳んでおく
@@ -321,6 +341,10 @@ export default function CaseDetail() {
                 {[...upcomingEvents, ...(showPastEvents ? pastEvents : [])].map((e) => {
                   const resch = holds.data?.find((h) => h.rescheduleOf?.eventId === e.id);
                   const future = new Date(e.startAt).getTime() > Date.now();
+                  const tentative = e.kind === 'hold' || e.status === 'tentative';
+                  // 日程調整の候補なら、その日程調整（確定するとほかの候補は消える）
+                  const holdSet = tentative ? holds.data?.find((h) => h.candidates.some((x) => x.eventId === e.id)) : undefined;
+                  const inWindow = !!holdSet && isHoldWindow(e, holdSet.durationMinutes);
                   return (
                     <li key={e.id} className={`border-b border-slate-100 pb-1 last:border-0 ${future || new Date(e.endAt).getTime() > Date.now() ? '' : 'opacity-70'}`}>
                       {/* 狭い列でも件名がつぶれないよう、日時・ボタンの行と件名の行を分ける */}
@@ -328,6 +352,23 @@ export default function CaseDetail() {
                       <span className="text-slate-500">{fmtEventTime(e.startAt, e.endAt)}</span>
                       <span className="badge badge-gray">{EVENT_KIND_LABEL[e.kind as EventKind]}</span>
                       <span className="ml-auto flex flex-wrap items-center gap-2">
+                      {tentative && (
+                        <button
+                          className="btn btn-sm btn-primary"
+                          disabled={confirmEvent.isPending}
+                          onClick={() => {
+                            // 枠の候補は、その中で確定する時間を選んでから
+                            if (inWindow) return setWindowEvent(windowEvent === e.id ? null : e.id);
+                            const others = holdSet ? holdSet.candidates.length - 1 : 0;
+                            const extra = holdSet?.rescheduleOf ? `\n元の予定（${fmtEventRange(holdSet.rescheduleOf.startAt, holdSet.rescheduleOf.endAt)}）も削除されます。` : '';
+                            if (window.confirm(holdSet ? `${fmtEventRange(e.startAt, e.endAt)} で確定しますか？${others > 0 ? `\nほかの候補（${others} 件）の仮押さえは削除されます。` : ''}${extra}` : `${fmtEventRange(e.startAt, e.endAt)} の「${e.title}」を、仮から確定の予定にしますか？`))
+                              confirmEvent.mutate({ e, sessionId: holdSet?.sessionId });
+                          }}
+                          title={holdSet ? 'この候補で確定します（ほかの候補の仮押さえは消えます）' : '「仮」を外して確定の予定にします'}
+                        >
+                          {holdSet ? 'この候補で確定' : '確定にする'}
+                        </button>
+                      )}
                       <button
                         className="text-xs text-blue-700 hover:underline"
                         onClick={() => {
@@ -389,6 +430,18 @@ export default function CaseDetail() {
                           />
                         </div>
                       )}
+                      {windowEvent === e.id && holdSet?.durationMinutes && (
+                        <div className="mt-1">
+                          <WindowConfirm
+                            candidate={e}
+                            durationMinutes={holdSet.durationMinutes}
+                            pending={confirmEvent.isPending}
+                            note={`ほかの候補（${Math.max(holdSet.candidates.length - 1, 0)} 件）の仮押さえは削除されます。`}
+                            onConfirm={(t) => confirmEvent.mutate({ e, sessionId: holdSet.sessionId, ...t })}
+                            onCancel={() => setWindowEvent(null)}
+                          />
+                        </div>
+                      )}
                       {reportingEvent === e.id && (
                         <EventNoticePanel
                           eventId={e.id}
@@ -421,7 +474,24 @@ export default function CaseDetail() {
                   {showPastEvents ? '過去の予定を隠す' : `過去の予定を見る（${pastEvents.length} 件）`}
                 </button>
               )}
-              {eventMsg && <div className={`fade-in mt-1 text-xs ${eventMsg.kind === 'ok' ? 'text-green-700' : 'text-red-600'}`}>{eventMsg.text}</div>}
+              {eventMsg && <div className={`fade-in mt-1 whitespace-pre-wrap text-xs ${eventMsg.kind === 'ok' ? 'text-green-700' : 'text-red-600'}`}>{eventMsg.text}</div>}
+              {reportOffer && reportingEvent !== reportOffer && (
+                <div className="fade-in mt-1 flex flex-wrap items-center gap-2 text-xs">
+                  <button
+                    className="btn btn-sm btn-primary"
+                    onClick={() => {
+                      setReportingEvent(reportOffer);
+                      setReportOffer(null);
+                    }}
+                    title="確定した日時・場所・WEB 会議の URL を依頼者に知らせます"
+                  >
+                    確定した予定を依頼者に報告
+                  </button>
+                  <button className="text-slate-500 hover:text-slate-800" onClick={() => setReportOffer(null)}>
+                    報告しない
+                  </button>
+                </div>
+              )}
             </section>
             <section className="card space-y-2 text-sm">
               <h2 className="font-semibold">事件情報</h2>

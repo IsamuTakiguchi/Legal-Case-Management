@@ -153,6 +153,16 @@ export default function Calendar() {
     },
     onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
   });
+  // 日程調整に入っていない単独の仮の予定は、「仮」を外して確定にする
+  const confirmSingle = useMutation({
+    mutationFn: (e: Ev) => api.put<{ id: number }>(`/calendar/events/${e.id}`, { tentative: false, title: e.title.replace(/\s*仮$/, ''), kind: e.kind === 'hold' ? 'meeting' : e.kind }),
+    onSuccess: (r) => {
+      invalidate();
+      setMsg({ kind: 'ok', text: '確定の予定にしました' });
+      setConfirmed({ id: r.id, open: false });
+    },
+    onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
+  });
   const cancelHold = useMutation({
     mutationFn: (sessionId: number) => api.post(`/calendar/holds/${sessionId}/cancel`),
     onSuccess: () => {
@@ -372,6 +382,18 @@ export default function Calendar() {
                             onError={(text) => setMsg({ kind: 'err', text })}
                           />
                         </>
+                      )}
+                      {!e.sessionId && (e.kind === 'hold' || e.status === 'tentative') && (
+                        <button
+                          className="btn btn-sm btn-primary"
+                          disabled={confirmSingle.isPending}
+                          onClick={() => {
+                            if (window.confirm(`「${e.title}」を、仮から確定の予定にしますか？`)) confirmSingle.mutate(e);
+                          }}
+                          title="「仮」を外して確定の予定にします"
+                        >
+                          確定にする
+                        </button>
                       )}
                       {!e.sessionId &&
                         e.kind !== 'hold' &&
