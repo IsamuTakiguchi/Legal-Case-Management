@@ -568,6 +568,69 @@ async function followClientFolders(clientId: number): Promise<{ renames: FolderR
 }
 
 /**
+ * 覚えている場所にフォルダが無いとき、ほかの区分フォルダ（相談・進行事件・残務処理・終了事件・顧問等）に
+ * 同じ名前のフォルダが 1 つだけあれば、そこへ移されたとみなしてパスを付け直す。
+ * （ID をまだ控えていないうちに OneDrive 側で移された、依頼者フォルダの場所をまだ控えていなかった、などのとき。
+ *   そのままだと、保存のときに元の区分へ同じ名前のフォルダを作り直してしまう）
+ */
+async function locateMovedFolders(clientId: number): Promise<FolderRename[]> {
+  const parents = clientFolderParents();
+  if (parents.length === 1 && parents[0] === '') return []; // 区分フォルダの運用でなければ探す先が無い
+  const root = storage().clientRoot();
+  const out: FolderRename[] = [];
+  const at = (parent: string, name: string) => (parent ? `${parent}/${name}` : name);
+  /** その場所にフォルダがあるか（確かめられなければ undefined） */
+  const exists = async (rel: string) => {
+    try {
+      return !!(await getItemByPath(joinPath(root, rel)));
+    } catch {
+      return undefined;
+    }
+  };
+  /** ほかの区分フォルダから、同じ名前のフォルダを探す（1 つだけ見つかったときだけ返す） */
+  const findElsewhere = async (rel: string): Promise<{ rel: string; id: string } | null> => {
+    const { parent, name } = splitRel(rel);
+    const hits: { rel: string; id: string }[] = [];
+    for (const p of parents) {
+      if (p === parent) continue;
+      const item = await getItemByPath(joinPath(root, at(p, name))).catch(() => null);
+      if (item && item.folder && !item.deleted) hits.push({ rel: at(p, name), id: item.id });
+    }
+    return hits.length === 1 ? hits[0]! : null;
+  };
+  let client = db().select().from(schema.clients).where(eq(schema.clients.id, clientId)).get();
+  if (!client) return out;
+  // 事件ごとのフォルダ
+  for (const k of db().select().from(schema.cases).where(eq(schema.cases.clientId, clientId)).all()) {
+    const rel = relOf(k.onedriveFolderPath);
+    if (!rel || rel.startsWith('/') || rel === relOf(client.onedriveFolderPath)) continue;
+    if ((await exists(rel)) !== false) continue;
+    const hit = await findElsewhere(rel);
+    if (!hit) continue;
+    out.push(applyFolderMove(client, rel, hit.rel));
+    rememberCaseFolderId(k.id, hit.id);
+    client = db().select().from(schema.clients).where(eq(schema.clients.id, clientId)).get() ?? client;
+  }
+  // 依頼者フォルダ（場所をまだ控えていなければ、新しく作るときの場所を見る）
+  const explicit = relOf(client.onedriveFolderPath);
+  const rel = explicit || defaultClientFolderRel(client);
+  if (rel && !rel.startsWith('/') && (await exists(rel)) === false) {
+    const hit = await findElsewhere(rel);
+    if (hit) {
+      if (!explicit) {
+        // いったん今の既定の場所を控えてから付け替える（事件の区分もフォルダの区分に合わせるため）
+        db().update(schema.clients).set({ onedriveFolderPath: rel }).where(eq(schema.clients.id, clientId)).run();
+        client = db().select().from(schema.clients).where(eq(schema.clients.id, clientId)).get() ?? client;
+      }
+      out.push(applyFolderMove(client, rel, hit.rel));
+      rememberClientFolderId(clientId, hit.id);
+      logger.info({ clientId, from: rel, to: hit.rel }, '別の区分フォルダへ移されていた依頼者フォルダを見つけました（作り直さずにそちらを使います）');
+    }
+  }
+  return out;
+}
+
+/**
  * 依頼者 1 件分（事件ごとのフォルダも）。OneDrive 側で名前・場所が変わっていたらパスを付け直す。
  * ID をまだ控えていなければ、今のパスから引いて控える（次回以降の名前変更に備える）。
  * 依頼者フォルダの変更があればそれを、無ければ最初の事件フォルダの変更を返す
@@ -577,7 +640,13 @@ export async function syncClientFolderName(clientId: number): Promise<FolderRena
   if (st.kind !== 'onedrive') return null;
   if (!(await isMsConnected())) return null;
   const r = await followClientFolders(clientId);
-  return r.renames.find((x) => !x.caseTitle) ?? r.renames[0] ?? null;
+  // ID で追えなかったもの（覚えた場所に無いもの）は、ほかの区分フォルダを名前で探す
+  const found = await locateMovedFolders(clientId).catch((err) => {
+    logger.warn({ err, clientId }, '移されたフォルダの検索に失敗');
+    return [] as FolderRename[];
+  });
+  const renames = [...r.renames, ...found];
+  return renames.find((x) => !x.caseTitle) ?? renames[0] ?? null;
 }
 
 /** 全依頼者ぶん。OneDrive 側の名前変更・移動をまとめて取り込む */
