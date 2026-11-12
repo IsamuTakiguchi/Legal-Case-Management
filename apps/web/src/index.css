@@ -272,7 +272,9 @@ main h3 {
     @apply rounded-full px-3 py-1 text-xs font-medium transition-colors duration-150;
     color: var(--text-2);
   }
-  .segmented > button[aria-pressed='true'] {
+  .segmented > button[aria-pressed='true'],
+  .segmented > button[aria-selected='true'],
+  .segmented > button.is-active {
     background: var(--surface);
     color: var(--text);
     box-shadow: var(--shadow-card);

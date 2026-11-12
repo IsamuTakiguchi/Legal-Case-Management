@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import Setup from './Setup';
 import { StaleUnanswered } from '../lib/StaleUnanswered';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AI_MODELS, aiModelLabel } from '@lcm/shared';
@@ -333,7 +335,22 @@ function PushSection({ enabled, onChangeEnabled, onSave, saving }: { enabled: bo
   );
 }
 
+/** 設定の種類（初期設定＝各サービスの接続も、ここにまとめる） */
+const SETTINGS_TABS = [
+  { key: 'general', label: '設定', hint: '基本設定・事務局メンバー・通知・文体学習・バックアップなど' },
+  { key: 'connect', label: '接続（初期設定）', hint: 'AI・LINE・Chatwork・Google・Microsoft・Zoom のキーと接続' },
+] as const;
+type SettingsTab = (typeof SETTINGS_TABS)[number]['key'];
+
 export default function Settings() {
+  const [params, setParams] = useSearchParams();
+  const tab: SettingsTab = params.get('tab') === 'connect' ? 'connect' : 'general';
+  const setTab = (t: SettingsTab) => {
+    const next = new URLSearchParams(params);
+    if (t === 'general') next.delete('tab');
+    else next.set('tab', t);
+    setParams(next, { replace: true });
+  };
   const qc = useQueryClient();
   const status = useQuery({ queryKey: ['status'], queryFn: () => api.get<Status>('/status'), refetchInterval: 30_000 });
   const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.get<Record<string, string>>('/settings') });
@@ -492,475 +509,490 @@ export default function Settings() {
   return (
     <div className="space-y-6">
       <h1 className="text-xl font-bold">設定</h1>
-      {s && (
-        <section className="card">
-          <div className="mb-3 flex flex-wrap items-baseline gap-2">
-            <h2 className="font-semibold">接続状況</h2>
-            <span className="text-xs text-slate-500" title={s.version.message ?? ''}>
-              動いている版: {s.version.commit ? <code>{s.version.commit.slice(0, 7)}</code> : '（不明）'}
-              {' ／ '}起動 {fmtDateTime(s.version.startedAt)}
-            </span>
-          </div>
-          <div className="grid gap-3 text-sm md:grid-cols-2">
-            <Conn ok={s.google.connected} label="Google（Gmail・カレンダー）" detail={s.google.connected ? s.google.account ?? '接続済' : s.google.configured ? '未接続' : '.env に GOOGLE_CLIENT_ID/SECRET を設定してください'}>
-              {s.google.configured && !s.google.connected && (
-                <a className="btn btn-primary btn-sm" href="/api/auth/google/start">
-                  Google に接続
-                </a>
-              )}
-              {s.google.connected && (
-                <button className="btn btn-sm" onClick={() => disconnect.mutate('google')}>
-                  切断
-                </button>
-              )}
-              <div className="text-xs text-slate-500">リダイレクト URI: {s.google.redirectUri}</div>
-            </Conn>
-            <Conn ok={s.microsoft.connected} label="OneDrive for Business" detail={s.microsoft.connected ? s.microsoft.account ?? '接続済' : s.microsoft.configured ? '未接続' : '.env に MS_TENANT_ID/CLIENT_ID/SECRET を設定してください'}>
-              {s.microsoft.configured && !s.microsoft.connected && (
-                <a className="btn btn-primary btn-sm" href="/api/auth/microsoft/start">
-                  Microsoft に接続
-                </a>
-              )}
-              {s.microsoft.connected && (
-                <button className="btn btn-sm" onClick={() => disconnect.mutate('microsoft')}>
-                  切断
-                </button>
-              )}
-              <div className="text-xs text-slate-500">
-                ストレージ: {s.storage} / リダイレクト URI: {s.microsoft.redirectUri}
-              </div>
-            </Conn>
-            <Conn ok={s.line.configured} label="LINE公式アカウント" detail={s.line.configured ? `今月の送信 ${s.line.quota?.used ?? 0} / ${s.line.quota?.limit ?? 0}` : '.env に LINE_CHANNEL_SECRET / ACCESS_TOKEN を設定'}>
-              <div className="text-xs text-slate-500">Webhook URL: {s.line.webhookUrl}</div>
-              {s.line.configured && (
-                <div className="mt-1 text-xs">
-                  <div className={s.line.lastEventAt ? 'text-green-700' : 'text-orange-700'}>
-                    {s.line.lastEventAt
-                      ? `最後にメッセージを受信: ${fmtDateTime(s.line.lastEventAt)}`
-                      : s.line.lastWebhookAt
-                        ? `Webhook の疎通は確認済み（${fmtDateTime(s.line.lastWebhookAt)}）。まだメッセージは届いていません`
-                        : 'Webhook をまだ一度も受信していません。LINE Developers の「Webhook の利用」と、Official Account Manager 応答設定の「Webhook」が ON か確認してください'}
-                  </div>
-                  {s.line.lastError && <div className="text-red-600">直近のエラー: {s.line.lastError}</div>}
+      <div className="segmented w-fit max-w-full overflow-x-auto" role="tablist" aria-label="設定の種類">
+        {SETTINGS_TABS.map((t) => (
+          <button key={t.key} role="tab" aria-selected={tab === t.key} className={`whitespace-nowrap ${tab === t.key ? 'is-active' : ''}`} onClick={() => setTab(t.key)} title={t.hint}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {tab === 'connect' && (
+        <>
+        {s && (
+          <section className="card">
+            <div className="mb-3 flex flex-wrap items-baseline gap-2">
+              <h2 className="font-semibold">接続状況</h2>
+              <span className="text-xs text-slate-500" title={s.version.message ?? ''}>
+                動いている版: {s.version.commit ? <code>{s.version.commit.slice(0, 7)}</code> : '（不明）'}
+                {' ／ '}起動 {fmtDateTime(s.version.startedAt)}
+              </span>
+            </div>
+            <div className="grid gap-3 text-sm md:grid-cols-2">
+              <Conn ok={s.google.connected} label="Google（Gmail・カレンダー）" detail={s.google.connected ? s.google.account ?? '接続済' : s.google.configured ? '未接続' : '.env に GOOGLE_CLIENT_ID/SECRET を設定してください'}>
+                {s.google.configured && !s.google.connected && (
+                  <a className="btn btn-primary btn-sm" href="/api/auth/google/start">
+                    Google に接続
+                  </a>
+                )}
+                {s.google.connected && (
+                  <button className="btn btn-sm" onClick={() => disconnect.mutate('google')}>
+                    切断
+                  </button>
+                )}
+                <div className="text-xs text-slate-500">リダイレクト URI: {s.google.redirectUri}</div>
+              </Conn>
+              <Conn ok={s.microsoft.connected} label="OneDrive for Business" detail={s.microsoft.connected ? s.microsoft.account ?? '接続済' : s.microsoft.configured ? '未接続' : '.env に MS_TENANT_ID/CLIENT_ID/SECRET を設定してください'}>
+                {s.microsoft.configured && !s.microsoft.connected && (
+                  <a className="btn btn-primary btn-sm" href="/api/auth/microsoft/start">
+                    Microsoft に接続
+                  </a>
+                )}
+                {s.microsoft.connected && (
+                  <button className="btn btn-sm" onClick={() => disconnect.mutate('microsoft')}>
+                    切断
+                  </button>
+                )}
+                <div className="text-xs text-slate-500">
+                  ストレージ: {s.storage} / リダイレクト URI: {s.microsoft.redirectUri}
                 </div>
-              )}
-              {s.line.configured && <LineGroupRepair />}
-            </Conn>
-            <Conn ok={s.chatwork.configured} label="Chatwork" detail={s.chatwork.configured ? (s.chatwork.webhookTokenSet ? 'API・Webhook 設定済' : 'Webhook トークン未設定（ポーリングのみ）') : '.env に CHATWORK_API_TOKEN を設定'}>
-              <div className="text-xs text-slate-500">Webhook URL: {s.chatwork.webhookUrl}</div>
-              {s.chatwork.configured && <ChatworkIntake cw={s.chatwork} />}
-            </Conn>
-            <Conn ok={s.zoom.configured} label="Zoom" detail={s.zoom.configured ? 'Server-to-Server OAuth 設定済' : '.env に ZOOM_ACCOUNT_ID / CLIENT_ID / SECRET を設定'} />
-            <Conn
-              ok={s.anthropic.configured}
-              label="Claude（Anthropic API）"
-              detail={s.anthropic.configured ? `モデル: ${aiModelLabel(s.anthropic.model)}` : '.env に ANTHROPIC_API_KEY を設定'}
-            >
-              {s.anthropic.configured && s.anthropic.modelLight !== s.anthropic.model && (
-                <div className="text-xs text-slate-500">軽い処理: {aiModelLabel(s.anthropic.modelLight)}</div>
-              )}
-            </Conn>
-          </div>
-        </section>
+              </Conn>
+              <Conn ok={s.line.configured} label="LINE公式アカウント" detail={s.line.configured ? `今月の送信 ${s.line.quota?.used ?? 0} / ${s.line.quota?.limit ?? 0}` : '.env に LINE_CHANNEL_SECRET / ACCESS_TOKEN を設定'}>
+                <div className="text-xs text-slate-500">Webhook URL: {s.line.webhookUrl}</div>
+                {s.line.configured && (
+                  <div className="mt-1 text-xs">
+                    <div className={s.line.lastEventAt ? 'text-green-700' : 'text-orange-700'}>
+                      {s.line.lastEventAt
+                        ? `最後にメッセージを受信: ${fmtDateTime(s.line.lastEventAt)}`
+                        : s.line.lastWebhookAt
+                          ? `Webhook の疎通は確認済み（${fmtDateTime(s.line.lastWebhookAt)}）。まだメッセージは届いていません`
+                          : 'Webhook をまだ一度も受信していません。LINE Developers の「Webhook の利用」と、Official Account Manager 応答設定の「Webhook」が ON か確認してください'}
+                    </div>
+                    {s.line.lastError && <div className="text-red-600">直近のエラー: {s.line.lastError}</div>}
+                  </div>
+                )}
+                {s.line.configured && <LineGroupRepair />}
+              </Conn>
+              <Conn ok={s.chatwork.configured} label="Chatwork" detail={s.chatwork.configured ? (s.chatwork.webhookTokenSet ? 'API・Webhook 設定済' : 'Webhook トークン未設定（ポーリングのみ）') : '.env に CHATWORK_API_TOKEN を設定'}>
+                <div className="text-xs text-slate-500">Webhook URL: {s.chatwork.webhookUrl}</div>
+                {s.chatwork.configured && <ChatworkIntake cw={s.chatwork} />}
+              </Conn>
+              <Conn ok={s.zoom.configured} label="Zoom" detail={s.zoom.configured ? 'Server-to-Server OAuth 設定済' : '.env に ZOOM_ACCOUNT_ID / CLIENT_ID / SECRET を設定'} />
+              <Conn
+                ok={s.anthropic.configured}
+                label="Claude（Anthropic API）"
+                detail={s.anthropic.configured ? `モデル: ${aiModelLabel(s.anthropic.model)}` : '.env に ANTHROPIC_API_KEY を設定'}
+              >
+                {s.anthropic.configured && s.anthropic.modelLight !== s.anthropic.model && (
+                  <div className="text-xs text-slate-500">軽い処理: {aiModelLabel(s.anthropic.modelLight)}</div>
+                )}
+              </Conn>
+            </div>
+          </section>
+        )}
+          <Setup embedded />
+        </>
       )}
-
-      <section className="card">
-        <h2 className="mb-1 font-semibold">文体学習</h2>
-        <p className="mb-2 text-xs text-slate-500">
-          チャネルごとに文体を分けて学習します。返信の下書きは、そのチャネルのプロファイルと、そのチャネルで実際に送った文面だけを手本にします（サンプルが 5 件未満のチャネルは共通の分析で補います）。LINE と Chatwork のサンプルは、このアプリから送るたびに自動で増えます。プロファイルはサンプルが増えると毎晩自動で更新されます。
-        </p>
-        <div className="mb-2 text-sm text-slate-600">
-          サンプル {style.data?.stats.total ?? 0} 件（{Object.entries(style.data?.stats.byChannel ?? {}).map(([k, v]) => `${k}: ${v}`).join(' / ') || 'なし'}）
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <button className="btn btn-sm" onClick={() => styleAction.mutate({ url: '/style/import/gmail', body: { maxMessages: 300 } })} disabled={styleAction.isPending}>
-            Gmail 送信済みを取込（直近300通）
-          </button>
-          <button className="btn btn-sm" onClick={() => styleAction.mutate({ url: '/style/import/chatwork' })} disabled={styleAction.isPending}>
-            Chatwork の自分の発言を取込
-          </button>
-        </div>
-        <div className="mt-3 grid gap-2 md:grid-cols-2">
-          <div>
-            <div className="mb-1 flex flex-wrap items-center gap-1">
-              {PROFILE_TABS.map((t) => (
-                <button key={t.key} type="button" className={`btn btn-sm ${profileChannel === t.key ? 'btn-primary' : ''}`} onClick={() => setProfileChannel(t.key)}>
-                  {t.label}
-                  <span className={profileChannel === t.key ? 'opacity-80' : 'text-slate-400'}>{t.key === 'all' ? style.data?.stats.total ?? 0 : style.data?.stats.byChannel[t.key] ?? 0}</span>
-                </button>
-              ))}
-            </div>
-            <label className="label">
-              {PROFILE_TABS.find((t) => t.key === profileChannel)?.label} の文体プロファイル（編集可）
-              {style.data?.stats.profiles?.find((p) => p.channel === profileChannel)?.generatedAt ? <span className="ml-1 text-slate-400">（生成 {fmtDateTime(style.data.stats.profiles.find((p) => p.channel === profileChannel)!.generatedAt)}）</span> : <span className="ml-1 text-orange-600">（未生成）</span>}
-            </label>
-            <textarea className="input min-h-48 font-mono text-xs" value={profile} onChange={(e) => setProfile(e.target.value)} placeholder="「生成」を押すと、このチャネルで送った文面から文体の特徴をまとめます" />
-            <DraftHint handle={profileDraft} />
-            <div className="mt-1 flex flex-wrap gap-2">
-              <button className="btn btn-primary btn-sm" onClick={() => styleAction.mutate({ url: '/style/profile', body: { channel: profileChannel } })} disabled={styleAction.isPending || (profileChannel !== 'all' && (style.data?.stats.byChannel[profileChannel] ?? 0) < 5)}>
-                {styleAction.isPending ? '処理中…' : `${PROFILE_TABS.find((t) => t.key === profileChannel)?.label} のプロファイルを生成`}
-              </button>
-              <button className="btn btn-sm" onClick={() => saveProfile.mutate()}>
-                編集を保存
-              </button>
-            </div>
+      {tab === 'general' && (
+        <>
+        <section className="card">
+          <h2 className="mb-1 font-semibold">文体学習</h2>
+          <p className="mb-2 text-xs text-slate-500">
+            チャネルごとに文体を分けて学習します。返信の下書きは、そのチャネルのプロファイルと、そのチャネルで実際に送った文面だけを手本にします（サンプルが 5 件未満のチャネルは共通の分析で補います）。LINE と Chatwork のサンプルは、このアプリから送るたびに自動で増えます。プロファイルはサンプルが増えると毎晩自動で更新されます。
+          </p>
+          <div className="mb-2 text-sm text-slate-600">
+            サンプル {style.data?.stats.total ?? 0} 件（{Object.entries(style.data?.stats.byChannel ?? {}).map(([k, v]) => `${k}: ${v}`).join(' / ') || 'なし'}）
           </div>
-          <div>
-            <label className="label">過去の文面を手動で取込（空行区切りで複数）</label>
-            <select className="input mb-1 w-auto" value={importChannel} onChange={(e) => setImportChannel(e.target.value)}>
-              <option value="line">LINE</option>
-              <option value="chatwork">Chatwork</option>
-              <option value="gmail">Gmail</option>
-            </select>
-            <textarea className="input min-h-32 text-xs" value={importText} onChange={(e) => setImportText(e.target.value)} placeholder="LINE のトーク履歴から自分の発言をコピーして貼り付け" />
-            <DraftHint handle={importDraft} />
-            <button className="btn btn-sm mt-1" onClick={() => { styleAction.mutate({ url: '/style/import/text', body: { channel: importChannel, text: importText } }); setImportText(''); }} disabled={!importText.trim()}>
-              取込
+          <div className="flex flex-wrap gap-2">
+            <button className="btn btn-sm" onClick={() => styleAction.mutate({ url: '/style/import/gmail', body: { maxMessages: 300 } })} disabled={styleAction.isPending}>
+              Gmail 送信済みを取込（直近300通）
+            </button>
+            <button className="btn btn-sm" onClick={() => styleAction.mutate({ url: '/style/import/chatwork' })} disabled={styleAction.isPending}>
+              Chatwork の自分の発言を取込
             </button>
           </div>
-        </div>
-        {msg && <div className="fade-in mt-2 text-sm text-slate-700">{msg}</div>}
-      </section>
-
-      <section className="card">
-        <h2 className="mb-3 font-semibold">基本設定</h2>
-        <div className="grid gap-3 md:grid-cols-2">
-          {FIELDS.map((f) => (
-            <div key={f.key} className={f.multiline ? 'md:col-span-2' : ''}>
-              <label className="label">
-                {f.label}
-                {f.hint && <span className="ml-1 font-normal text-slate-400">（{f.hint}）</span>}
-              </label>
-              {f.options ? (
-                <>
-                  <select className="input" value={form[f.key] ?? f.options[0].value} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}>
-                    {f.options.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
-                  {f.key === 'chatwork_scope' && (
-                    <div className="mt-1 space-y-1 text-xs text-slate-500">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <button type="button" className="btn btn-sm" onClick={() => recheckChatwork.mutate(false)} disabled={recheckChatwork.isPending}>
-                          {recheckChatwork.isPending ? '確認中…' : '取込済みの分を確認する'}
-                        </button>
-                        <span>設定より前に取り込んだ Chatwork にも、いまの取込範囲を当て直します</span>
-                      </div>
-                      {recheckPreview && recheckPreview.outOfScope > 0 && (
-                        <div className="fade-in rounded border border-amber-200 bg-amber-50/50 p-2 text-slate-700">
-                          <div>
-                            取込済み {recheckPreview.messages} 件のうち、<span className="font-semibold tabular-nums">{recheckPreview.outOfScope}</span> 件が
-                            いまの取込範囲の外です（受信が 1 件も残らない会話 {recheckPreview.emptied} 件は受信箱から外れます）。
-                          </div>
-                          {recheckPreview.skipped > 0 && <div>ルームの種別が分からない会話 {recheckPreview.skipped} 件は触りません。</div>}
-                          <div className="mt-1 flex flex-wrap items-center gap-2">
-                            <button
-                              type="button"
-                              className="btn btn-sm btn-primary"
-                              disabled={recheckChatwork.isPending}
-                              onClick={() => {
-                                if (window.confirm(`範囲外の受信 ${recheckPreview.outOfScope} 件を受信箱から外します。自分が送った分は残ります。よろしいですか？`)) recheckChatwork.mutate(true);
-                              }}
-                            >
-                              範囲外の受信を外す
-                            </button>
-                            <span>外すのは相手からの受信だけで、自分が送った分は残ります</span>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {f.key === 'gmail_categories' && (
-                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                      <button type="button" className="btn btn-sm" onClick={() => recategorize.mutate()} disabled={recategorize.isPending}>
-                        {recategorize.isPending ? '判定中…' : '取込済みのメールを判定し直す'}
-                      </button>
-                      <span>設定より前に取り込んだメールに区分を付け直します（Gmail に問い合わせるため、件数が多いと時間がかかります）</span>
-                    </div>
-                  )}
-                </>
-              ) : f.key === 'gmail_always_senders' ? (
-                <>
-                  <input className="input" value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} placeholder="例: no-reply02@ben54.jp, courts.go.jp" />
-                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                    <span>受信箱に入らなかったメールを取り込み直す:</span>
-                    <input
-                      className="input w-auto py-0.5 text-xs"
-                      value={refetchSender}
-                      onChange={(e) => setRefetchSender(e.target.value)}
-                      placeholder="送信元（例: no-reply02@ben54.jp）"
-                      aria-label="取り込み直す送信元"
-                    />
-                    <button type="button" className="btn btn-sm" onClick={() => refetch.mutate()} disabled={refetch.isPending || refetchSender.trim().length < 3}>
-                      {refetch.isPending ? '取込中…' : '直近 30 日分を取り込む'}
-                    </button>
-                    <span>Gmail から、その送信元のメールを探して受信箱に入れます（取込範囲の設定に関係なく。取り込み済みのものは重ねて入りません）</span>
-                  </div>
-                </>
-              ) : f.key === 'my_email_addresses' ? (
-                <>
-                  <input className="input" value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} placeholder="例: info@example.com, takiguchi@example.jp" />
-                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                    <button type="button" className="btn btn-sm" onClick={() => refixOwn.mutate()} disabled={refixOwn.isPending}>
-                      {refixOwn.isPending ? '判定中…' : '取込済みの自分の送信を判定し直す'}
-                    </button>
-                    <span>保存後に押すと、これらのアドレスから送ったメールを受信箱の「受信」から「送信」に直します</span>
-                    {refixOwn.data && <span className="text-slate-700">{refixOwn.data.fixed} 件を送信に直しました（{refixOwn.data.conversations} 会話）</span>}
-                  </div>
-                  {myAddrs.data && (
-                    <div className="mt-1 text-xs text-slate-500">
-                      いま「自分の送信」とみなしているアドレス: <span className="text-slate-700">{myAddrs.data.addresses.join('、') || '（なし）'}</span>
-                      <br />
-                      ここに無いアドレスから送ったメールは「受信」として入ります。足りないものがあれば上の欄に追記してください。
-                    </div>
-                  )}
-                </>
-              ) : f.multiline ? (
-                <textarea className="input" rows={3} value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} />
-              ) : (
-                <input className="input" value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} />
-              )}
-            </div>
-          ))}
-        </div>
-        <div className="mt-3 flex items-center gap-2">
-          <button className="btn btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>
-            保存
-          </button>
-          <DraftHint handle={formDraft} />
-        </div>
-      </section>
-
-      <StaffSection />
-
-      <PushSection
-        enabled={(form.push_inbound ?? '1') !== '0'}
-        onChangeEnabled={(v) => setForm({ ...form, push_inbound: v ? '1' : '0' })}
-        onSave={() => save.mutate()}
-        saving={save.isPending}
-      />
-
-      <section className="card">
-        <h2 className="mb-1 font-semibold">アプリのアイコンに出す件数（バッジ）</h2>
-        <p className="mb-3 text-xs text-slate-500">
-          ホーム画面・タスクバーのアイコンに、対応が要る件数を数字で出します。「未読」はまだ開いていない会話の数（開くと消えます）。「未返信」は読んでいても、返していなければ残ります。
-        </p>
-        <label className="label">出す件数</label>
-        <select className="input w-auto" value={form.app_badge_source ?? 'inbox'} onChange={(e) => setForm({ ...form, app_badge_source: e.target.value })}>
-          <option value="inbox_unread">受信箱の未読だけ</option>
-          <option value="inbox">受信箱の未返信だけ</option>
-          <option value="inbox_alerts">受信箱の未返信＋要確認</option>
-          <option value="off">表示しない</option>
-        </select>
-        <AppBadgeStatus source={form.app_badge_source ?? 'inbox'} />
-        {(form.app_badge_source ?? 'inbox') !== 'off' && (
-          <div className="mt-2">
-            <div className="label">いまの内訳（数が思ったより多いとき）</div>
-            <StaleUnanswered />
-          </div>
-        )}
-        <div className="mt-3 flex items-center gap-2">
-          <button className="btn btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>
-            保存
-          </button>
-        </div>
-        <p className="mt-2 text-xs text-slate-400">
-          iPhone・iPad は Safari の「ホーム画面に追加」で入れたアプリで、通知を許可したときだけ出ます。パソコンは Chrome / Edge でインストールしたときに出ます。アプリを閉じている間も、上の通知を有効にしていれば連絡が届いたときに数が変わります。
-        </p>
-      </section>
-
-      <section className="card">
-        <h2 className="mb-1 font-semibold">通知の文面</h2>
-        <p className="mb-3 text-xs text-slate-500">Chatwork マイチャットに届く朝のダイジェストと要確認の通知の文面です。返信の催促文や期日報告は文体エンジンが作るため、ここでは変えません。</p>
-        {/* 朝のダイジェストの自動送信のオン・オフ（押したらすぐ保存） */}
-        <label className="mb-3 flex items-start gap-2 rounded border border-slate-200 bg-slate-50 p-2 text-sm">
-          <input type="checkbox" className="mt-1" checked={digestOn} disabled={toggleDigest.isPending} onChange={(e) => toggleDigest.mutate(e.target.checked)} aria-label="毎朝のダイジェストを送る" />
-          <span>
-            毎朝 {form.morning_digest_hour || '8'} 時に、まとめ（今日の予定・未返信・返信待ち・要確認）を Chatwork マイチャットに送る
-            <span className={`ml-2 badge ${digestOn ? 'badge-line' : 'badge-gray'}`}>{digestOn ? 'オン' : 'オフ'}</span>
-            <span className="block text-xs text-slate-500">オフにしても、下の「ダイジェストを今すぐ送って確認」では送れます。要確認の通知（随時）は止まりません。</span>
-          </span>
-        </label>
-        <div className="grid gap-3 md:grid-cols-2">
-          {NOTIFY_FIELDS.map((f) => (
-            <div key={f.key} className={f.multiline ? 'md:col-span-2' : ''}>
-              <label className="label">
-                {f.label}
-                {f.hint && <span className="ml-1 text-slate-400">（{f.hint}）</span>}
-              </label>
-              {f.multiline ? <textarea className="input" rows={2} value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} /> : <input className="input" value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} />}
-            </div>
-          ))}
-        </div>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <button className="btn btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>
-            保存
-          </button>
-          <button className="btn" onClick={() => runJob.mutate('morningDigest')} disabled={runJob.isPending || !s?.chatwork.configured}>
-            ダイジェストを今すぐ送って確認
-          </button>
-        </div>
-      </section>
-
-      <section className="card">
-        <h2 className="mb-1 font-semibold">バックアップ</h2>
-        <p className="mb-3 text-xs text-slate-500">
-          毎日 3:00（JST）にデータベースのスナップショットを圧縮し、サーバー内と OneDrive の <code>{backup.data?.remoteFolder ?? '…'}</code> に世代保存します。下の「復元」でバックアップから戻せます。
-        </p>
-        {backup.data?.last && (
-          <div className={`mb-3 rounded border p-2 text-sm ${backup.data.last.ok === false ? 'border-red-200 bg-red-50 text-red-700' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
-            最終バックアップ: {backup.data.last.at ? fmtDateTime(backup.data.last.at) : 'まだありません'}
-            {backup.data.last.ok === false && <span className="ml-2">失敗: {backup.data.last.error}</span>}
-            {backup.data.last.ok && <span className="ml-2 text-xs text-slate-500">{backup.data.last.remote ? 'OneDrive にも保存済み' : 'サーバー内のみ（OneDrive 未接続）'}</span>}
-          </div>
-        )}
-        <div className="grid gap-3 md:grid-cols-3">
-          {BACKUP_FIELDS.map((f) => (
-            <div key={f.key}>
-              <label className="label">{f.label}</label>
-              <input className="input" value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} />
-            </div>
-          ))}
-        </div>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <button className="btn btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>
-            保存
-          </button>
-          <button className="btn" onClick={() => runBackup.mutate()} disabled={runBackup.isPending}>
-            {runBackup.isPending ? '作成中…' : '今すぐバックアップ'}
-          </button>
-          {backupMsg && <span className="fade-in text-xs text-slate-700">{backupMsg}</span>}
-        </div>
-        {backup.data && backup.data.local.length > 0 && (
-          <div className="mt-3 text-xs">
-            <div className="mb-1 text-slate-500">サーバー内の世代（クリックでダウンロード）</div>
-            <ul className="flex flex-wrap gap-2">
-              {backup.data.local.map((b) => (
-                <li key={b.name} className="flex items-center gap-1">
-                  <a className="btn btn-sm" href={`/api/backup/${b.name}`} title="この世代をダウンロード">
-                    {b.name}（{fmtBytes(b.size)}）
-                  </a>
-                  <button
-                    className="text-slate-400 hover:text-red-600 hover:underline"
-                    onClick={() => {
-                      if (confirmRestore(b.name)) restore.mutate({ name: b.name });
-                    }}
-                    disabled={restore.isPending}
-                    title="この世代の内容に戻す"
-                  >
-                    この世代に戻す
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            <div>
+              <div className="mb-1 flex flex-wrap items-center gap-1">
+                {PROFILE_TABS.map((t) => (
+                  <button key={t.key} type="button" className={`btn btn-sm ${profileChannel === t.key ? 'btn-primary' : ''}`} onClick={() => setProfileChannel(t.key)}>
+                    {t.label}
+                    <span className={profileChannel === t.key ? 'opacity-80' : 'text-slate-400'}>{t.key === 'all' ? style.data?.stats.total ?? 0 : style.data?.stats.byChannel[t.key] ?? 0}</span>
                   </button>
-                </li>
-              ))}
-            </ul>
+                ))}
+              </div>
+              <label className="label">
+                {PROFILE_TABS.find((t) => t.key === profileChannel)?.label} の文体プロファイル（編集可）
+                {style.data?.stats.profiles?.find((p) => p.channel === profileChannel)?.generatedAt ? <span className="ml-1 text-slate-400">（生成 {fmtDateTime(style.data.stats.profiles.find((p) => p.channel === profileChannel)!.generatedAt)}）</span> : <span className="ml-1 text-orange-600">（未生成）</span>}
+              </label>
+              <textarea className="input min-h-48 font-mono text-xs" value={profile} onChange={(e) => setProfile(e.target.value)} placeholder="「生成」を押すと、このチャネルで送った文面から文体の特徴をまとめます" />
+              <DraftHint handle={profileDraft} />
+              <div className="mt-1 flex flex-wrap gap-2">
+                <button className="btn btn-primary btn-sm" onClick={() => styleAction.mutate({ url: '/style/profile', body: { channel: profileChannel } })} disabled={styleAction.isPending || (profileChannel !== 'all' && (style.data?.stats.byChannel[profileChannel] ?? 0) < 5)}>
+                  {styleAction.isPending ? '処理中…' : `${PROFILE_TABS.find((t) => t.key === profileChannel)?.label} のプロファイルを生成`}
+                </button>
+                <button className="btn btn-sm" onClick={() => saveProfile.mutate()}>
+                  編集を保存
+                </button>
+              </div>
+            </div>
+            <div>
+              <label className="label">過去の文面を手動で取込（空行区切りで複数）</label>
+              <select className="input mb-1 w-auto" value={importChannel} onChange={(e) => setImportChannel(e.target.value)}>
+                <option value="line">LINE</option>
+                <option value="chatwork">Chatwork</option>
+                <option value="gmail">Gmail</option>
+              </select>
+              <textarea className="input min-h-32 text-xs" value={importText} onChange={(e) => setImportText(e.target.value)} placeholder="LINE のトーク履歴から自分の発言をコピーして貼り付け" />
+              <DraftHint handle={importDraft} />
+              <button className="btn btn-sm mt-1" onClick={() => { styleAction.mutate({ url: '/style/import/text', body: { channel: importChannel, text: importText } }); setImportText(''); }} disabled={!importText.trim()}>
+                取込
+              </button>
+            </div>
           </div>
-        )}
-        <div className="mt-4 rounded border border-orange-200 bg-orange-50 p-3 text-sm">
-          <div className="mb-1 font-semibold text-orange-800">復元（バックアップファイルから戻す）</div>
-          <p className="mb-2 text-xs text-slate-600">
-            ダウンロードしておいた <code>.db.gz</code>（または <code>.db</code>）を選んで「復元」を押すと、いまのデータがその内容に置き換わります。復元前の状態は自動でバックアップに残るので、間違えても戻せます。
-            接続情報（Google・Microsoft・各サービスのキー）は別のサーバーで作ったバックアップだと引き継げないため、初期設定で入れ直してください。
+          {msg && <div className="fade-in mt-2 text-sm text-slate-700">{msg}</div>}
+        </section>
+
+        <section className="card">
+          <h2 className="mb-3 font-semibold">基本設定</h2>
+          <div className="grid gap-3 md:grid-cols-2">
+            {FIELDS.map((f) => (
+              <div key={f.key} className={f.multiline ? 'md:col-span-2' : ''}>
+                <label className="label">
+                  {f.label}
+                  {f.hint && <span className="ml-1 font-normal text-slate-400">（{f.hint}）</span>}
+                </label>
+                {f.options ? (
+                  <>
+                    <select className="input" value={form[f.key] ?? f.options[0].value} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}>
+                      {f.options.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                    {f.key === 'chatwork_scope' && (
+                      <div className="mt-1 space-y-1 text-xs text-slate-500">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button type="button" className="btn btn-sm" onClick={() => recheckChatwork.mutate(false)} disabled={recheckChatwork.isPending}>
+                            {recheckChatwork.isPending ? '確認中…' : '取込済みの分を確認する'}
+                          </button>
+                          <span>設定より前に取り込んだ Chatwork にも、いまの取込範囲を当て直します</span>
+                        </div>
+                        {recheckPreview && recheckPreview.outOfScope > 0 && (
+                          <div className="fade-in rounded border border-amber-200 bg-amber-50/50 p-2 text-slate-700">
+                            <div>
+                              取込済み {recheckPreview.messages} 件のうち、<span className="font-semibold tabular-nums">{recheckPreview.outOfScope}</span> 件が
+                              いまの取込範囲の外です（受信が 1 件も残らない会話 {recheckPreview.emptied} 件は受信箱から外れます）。
+                            </div>
+                            {recheckPreview.skipped > 0 && <div>ルームの種別が分からない会話 {recheckPreview.skipped} 件は触りません。</div>}
+                            <div className="mt-1 flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-primary"
+                                disabled={recheckChatwork.isPending}
+                                onClick={() => {
+                                  if (window.confirm(`範囲外の受信 ${recheckPreview.outOfScope} 件を受信箱から外します。自分が送った分は残ります。よろしいですか？`)) recheckChatwork.mutate(true);
+                                }}
+                              >
+                                範囲外の受信を外す
+                              </button>
+                              <span>外すのは相手からの受信だけで、自分が送った分は残ります</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {f.key === 'gmail_categories' && (
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                        <button type="button" className="btn btn-sm" onClick={() => recategorize.mutate()} disabled={recategorize.isPending}>
+                          {recategorize.isPending ? '判定中…' : '取込済みのメールを判定し直す'}
+                        </button>
+                        <span>設定より前に取り込んだメールに区分を付け直します（Gmail に問い合わせるため、件数が多いと時間がかかります）</span>
+                      </div>
+                    )}
+                  </>
+                ) : f.key === 'gmail_always_senders' ? (
+                  <>
+                    <input className="input" value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} placeholder="例: no-reply02@ben54.jp, courts.go.jp" />
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                      <span>受信箱に入らなかったメールを取り込み直す:</span>
+                      <input
+                        className="input w-auto py-0.5 text-xs"
+                        value={refetchSender}
+                        onChange={(e) => setRefetchSender(e.target.value)}
+                        placeholder="送信元（例: no-reply02@ben54.jp）"
+                        aria-label="取り込み直す送信元"
+                      />
+                      <button type="button" className="btn btn-sm" onClick={() => refetch.mutate()} disabled={refetch.isPending || refetchSender.trim().length < 3}>
+                        {refetch.isPending ? '取込中…' : '直近 30 日分を取り込む'}
+                      </button>
+                      <span>Gmail から、その送信元のメールを探して受信箱に入れます（取込範囲の設定に関係なく。取り込み済みのものは重ねて入りません）</span>
+                    </div>
+                  </>
+                ) : f.key === 'my_email_addresses' ? (
+                  <>
+                    <input className="input" value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} placeholder="例: info@example.com, takiguchi@example.jp" />
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                      <button type="button" className="btn btn-sm" onClick={() => refixOwn.mutate()} disabled={refixOwn.isPending}>
+                        {refixOwn.isPending ? '判定中…' : '取込済みの自分の送信を判定し直す'}
+                      </button>
+                      <span>保存後に押すと、これらのアドレスから送ったメールを受信箱の「受信」から「送信」に直します</span>
+                      {refixOwn.data && <span className="text-slate-700">{refixOwn.data.fixed} 件を送信に直しました（{refixOwn.data.conversations} 会話）</span>}
+                    </div>
+                    {myAddrs.data && (
+                      <div className="mt-1 text-xs text-slate-500">
+                        いま「自分の送信」とみなしているアドレス: <span className="text-slate-700">{myAddrs.data.addresses.join('、') || '（なし）'}</span>
+                        <br />
+                        ここに無いアドレスから送ったメールは「受信」として入ります。足りないものがあれば上の欄に追記してください。
+                      </div>
+                    )}
+                  </>
+                ) : f.multiline ? (
+                  <textarea className="input" rows={3} value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} />
+                ) : (
+                  <input className="input" value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} />
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            <button className="btn btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>
+              保存
+            </button>
+            <DraftHint handle={formDraft} />
+          </div>
+        </section>
+
+        <StaffSection />
+
+        <PushSection
+          enabled={(form.push_inbound ?? '1') !== '0'}
+          onChangeEnabled={(v) => setForm({ ...form, push_inbound: v ? '1' : '0' })}
+          onSave={() => save.mutate()}
+          saving={save.isPending}
+        />
+
+        <section className="card">
+          <h2 className="mb-1 font-semibold">アプリのアイコンに出す件数（バッジ）</h2>
+          <p className="mb-3 text-xs text-slate-500">
+            ホーム画面・タスクバーのアイコンに、対応が要る件数を数字で出します。「未読」はまだ開いていない会話の数（開くと消えます）。「未返信」は読んでいても、返していなければ残ります。
+          </p>
+          <label className="label">出す件数</label>
+          <select className="input w-auto" value={form.app_badge_source ?? 'inbox'} onChange={(e) => setForm({ ...form, app_badge_source: e.target.value })}>
+            <option value="inbox_unread">受信箱の未読だけ</option>
+            <option value="inbox">受信箱の未返信だけ</option>
+            <option value="inbox_alerts">受信箱の未返信＋要確認</option>
+            <option value="off">表示しない</option>
+          </select>
+          <AppBadgeStatus source={form.app_badge_source ?? 'inbox'} />
+          {(form.app_badge_source ?? 'inbox') !== 'off' && (
+            <div className="mt-2">
+              <div className="label">いまの内訳（数が思ったより多いとき）</div>
+              <StaleUnanswered />
+            </div>
+          )}
+          <div className="mt-3 flex items-center gap-2">
+            <button className="btn btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>
+              保存
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-slate-400">
+            iPhone・iPad は Safari の「ホーム画面に追加」で入れたアプリで、通知を許可したときだけ出ます。パソコンは Chrome / Edge でインストールしたときに出ます。アプリを閉じている間も、上の通知を有効にしていれば連絡が届いたときに数が変わります。
+          </p>
+        </section>
+
+        <section className="card">
+          <h2 className="mb-1 font-semibold">通知の文面</h2>
+          <p className="mb-3 text-xs text-slate-500">Chatwork マイチャットに届く朝のダイジェストと要確認の通知の文面です。返信の催促文や期日報告は文体エンジンが作るため、ここでは変えません。</p>
+          {/* 朝のダイジェストの自動送信のオン・オフ（押したらすぐ保存） */}
+          <label className="mb-3 flex items-start gap-2 rounded border border-slate-200 bg-slate-50 p-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={digestOn} disabled={toggleDigest.isPending} onChange={(e) => toggleDigest.mutate(e.target.checked)} aria-label="毎朝のダイジェストを送る" />
+            <span>
+              毎朝 {form.morning_digest_hour || '8'} 時に、まとめ（今日の予定・未返信・返信待ち・要確認）を Chatwork マイチャットに送る
+              <span className={`ml-2 badge ${digestOn ? 'badge-line' : 'badge-gray'}`}>{digestOn ? 'オン' : 'オフ'}</span>
+              <span className="block text-xs text-slate-500">オフにしても、下の「ダイジェストを今すぐ送って確認」では送れます。要確認の通知（随時）は止まりません。</span>
+            </span>
+          </label>
+          <div className="grid gap-3 md:grid-cols-2">
+            {NOTIFY_FIELDS.map((f) => (
+              <div key={f.key} className={f.multiline ? 'md:col-span-2' : ''}>
+                <label className="label">
+                  {f.label}
+                  {f.hint && <span className="ml-1 text-slate-400">（{f.hint}）</span>}
+                </label>
+                {f.multiline ? <textarea className="input" rows={2} value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} /> : <input className="input" value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} />}
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button className="btn btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>
+              保存
+            </button>
+            <button className="btn" onClick={() => runJob.mutate('morningDigest')} disabled={runJob.isPending || !s?.chatwork.configured}>
+              ダイジェストを今すぐ送って確認
+            </button>
+          </div>
+        </section>
+
+        <section className="card">
+          <h2 className="mb-1 font-semibold">バックアップ</h2>
+          <p className="mb-3 text-xs text-slate-500">
+            毎日 3:00（JST）にデータベースのスナップショットを圧縮し、サーバー内と OneDrive の <code>{backup.data?.remoteFolder ?? '…'}</code> に世代保存します。下の「復元」でバックアップから戻せます。
+          </p>
+          {backup.data?.last && (
+            <div className={`mb-3 rounded border p-2 text-sm ${backup.data.last.ok === false ? 'border-red-200 bg-red-50 text-red-700' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
+              最終バックアップ: {backup.data.last.at ? fmtDateTime(backup.data.last.at) : 'まだありません'}
+              {backup.data.last.ok === false && <span className="ml-2">失敗: {backup.data.last.error}</span>}
+              {backup.data.last.ok && <span className="ml-2 text-xs text-slate-500">{backup.data.last.remote ? 'OneDrive にも保存済み' : 'サーバー内のみ（OneDrive 未接続）'}</span>}
+            </div>
+          )}
+          <div className="grid gap-3 md:grid-cols-3">
+            {BACKUP_FIELDS.map((f) => (
+              <div key={f.key}>
+                <label className="label">{f.label}</label>
+                <input className="input" value={form[f.key] ?? ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} />
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button className="btn btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>
+              保存
+            </button>
+            <button className="btn" onClick={() => runBackup.mutate()} disabled={runBackup.isPending}>
+              {runBackup.isPending ? '作成中…' : '今すぐバックアップ'}
+            </button>
+            {backupMsg && <span className="fade-in text-xs text-slate-700">{backupMsg}</span>}
+          </div>
+          {backup.data && backup.data.local.length > 0 && (
+            <div className="mt-3 text-xs">
+              <div className="mb-1 text-slate-500">サーバー内の世代（クリックでダウンロード）</div>
+              <ul className="flex flex-wrap gap-2">
+                {backup.data.local.map((b) => (
+                  <li key={b.name} className="flex items-center gap-1">
+                    <a className="btn btn-sm" href={`/api/backup/${b.name}`} title="この世代をダウンロード">
+                      {b.name}（{fmtBytes(b.size)}）
+                    </a>
+                    <button
+                      className="text-slate-400 hover:text-red-600 hover:underline"
+                      onClick={() => {
+                        if (confirmRestore(b.name)) restore.mutate({ name: b.name });
+                      }}
+                      disabled={restore.isPending}
+                      title="この世代の内容に戻す"
+                    >
+                      この世代に戻す
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div className="mt-4 rounded border border-orange-200 bg-orange-50 p-3 text-sm">
+            <div className="mb-1 font-semibold text-orange-800">復元（バックアップファイルから戻す）</div>
+            <p className="mb-2 text-xs text-slate-600">
+              ダウンロードしておいた <code>.db.gz</code>（または <code>.db</code>）を選んで「復元」を押すと、いまのデータがその内容に置き換わります。復元前の状態は自動でバックアップに残るので、間違えても戻せます。
+              接続情報（Google・Microsoft・各サービスのキー）は別のサーバーで作ったバックアップだと引き継げないため、初期設定で入れ直してください。
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <input type="file" accept=".gz,.db,application/gzip,application/x-gzip,application/octet-stream" onChange={(e) => setRestoreFile(e.target.files?.[0] ?? null)} className="text-xs" />
+              <button
+                className="btn btn-sm"
+                disabled={!restoreFile || restore.isPending}
+                onClick={() => {
+                  if (restoreFile && confirmRestore(restoreFile.name)) restore.mutate({ file: restoreFile });
+                }}
+              >
+                {restore.isPending ? '復元中…' : '復元'}
+              </button>
+              {restoreMsg && <span className="fade-in text-xs text-slate-700">{restoreMsg}</span>}
+            </div>
+          </div>
+        </section>
+
+        <ApiUsageSection form={form} setForm={setForm} onSave={() => save.mutate()} saving={save.isPending} />
+
+        <section className="card">
+          <h2 className="mb-1 font-semibold">デモデータ</h2>
+          <p className="mb-3 text-xs text-slate-500">
+            架空の依頼者 3 名（離婚調停・交通事故・法人破産）と会話・タスク・期日・債権者・要確認を投入して、接続前に操作感を確かめられます。実データとは混ざらず、ワンクリックで消せます。名前には【デモ】が付きます。
           </p>
           <div className="flex flex-wrap items-center gap-2">
-            <input type="file" accept=".gz,.db,application/gzip,application/x-gzip,application/octet-stream" onChange={(e) => setRestoreFile(e.target.files?.[0] ?? null)} className="text-xs" />
-            <button
-              className="btn btn-sm"
-              disabled={!restoreFile || restore.isPending}
-              onClick={() => {
-                if (restoreFile && confirmRestore(restoreFile.name)) restore.mutate({ file: restoreFile });
-              }}
-            >
-              {restore.isPending ? '復元中…' : '復元'}
-            </button>
-            {restoreMsg && <span className="fade-in text-xs text-slate-700">{restoreMsg}</span>}
+            {s?.demo.seeded ? (
+              <>
+                <span className="badge badge-orange">デモデータ表示中</span>
+                <button className="btn" onClick={() => demo.mutate('clear')} disabled={demo.isPending}>
+                  デモデータを削除
+                </button>
+                <button className="btn btn-sm" onClick={() => demo.mutate('seed')} disabled={demo.isPending}>
+                  入れ直す
+                </button>
+              </>
+            ) : (
+              <button className="btn btn-primary" onClick={() => demo.mutate('seed')} disabled={demo.isPending}>
+                {demo.isPending ? '投入中…' : 'デモデータを投入'}
+              </button>
+            )}
+            {demoMsg && <span className="text-xs text-slate-700">{demoMsg}</span>}
           </div>
-        </div>
-      </section>
-
-      <ApiUsageSection form={form} setForm={setForm} onSave={() => save.mutate()} saving={save.isPending} />
-
-      <section className="card">
-        <h2 className="mb-1 font-semibold">デモデータ</h2>
-        <p className="mb-3 text-xs text-slate-500">
-          架空の依頼者 3 名（離婚調停・交通事故・法人破産）と会話・タスク・期日・債権者・要確認を投入して、接続前に操作感を確かめられます。実データとは混ざらず、ワンクリックで消せます。名前には【デモ】が付きます。
-        </p>
-        <div className="flex flex-wrap items-center gap-2">
-          {s?.demo.seeded ? (
-            <>
-              <span className="badge badge-orange">デモデータ表示中</span>
-              <button className="btn" onClick={() => demo.mutate('clear')} disabled={demo.isPending}>
-                デモデータを削除
-              </button>
-              <button className="btn btn-sm" onClick={() => demo.mutate('seed')} disabled={demo.isPending}>
-                入れ直す
-              </button>
-            </>
-          ) : (
-            <button className="btn btn-primary" onClick={() => demo.mutate('seed')} disabled={demo.isPending}>
-              {demo.isPending ? '投入中…' : 'デモデータを投入'}
-            </button>
-          )}
-          {demoMsg && <span className="text-xs text-slate-700">{demoMsg}</span>}
-        </div>
-      </section>
-
-      {s && (
-        <section className="card">
-          <h2 className="mb-3 font-semibold">バックグラウンド処理</h2>
-          <table className="w-full text-sm">
-            <thead className="text-left text-xs text-slate-500">
-              <tr>
-                <th className="py-1">処理</th>
-                <th className="py-1">スケジュール(UTC)</th>
-                <th className="py-1">最終実行</th>
-                <th className="py-1"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {s.jobs.map((j) => (
-                <tr key={j.name} className="border-t border-slate-100">
-                  <td className="py-1">
-                    {j.label} {!j.enabled && <span className="badge badge-gray">無効（未接続）</span>}
-                  </td>
-                  <td className="py-1 font-mono text-xs">{j.cron}</td>
-                  <td className="py-1 text-xs">
-                    {j.last ? (
-                      <>
-                        <span className={j.last.ok ? 'text-green-700' : 'text-red-600'}>{j.last.ok ? '成功' : '失敗'}</span> {fmtDateTime(j.last.startedAt)}
-                        <div className="line-clamp-1 text-slate-500">{j.last.summary ?? j.last.error}</div>
-                      </>
-                    ) : (
-                      '—'
-                    )}
-                  </td>
-                  <td className="py-1 text-right">
-                    <button className="btn btn-sm" onClick={() => runJob.mutate(j.name)} disabled={runJob.isPending || j.running}>
-                      今すぐ実行
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {runJob.data && <div className="mt-2 text-xs text-slate-600">{runJob.data.ok ? `完了: ${runJob.data.summary}` : `失敗: ${runJob.data.error}`}</div>}
         </section>
-      )}
 
-      <section className="card">
-        <h2 className="mb-1 font-semibold">ログイン</h2>
-        <p className="mb-3 text-xs text-slate-500">
-          ログインは Google アカウントだけです（ID・パスワードでのログインはありません）。ここに書いたアドレスの Google アカウントでログインできます。空のときは「Google に接続」したアカウント
-          {s?.google.account ? `（${s.google.account}）` : ''}だけがログインできます。
-        </p>
-        <label className="label">Google ログインを許可するメールアドレス（複数は改行）</label>
-        <textarea className="input" rows={2} value={form.login_google_emails ?? ''} onChange={(e) => setForm({ ...form, login_google_emails: e.target.value })} placeholder={s?.google.account ?? 'example@gmail.com'} />
-        <button className="btn btn-primary mt-3" onClick={() => save.mutate()} disabled={save.isPending}>
-          保存
-        </button>
-        <LoginStatus />
-      </section>
+        {s && (
+          <section className="card">
+            <h2 className="mb-3 font-semibold">バックグラウンド処理</h2>
+            <table className="w-full text-sm">
+              <thead className="text-left text-xs text-slate-500">
+                <tr>
+                  <th className="py-1">処理</th>
+                  <th className="py-1">スケジュール(UTC)</th>
+                  <th className="py-1">最終実行</th>
+                  <th className="py-1"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {s.jobs.map((j) => (
+                  <tr key={j.name} className="border-t border-slate-100">
+                    <td className="py-1">
+                      {j.label} {!j.enabled && <span className="badge badge-gray">無効（未接続）</span>}
+                    </td>
+                    <td className="py-1 font-mono text-xs">{j.cron}</td>
+                    <td className="py-1 text-xs">
+                      {j.last ? (
+                        <>
+                          <span className={j.last.ok ? 'text-green-700' : 'text-red-600'}>{j.last.ok ? '成功' : '失敗'}</span> {fmtDateTime(j.last.startedAt)}
+                          <div className="line-clamp-1 text-slate-500">{j.last.summary ?? j.last.error}</div>
+                        </>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
+                    <td className="py-1 text-right">
+                      <button className="btn btn-sm" onClick={() => runJob.mutate(j.name)} disabled={runJob.isPending || j.running}>
+                        今すぐ実行
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {runJob.data && <div className="mt-2 text-xs text-slate-600">{runJob.data.ok ? `完了: ${runJob.data.summary}` : `失敗: ${runJob.data.error}`}</div>}
+          </section>
+        )}
+
+        <section className="card">
+          <h2 className="mb-1 font-semibold">ログイン</h2>
+          <p className="mb-3 text-xs text-slate-500">
+            ログインは Google アカウントだけです（ID・パスワードでのログインはありません）。ここに書いたアドレスの Google アカウントでログインできます。空のときは「Google に接続」したアカウント
+            {s?.google.account ? `（${s.google.account}）` : ''}だけがログインできます。
+          </p>
+          <label className="label">Google ログインを許可するメールアドレス（複数は改行）</label>
+          <textarea className="input" rows={2} value={form.login_google_emails ?? ''} onChange={(e) => setForm({ ...form, login_google_emails: e.target.value })} placeholder={s?.google.account ?? 'example@gmail.com'} />
+          <button className="btn btn-primary mt-3" onClick={() => save.mutate()} disabled={save.isPending}>
+            保存
+          </button>
+          <LoginStatus />
+        </section>
+        </>
+      )}
     </div>
   );
 }

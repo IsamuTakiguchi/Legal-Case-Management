@@ -24,7 +24,7 @@ import { CaseStatusBadge } from './Cases';
 import { TaskEditForm, TaskEditButton } from '../lib/TaskEdit';
 import { ChatworkTaskReply } from '../lib/ChatworkTaskReply';
 import { ContactMemoImport } from '../lib/ContactMemoImport';
-import { CopyButton } from '../lib/copy';
+import { MoreMenu } from '../lib/MoreMenu';
 import { CaseContactSummary, type SummaryClient } from '../lib/CaseContactSummary';
 import type { ClientPerson } from '../lib/ClientPersons';
 import { ClientContactSetup, unreachableClientId } from '../lib/ClientContactSetup';
@@ -147,6 +147,8 @@ export default function CaseDetail() {
   // 仮押さえを確定した直後の予定（「依頼者に報告」を出す）と、枠の中の時間を選んでいる予定
   const [reportOffer, setReportOffer] = useState<number | null>(null);
   const [windowEvent, setWindowEvent] = useState<number | null>(null);
+  // 記録の欄で古い記録も出しているか（既定は新しい 5 件）
+  const [showAllNotes, setShowAllNotes] = useState(false);
   // 予定の欄で過去の予定も出しているか
   const [showPastEvents, setShowPastEvents] = useState(false);
   // 中身（タスク名・メモ）を直している未了タスク
@@ -157,6 +159,8 @@ export default function CaseDetail() {
   useEffect(() => {
     const hash = location.hash;
     if (!loaded || !/^#(note-\d+|contacts)$/.test(hash)) return;
+    // 古い記録へのリンクで来たら、記録をすべて出してから動かす
+    if (hash.startsWith('#note-')) setShowAllNotes(true);
     const t = setTimeout(() => document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: 'smooth', block: hash === '#contacts' ? 'start' : 'center' }), 80);
     return () => clearTimeout(t);
   }, [loaded]);
@@ -190,6 +194,7 @@ export default function CaseDetail() {
   const nowMs = Date.now();
   const upcomingEvents = (c?.events ?? []).filter((e) => new Date(e.endAt).getTime() >= nowMs).sort((a, b) => a.startAt.localeCompare(b.startAt));
   const pastEvents = (c?.events ?? []).filter((e) => new Date(e.endAt).getTime() < nowMs).sort((a, b) => b.startAt.localeCompare(a.startAt));
+  const holdCandidateIds = new Set((holds.data ?? []).flatMap((h) => h.candidates.map((x) => x.eventId).filter((x): x is number => !!x)));
   const [form, setForm] = useState({ title: '', caseType: '', courtName: '', caseNumber: '', stage: '', policy: '', status: 'active', staffId: '', chatworkRoomId: '', accidentDate: '', referrer: '' });
   useEffect(() => {
     if (c) setForm({ title: c.title, caseType: c.caseType?.key ?? 'general_civil', courtName: c.courtName ?? '', caseNumber: c.caseNumber ?? '', stage: c.stage ?? '', policy: c.policy ?? '', status: c.status, staffId: c.staffId ? String(c.staffId) : '', chatworkRoomId: c.chatworkRoomId ? String(c.chatworkRoomId) : '', accidentDate: formatWareki(c.accidentDate, 'short'), referrer: c.referrer ?? '' });
@@ -265,69 +270,9 @@ export default function CaseDetail() {
                 caseTitle={c.title}
               />
             )}
-            <NoteComposer
-              caseId={c.id}
-              onSaved={(note, extra) => {
-                qc.invalidateQueries({ queryKey: ['case', id] });
-                // 期日の記録は、依頼者への連絡を「依頼者に期日連絡」（結果と次回期日を入れた文）で行う
-                const court = note?.kind === 'court';
-                if (court) setNotice({ noteId: note.id, kind: 'court' });
-                const f = extra?.followUps ? { ...extra.followUps, clientText: court ? null : extra.followUps.clientText } : null;
-                if (note && f && (f.schedule || f.clientText || f.staffText)) setFollowUp({ noteId: note.id, f });
-              }}
-            />
-            {followUp && (
-              <NoteFollowUpPanel
-                key={followUp.noteId}
-                note={c.notes.find((n) => n.id === followUp.noteId) ?? null}
-                noteId={followUp.noteId}
-                f={followUp.f}
-                clientId={c.client?.id ?? null}
-                caseId={c.id}
-                onChanged={() => {
-                  qc.invalidateQueries({ queryKey: ['case', id] });
-                  qc.invalidateQueries({ queryKey: ['timeline', c.id] });
-                }}
-                onClose={() => setFollowUp(null)}
-              />
-            )}
-            {notice && (
-              <NoteNoticePanel
-                key={`${notice.kind}:${notice.noteId}`}
-                noteId={notice.noteId}
-                kind={notice.kind}
-                onClose={() => setNotice(null)}
-                onSent={() => {
-                  setNotice(null);
-                  qc.invalidateQueries({ queryKey: ['case', id] });
-                  qc.invalidateQueries({ queryKey: ['timeline', c.id] });
-                }}
-              />
-            )}
-            <CaseHolds
-              caseId={c.id}
-              clientId={c.client?.id ?? null}
-              clientName={c.client?.name ?? null}
-              caseTitle={c.title}
-              reschedule={rescheduling}
-              onRescheduleClose={() => setRescheduling(null)}
-            />
-            <section className="card">
-              <h2 className="mb-2 font-semibold">記録（電話・打合せ・メモ）</h2>
-              <ul className="space-y-3">
-                {c.notes
-                  .filter((n) => n.kind !== 'policy')
-                  .map((n) => (
-                    <NoteView key={n.id} n={n} onDeleted={() => qc.invalidateQueries({ queryKey: ['case', id] })} onNotice={n.kind === 'court' || n.kind === 'meeting' ? () => setNotice({ noteId: n.id, kind: n.kind as NoticeKind }) : undefined} />
-                  ))}
-                {c.notes.length === 0 && <li className="text-sm text-slate-500">記録はまだありません</li>}
-              </ul>
-            </section>
-          </div>
-          <aside className="space-y-4">
             <section className="card text-sm" id="case-events">
               <div className="mb-2 flex flex-wrap items-center gap-2">
-                <h2 className="font-semibold">予定</h2>
+                <h2 className="font-semibold">予定・日程調整</h2>
                 <button
                   className="btn btn-sm ml-auto"
                   onClick={() => {
@@ -342,6 +287,15 @@ export default function CaseDetail() {
                   この類型の書式を探す
                 </Link>
               </div>
+              <CaseHolds
+                  embedded
+                caseId={c.id}
+                clientId={c.client?.id ?? null}
+                clientName={c.client?.name ?? null}
+                caseTitle={c.title}
+                reschedule={rescheduling}
+                onRescheduleClose={() => setRescheduling(null)}
+              />
               {editingEvent === 0 && (
                 <div className="mb-2">
                   <EventForm
@@ -360,7 +314,8 @@ export default function CaseDetail() {
                 </div>
               )}
               <ul className="space-y-1">
-                {[...upcomingEvents, ...(showPastEvents ? pastEvents : [])].map((e) => {
+                {/* 日程調整の候補は、上の「調整中の仮押さえ」に出すので、ここでは出さない */}
+                {[...upcomingEvents, ...(showPastEvents ? pastEvents : [])].filter((e) => !holdCandidateIds.has(e.id)).map((e) => {
                   const resch = holds.data?.find((h) => h.rescheduleOf?.eventId === e.id);
                   const future = new Date(e.startAt).getTime() > Date.now();
                   const tentative = e.kind === 'hold' || e.status === 'tentative';
@@ -515,79 +470,69 @@ export default function CaseDetail() {
                 </div>
               )}
             </section>
-            <section className="card space-y-2 text-sm">
-              <h2 className="font-semibold">事件情報</h2>
-              <input className="input" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-              <select className="input" value={form.caseType} onChange={(e) => setForm({ ...form, caseType: e.target.value })}>
-                {types.data?.map((t) => (
-                  <option key={t.key} value={t.key}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
-              <input className="input" placeholder="裁判所" value={form.courtName} onChange={(e) => setForm({ ...form, courtName: e.target.value })} />
-              <input className="input" placeholder="事件番号" value={form.caseNumber} onChange={(e) => setForm({ ...form, caseNumber: e.target.value })} />
-              <input className="input" placeholder="紹介者（任意）" value={form.referrer} onChange={(e) => setForm({ ...form, referrer: e.target.value })} aria-label="紹介者" />
-              {(form.caseType === 'traffic' || c.accidentDate) && <AccidentDateField value={form.accidentDate} onChange={(v) => setForm({ ...form, accidentDate: v })} />}
-              <input className="input" placeholder="現在の段階（例: 第2回弁論準備、受任通知送付済）" value={form.stage} onChange={(e) => setForm({ ...form, stage: e.target.value })} />
-              <select className="input" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
-                {CASE_STATUSES.map((s) => (
-                  <option key={s} value={s}>
-                    {CASE_STATUS_LABEL[s]}
-                  </option>
-                ))}
-              </select>
-              <div>
-                <label className="label">担当事務局</label>
-                <select className="input" value={form.staffId} onChange={(e) => setForm({ ...form, staffId: e.target.value })}>
-                  <option value="">（未設定）</option>
-                  {staffList.data?.map((st) => (
-                    <option key={st.id} value={st.id}>
-                      {st.name}
-                    </option>
-                  ))}
-                </select>
-                <div className="mt-0.5 text-xs text-slate-400">この事件から作る Chatwork タスクは担当者に振ります。メンバーは設定 → 事務局メンバーで登録</div>
-              </div>
-              <div>
-                <label className="label">事件専用の Chatwork ルーム</label>
-                <RoomPicker value={form.chatworkRoomId} onChange={(v) => setForm({ ...form, chatworkRoomId: v })} emptyLabel="（なし。全体ルームの伝言は本文の依頼者名で振り分け）" />
-                <div className="mt-0.5 text-xs text-slate-400">このルームのメッセージはすべてこの事件の記録に入ります</div>
-              </div>
-              <div>
-                <label className="label">方針メモ {c.policyUpdatedAt && <span className="font-normal text-slate-400">（更新 {fmtDate(c.policyUpdatedAt)}）</span>}</label>
-                <textarea className="input min-h-32" value={form.policy} onChange={(e) => setForm({ ...form, policy: e.target.value })} placeholder="今後の方針、争点、依頼者の希望など" />
-                <DraftHint handle={caseDraft} />
-              </div>
-              <button className="btn btn-primary w-full justify-center" onClick={() => save.mutate()} disabled={save.isPending}>
-                保存
-              </button>
-              {save.error && <div className="fade-in text-xs text-red-600">{(save.error as Error).message}</div>}
-              <button
-                type="button"
-                className="w-full text-center text-xs text-slate-400 hover:text-red-600 hover:underline"
-                onClick={() => {
-                  if (confirm(`「${c.title}」を削除します。${CASE_DELETE_NOTE}`)) remove.mutate();
+            <NoteComposer
+              caseId={c.id}
+              onSaved={(note, extra) => {
+                qc.invalidateQueries({ queryKey: ['case', id] });
+                // 期日の記録は、依頼者への連絡を「依頼者に期日連絡」（結果と次回期日を入れた文）で行う
+                const court = note?.kind === 'court';
+                if (court) setNotice({ noteId: note.id, kind: 'court' });
+                const f = extra?.followUps ? { ...extra.followUps, clientText: court ? null : extra.followUps.clientText } : null;
+                if (note && f && (f.schedule || f.clientText || f.staffText)) setFollowUp({ noteId: note.id, f });
+              }}
+            />
+            {followUp && (
+              <NoteFollowUpPanel
+                key={followUp.noteId}
+                note={c.notes.find((n) => n.id === followUp.noteId) ?? null}
+                noteId={followUp.noteId}
+                f={followUp.f}
+                clientId={c.client?.id ?? null}
+                caseId={c.id}
+                onChanged={() => {
+                  qc.invalidateQueries({ queryKey: ['case', id] });
+                  qc.invalidateQueries({ queryKey: ['timeline', c.id] });
                 }}
-                disabled={remove.isPending}
-                title="誤って登録した事件を削除します。終わった事件は削除せず、区分を「終了事件」にしてください"
-              >
-                {remove.isPending ? '削除中…' : 'この事件を削除'}
-              </button>
-              {remove.error && <div className="fade-in text-xs text-red-600">{(remove.error as Error).message}</div>}
-            </section>
-            <section className="card text-sm">
-              <div className="mb-2 flex items-center">
-                <h2 className="font-semibold">進捗サマリー</h2>
-                <button className="btn btn-sm ml-auto" onClick={() => summary.mutate()} disabled={summary.isPending}>
-                  {summary.isPending ? '生成中…' : 'AI で更新'}
+                onClose={() => setFollowUp(null)}
+              />
+            )}
+            {notice && (
+              <NoteNoticePanel
+                key={`${notice.kind}:${notice.noteId}`}
+                noteId={notice.noteId}
+                kind={notice.kind}
+                onClose={() => setNotice(null)}
+                onSent={() => {
+                  setNotice(null);
+                  qc.invalidateQueries({ queryKey: ['case', id] });
+                  qc.invalidateQueries({ queryKey: ['timeline', c.id] });
+                }}
+              />
+            )}
+            <section className="card">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <h2 className="font-semibold">記録（電話・打合せ・メモ）</h2>
+                <button className="ml-auto text-xs text-blue-700 hover:underline" onClick={() => setTab('timeline')} title="記録・メッセージ・予定をまとめて時系列で見ます（種類で絞り込めます）">
+                  タイムラインで見る
                 </button>
               </div>
-              {c.summary ? <div className="whitespace-pre-wrap text-slate-700">{c.summary}</div> : <div className="text-slate-500">未生成</div>}
-              {c.summaryGeneratedAt && <div className="mt-1 text-xs text-slate-400">生成 {fmtDateTime(c.summaryGeneratedAt)}</div>}
+              <ul className="space-y-3">
+                {c.notes
+                  .filter((n) => n.kind !== 'policy')
+                  .slice(0, showAllNotes ? undefined : NOTES_PREVIEW)
+                  .map((n) => (
+                    <NoteView key={n.id} n={n} onDeleted={() => qc.invalidateQueries({ queryKey: ['case', id] })} onNotice={n.kind === 'court' || n.kind === 'meeting' ? () => setNotice({ noteId: n.id, kind: n.kind as NoticeKind }) : undefined} />
+                  ))}
+                {c.notes.length === 0 && <li className="text-sm text-slate-500">記録はまだありません</li>}
+              </ul>
+              {c.notes.filter((n) => n.kind !== 'policy').length > NOTES_PREVIEW && (
+                <button className="mt-2 text-xs text-blue-700 hover:underline" onClick={() => setShowAllNotes(!showAllNotes)}>
+                  {showAllNotes ? '新しい 5 件だけにする' : `古い記録も見る（あと ${c.notes.filter((n) => n.kind !== 'policy').length - NOTES_PREVIEW} 件）`}
+                </button>
+              )}
             </section>
-            {c.folder && c.client && <CaseFolderCard caseId={c.id} clientId={c.client.id} folder={c.folder} />}
-            <ContactsSection caseId={c.id} traffic={c.caseType?.key === 'traffic'} />
+          </div>
+          <aside className="space-y-4">
             <section className="card text-sm">
               <h2 className="mb-2 font-semibold">未了タスク</h2>
               <ul className="mb-3 space-y-1">
@@ -731,6 +676,81 @@ export default function CaseDetail() {
                 }}
               />
             </section>
+            <section className="card text-sm">
+              <div className="mb-2 flex items-center">
+                <h2 className="font-semibold">進捗サマリー</h2>
+                <button className="btn btn-sm ml-auto" onClick={() => summary.mutate()} disabled={summary.isPending}>
+                  {summary.isPending ? '生成中…' : 'AI で更新'}
+                </button>
+              </div>
+              {c.summary ? <div className="whitespace-pre-wrap text-slate-700">{c.summary}</div> : <div className="text-slate-500">未生成</div>}
+              {c.summaryGeneratedAt && <div className="mt-1 text-xs text-slate-400">生成 {fmtDateTime(c.summaryGeneratedAt)}</div>}
+            </section>
+            <details className="card space-y-2 text-sm [&[open]>summary]:mb-2">
+              <summary className="cursor-pointer select-none font-semibold" title="区分・類型・裁判所・事件番号・担当事務局などを見る・直す">
+                事件情報<span className="ml-2 text-xs font-normal text-slate-500">区分・類型・裁判所・事件番号・担当など</span>
+              </summary>
+              <input className="input" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+              <select className="input" value={form.caseType} onChange={(e) => setForm({ ...form, caseType: e.target.value })}>
+                {types.data?.map((t) => (
+                  <option key={t.key} value={t.key}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+              <input className="input" placeholder="裁判所" value={form.courtName} onChange={(e) => setForm({ ...form, courtName: e.target.value })} />
+              <input className="input" placeholder="事件番号" value={form.caseNumber} onChange={(e) => setForm({ ...form, caseNumber: e.target.value })} />
+              <input className="input" placeholder="紹介者（任意）" value={form.referrer} onChange={(e) => setForm({ ...form, referrer: e.target.value })} aria-label="紹介者" />
+              {(form.caseType === 'traffic' || c.accidentDate) && <AccidentDateField value={form.accidentDate} onChange={(v) => setForm({ ...form, accidentDate: v })} />}
+              <input className="input" placeholder="現在の段階（例: 第2回弁論準備、受任通知送付済）" value={form.stage} onChange={(e) => setForm({ ...form, stage: e.target.value })} />
+              <select className="input" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+                {CASE_STATUSES.map((s) => (
+                  <option key={s} value={s}>
+                    {CASE_STATUS_LABEL[s]}
+                  </option>
+                ))}
+              </select>
+              <div>
+                <label className="label">担当事務局</label>
+                <select className="input" value={form.staffId} onChange={(e) => setForm({ ...form, staffId: e.target.value })}>
+                  <option value="">（未設定）</option>
+                  {staffList.data?.map((st) => (
+                    <option key={st.id} value={st.id}>
+                      {st.name}
+                    </option>
+                  ))}
+                </select>
+                <div className="mt-0.5 text-xs text-slate-400">この事件から作る Chatwork タスクは担当者に振ります。メンバーは設定 → 事務局メンバーで登録</div>
+              </div>
+              <div>
+                <label className="label">事件専用の Chatwork ルーム</label>
+                <RoomPicker value={form.chatworkRoomId} onChange={(v) => setForm({ ...form, chatworkRoomId: v })} emptyLabel="（なし。全体ルームの伝言は本文の依頼者名で振り分け）" />
+                <div className="mt-0.5 text-xs text-slate-400">このルームのメッセージはすべてこの事件の記録に入ります</div>
+              </div>
+              <div>
+                <label className="label">方針メモ {c.policyUpdatedAt && <span className="font-normal text-slate-400">（更新 {fmtDate(c.policyUpdatedAt)}）</span>}</label>
+                <textarea className="input min-h-32" value={form.policy} onChange={(e) => setForm({ ...form, policy: e.target.value })} placeholder="今後の方針、争点、依頼者の希望など" />
+                <DraftHint handle={caseDraft} />
+              </div>
+              <button className="btn btn-primary w-full justify-center" onClick={() => save.mutate()} disabled={save.isPending}>
+                保存
+              </button>
+              {save.error && <div className="fade-in text-xs text-red-600">{(save.error as Error).message}</div>}
+              <button
+                type="button"
+                className="w-full text-center text-xs text-slate-400 hover:text-red-600 hover:underline"
+                onClick={() => {
+                  if (confirm(`「${c.title}」を削除します。${CASE_DELETE_NOTE}`)) remove.mutate();
+                }}
+                disabled={remove.isPending}
+                title="誤って登録した事件を削除します。終わった事件は削除せず、区分を「終了事件」にしてください"
+              >
+                {remove.isPending ? '削除中…' : 'この事件を削除'}
+              </button>
+              {remove.error && <div className="fade-in text-xs text-red-600">{(remove.error as Error).message}</div>}
+            </details>
+            {c.folder && c.client && <CaseFolderCard caseId={c.id} clientId={c.client.id} folder={c.folder} />}
+            <ContactsSection caseId={c.id} traffic={c.caseType?.key === 'traffic'} />
           </aside>
         </div>
       )}
@@ -959,7 +979,10 @@ function CaseHolds({
   caseTitle,
   reschedule,
   onRescheduleClose,
+  embedded = false,
 }: {
+  /** 「予定・日程調整」の欄の中に出す（枠を付けず、仮押さえが無ければ追加のボタンだけにする） */
+  embedded?: boolean;
   caseId: number;
   clientId: number | null;
   clientName: string | null;
@@ -1028,18 +1051,20 @@ function CaseHolds({
   // 要確認の「日程調整が停滞」から ?session=… で来たら、その 1 件まで動かして光らせる
   const spotlight = useSpotlight('session', sets.length > 0);
   return (
-    <section className="card space-y-2" id="case-holds">
+    <section className={embedded ? `scroll-mt-4 space-y-2 ${sets.length > 0 || adding || reschedule ? 'mb-3 rounded-md border border-amber-200 bg-amber-50/30 p-2' : 'mb-2'}` : 'card space-y-2'} id="case-holds">
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="font-semibold">日程調整（仮押さえ中）</h2>
+        {embedded ? <h3 className="text-sm font-semibold">調整中の仮押さえ</h3> : <h2 className="font-semibold">日程調整（仮押さえ中）</h2>}
         {sets.length > 0 && <span className="badge badge-orange">{sets.length} 件</span>}
         {!adding && (
           <button className="btn btn-sm ml-auto" onClick={() => setAdding(true)} title="候補日時をまとめて仮押さえします">
             ＋ 仮押さえを追加
           </button>
         )}
-        <Link to={`/calendar`} className={`btn btn-sm${adding ? ' ml-auto' : ''}`}>
-          予定を見る
-        </Link>
+        {!embedded && (
+          <Link to={`/calendar`} className={`btn btn-sm${adding ? ' ml-auto' : ''}`}>
+            予定を見る
+          </Link>
+        )}
       </div>
       {msg && <div className={`fade-in whitespace-pre-wrap break-words rounded-md px-3 py-2 text-sm ${msg.kind === 'ok' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700'}`}>{msg.text}</div>}
       {confirmed && !confirmed.open && (
@@ -1083,7 +1108,7 @@ function CaseHolds({
         />
       )}
       {q.isLoading && <div className="loading-text text-sm text-slate-500">読み込み中…</div>}
-      {!q.isLoading && sets.length === 0 && !adding && <div className="text-sm text-slate-500">調整中の仮押さえはありません。候補日時をまとめて押さえるときは「＋ 仮押さえを追加」から。</div>}
+      {!embedded && !q.isLoading && sets.length === 0 && !adding && <div className="text-sm text-slate-500">調整中の仮押さえはありません。候補日時をまとめて押さえるときは「＋ 仮押さえを追加」から。</div>}
       <ul className="space-y-3">
         {sets.map((s) => (
           <li key={s.sessionId} id={`session-${s.sessionId}`} className={`rounded border border-slate-200 p-2 text-sm ${s.sessionId === spotlight ? 'spotlight' : ''}`}>
@@ -2535,6 +2560,9 @@ function NoteTaskPanel({ n, onDone, onClose }: { n: Note; onDone: () => void; on
  * 記録を保存したあと、AI が挙げた案（日程・依頼者への送信・担当事務への送信）をその場で開く。
  * どれも送る前・登録する前に確かめられる
  */
+/** 概要・記録の欄に、はじめに出す記録の数 */
+const NOTES_PREVIEW = 5;
+
 function NoteFollowUpPanel({ note, noteId, f, clientId, caseId, onChanged, onClose }: { note: Note | null; noteId: number; f: NoteFollowUps; clientId: number | null; caseId: number; onChanged: () => void; onClose: () => void }) {
   const [open, setOpen] = useState({ schedule: !!f.schedule, client: !!f.clientText, staff: !!f.staffText });
   const anyOpen = open.schedule || open.client || open.staff;
@@ -2634,35 +2662,24 @@ function NoteView({ n, onDeleted, onNotice }: { n: Note; onDeleted: () => void; 
             {n.kind === 'meeting' ? '依頼者に連絡' : '依頼者に期日連絡'}
           </button>
         )}
-        <button
-          className="whitespace-nowrap text-xs text-blue-700 hover:underline"
-          onClick={() => setTaskOpen(!taskOpen)}
-          title="この記録をタスクにします（次のアクションからでも、題名を書いてでも作れます）"
-        >
-          タスクにする
-        </button>
-        <button
-          className="whitespace-nowrap text-xs text-blue-700 hover:underline"
-          onClick={() => setAskOpen(!askOpen)}
-          title="この記録を引用して、Chatwork で担当事務局に確認します"
-        >
-          事務局に確認
-        </button>
-        <button
-          className="whitespace-nowrap text-xs text-blue-700 hover:underline"
-          onClick={() => setScheduleOpen(!scheduleOpen)}
-          title="記録に書かれている日時をそのまま予定に登録できます。これから決めるものは候補日時を出して仮押さえします"
-        >
-          予定に登録・日程調整
-        </button>
-        {/* 入力した文（元メモ）をそのままコピーする。元メモが無い記録は表示している要旨 */}
-        {(n.rawText ?? n.gist) && <CopyButton text={(n.rawText ?? n.gist)!} title="この記録に入力した文をコピーします（AI で整理した記録でも、入力したままの文）" />}
         <button className="whitespace-nowrap text-xs text-blue-700 hover:underline" onClick={() => setEditing(true)}>
           編集
         </button>
-        <button className="whitespace-nowrap text-xs text-slate-400 hover:text-red-600" onClick={() => confirm('削除しますか？') && del.mutate()}>
-          削除
-        </button>
+        <MoreMenu
+          title="タスクにする・事務局に確認・予定に登録・コピー・削除"
+          items={[
+            { label: '✅ タスクにする', onClick: () => setTaskOpen(true), title: 'この記録をタスクにします（次のアクションからでも、題名を書いてでも作れます）' },
+            { label: '💬 事務局に確認', onClick: () => setAskOpen(true), title: 'この記録を引用して、Chatwork で担当事務局に確認します' },
+            { label: '📅 予定に登録・日程調整', onClick: () => setScheduleOpen(true), title: '記録に書かれている日時を予定に登録できます。これから決めるものは候補日時を出して仮押さえします' },
+            {
+              label: '📋 入力した文をコピー',
+              hidden: !(n.rawText ?? n.gist),
+              onClick: () => void navigator.clipboard?.writeText((n.rawText ?? n.gist)!).catch(() => undefined),
+              title: 'この記録に入力した文をコピーします（AI で整理した記録でも、入力したままの文）',
+            },
+            { label: '🗑 削除', danger: true, onClick: () => confirm('削除しますか？') && del.mutate() },
+          ]}
+        />
       </div>
       {n.phone && (
         <div className="text-xs text-slate-500">
@@ -2897,9 +2914,21 @@ function ProgressForm({ caseId, onDone }: { caseId: number; onDone: () => void }
   );
 }
 
+/** タイムラインの絞り込み */
+const TIMELINE_FILTERS: { key: string; label: string; match: (type: string) => boolean }[] = [
+  { key: 'all', label: 'すべて', match: () => true },
+  { key: 'note', label: '記録', match: (t) => t.startsWith('note') },
+  { key: 'message', label: 'メッセージ', match: (t) => t.startsWith('message') },
+  { key: 'event', label: '予定', match: (t) => t.startsWith('event') },
+  { key: 'task', label: '完了したタスク', match: (t) => t.startsWith('task') },
+];
+
 function Timeline({ caseId }: { caseId: number }) {
   const qc = useQueryClient();
   const t = useQuery({ queryKey: ['timeline', caseId], queryFn: () => api.get<TimelineItem[]>(`/cases/${caseId}/timeline`) });
+  const [only, setOnly] = useState('all');
+  const match = TIMELINE_FILTERS.find((f) => f.key === only)?.match ?? (() => true);
+  const items = (t.data ?? []).filter((i) => match(i.type));
   return (
     <div className="space-y-3">
       <ProgressForm
@@ -2910,9 +2939,17 @@ function Timeline({ caseId }: { caseId: number }) {
           qc.invalidateQueries({ queryKey: ['tasks'] });
         }}
       />
-      <div className="card">
+      <div className="card space-y-3">
+        <div className="segmented max-w-full overflow-x-auto" role="tablist" aria-label="タイムラインの絞り込み">
+          {TIMELINE_FILTERS.map((f) => (
+            <button key={f.key} role="tab" aria-selected={only === f.key} className={`whitespace-nowrap ${only === f.key ? 'is-active' : ''}`} onClick={() => setOnly(f.key)}>
+              {f.label}
+              {t.data && f.key !== 'all' && <span className="ml-1 text-[11px] opacity-70">{t.data.filter((i) => f.match(i.type)).length}</span>}
+            </button>
+          ))}
+        </div>
         <ul className="space-y-2 text-sm">
-          {t.data?.map((i, idx) => {
+          {items.map((i, idx) => {
             const wf = typeof i.ref?.waitingFor === 'string' && i.ref.waitingFor !== 'none' ? (i.ref.waitingFor as WaitingFor) : null;
             // メッセージは、会話を開いてそのメッセージまで動かす
             const msgTo = typeof i.ref?.conversationId === 'number' ? messageLink(i.ref.conversationId, typeof i.ref.messageId === 'number' ? i.ref.messageId : null) : null;
@@ -2941,7 +2978,7 @@ function Timeline({ caseId }: { caseId: number }) {
               </li>
             );
           })}
-          {t.data?.length === 0 && <li className="text-slate-500">記録がありません</li>}
+          {t.data && items.length === 0 && <li className="text-slate-500">{only === 'all' ? '記録がありません' : 'この種類のものはありません'}</li>}
         </ul>
       </div>
     </div>

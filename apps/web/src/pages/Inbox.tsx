@@ -8,6 +8,15 @@ import { LongText } from '../lib/LongText';
 import { ConversationTaskPanel } from '../lib/ConversationTaskPanel';
 import { channelBadge, channelLabel, fmtRelative } from '../lib/format';
 
+type InboxView = 'unanswered' | 'needs' | 'waiting' | 'all' | 'archived';
+const INBOX_VIEWS: { key: InboxView; label: string; hint: string }[] = [
+  { key: 'unanswered', label: '未対応', hint: '相手からの連絡で終わっている会話（既定）' },
+  { key: 'needs', label: '要返信', hint: '「要返信」の印が付いている会話（「対応済み」を押すと外れます）' },
+  { key: 'waiting', label: '返事待ち', hint: '自分が最後に送って、相手の返事を待っている会話' },
+  { key: 'all', label: 'すべて', hint: 'アーカイブしたもの以外のすべての会話' },
+  { key: 'archived', label: 'アーカイブ', hint: '受信箱から外した会話' },
+];
+
 interface ConversationListItem {
   id: number;
   channel: string;
@@ -47,12 +56,23 @@ export default function Inbox() {
     queryFn: () => api.get<ConversationListItem[]>(`/conversations?${new URLSearchParams(Object.fromEntries(Object.entries(filter).filter(([, v]) => v))).toString()}`),
     refetchInterval: 30_000,
   });
-  const set = (k: string, v: string) => {
+  const set = (k: string, v: string) => setMany({ [k]: v });
+  const setMany = (kv: Record<string, string>) => {
     const next = new URLSearchParams(params);
-    if (v) next.set(k, v);
-    else next.delete(k);
+    for (const [k, v] of Object.entries(kv)) {
+      if (v) next.set(k, v);
+      else next.delete(k);
+    }
     setParams(next);
   };
+  // 表示の切り替え（未対応・要返信・返事待ち・すべて・アーカイブ）。URL の show・needsReply・archived をまとめて決める
+  const view: InboxView = filter.archived === '1' ? 'archived' : filter.needsReply === '1' ? 'needs' : filter.show === 'mine-last' ? 'waiting' : filter.show === 'all' || filter.show === 'own' ? 'all' : 'unanswered';
+  const setView = (v: InboxView) =>
+    setMany({
+      archived: v === 'archived' ? '1' : '',
+      needsReply: v === 'needs' ? '1' : '',
+      show: v === 'waiting' ? 'mine-last' : v === 'unanswered' ? '' : 'all',
+    });
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [msg, setMsg] = useState('');
@@ -114,27 +134,15 @@ export default function Inbox() {
           ✉ 新しく送る
         </button>
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <select className="input w-auto" value={filter.channel} onChange={(e) => set('channel', e.target.value)}>
+          <select className="input w-auto" value={filter.channel} onChange={(e) => set('channel', e.target.value)} aria-label="チャネル">
             <option value="">全チャネル</option>
             <option value="line">LINE公式</option>
             <option value="chatwork">Chatwork</option>
             <option value="gmail">Gmail</option>
           </select>
-          <label className="flex items-center gap-1 text-sm">
-            <input type="checkbox" checked={filter.needsReply === '1'} onChange={(e) => set('needsReply', e.target.checked ? '1' : '')} /> 未返信のみ
+          <label className="flex items-center gap-1 text-sm" title="依頼者・関係者に紐付いていない会話だけを出します">
+            <input type="checkbox" checked={filter.unlinked === '1'} onChange={(e) => set('unlinked', e.target.checked ? '1' : '')} /> 未紐付けだけ
           </label>
-          <label className="flex items-center gap-1 text-sm">
-            <input type="checkbox" checked={filter.unlinked === '1'} onChange={(e) => set('unlinked', e.target.checked ? '1' : '')} /> 未紐付けのみ
-          </label>
-          <label className="flex items-center gap-1 text-sm">
-            <input type="checkbox" checked={filter.archived === '1'} onChange={(e) => set('archived', e.target.checked ? '1' : '')} /> アーカイブ
-          </label>
-          <select className="input w-auto" value={filter.show} onChange={(e) => set('show', e.target.value)} title="自分が送って終わっている会話を出すかどうか">
-            <option value="unanswered">未対応（相手が最後）</option>
-            <option value="mine-last">自分が最後（返事待ち）</option>
-            <option value="all">すべての会話</option>
-            <option value="own">自分の送信だけの会話</option>
-          </select>
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -144,6 +152,13 @@ export default function Inbox() {
             <input className="input md:w-56" type="search" placeholder="名前・本文を検索" title="相手の名前・メールアドレス・件名・依頼者名・関係者名と、本文から探します。空白で区切るとすべてを含むものを探します" value={q} onChange={(e) => setQ(e.target.value)} />
           </form>
         </div>
+      </div>
+      <div className="segmented max-w-full overflow-x-auto" role="tablist" aria-label="表示する会話">
+        {INBOX_VIEWS.map((v) => (
+          <button key={v.key} role="tab" aria-selected={view === v.key} className={`whitespace-nowrap ${view === v.key ? 'is-active' : ''}`} onClick={() => setView(v.key)} title={v.hint}>
+            {v.label}
+          </button>
+        ))}
       </div>
       {composing && <NewMessagePanel onClose={() => setComposing(false)} />}
       {searching && (
@@ -210,7 +225,7 @@ export default function Inbox() {
         {query.isLoading && <div className="loading-text p-4 text-slate-500">読み込み中…</div>}
         {query.data?.length === 0 && (
           <div className="p-4 text-slate-500">
-            {filter.show === 'unanswered' ? '相手からの連絡で終わっている会話はありません。自分が最後に送ったものは、右上の表示を「自分が最後（返事待ち）」に変えると見られます。' : '会話はありません。設定画面で各チャネルを接続してください。'}
+            {view === 'unanswered' ? '相手からの連絡で終わっている会話はありません。自分が最後に送ったものは、上の「返事待ち」で見られます。' : view === 'needs' ? '「要返信」の会話はありません。' : view === 'waiting' ? '返事待ちの会話はありません。' : view === 'archived' ? 'アーカイブした会話はありません。' : '会話はありません。設定画面で各チャネルを接続してください。'}
           </div>
         )}
         <ul className="divide-y divide-slate-100">

@@ -99,7 +99,7 @@ export function ClientContactSetup({ clientId, channels = ['gmail', 'line', 'cha
       {notConnected.length > 0 && (
         <div className="text-xs text-slate-600">
           {notConnected.map((c) => LABEL[c]).join('・')} はアプリに接続されていないため、連絡先を入れても送れません。
-          <Link className="ml-1 text-blue-700 underline" to="/setup">
+          <Link className="ml-1 text-blue-700 underline" to="/settings?tab=connect">
             初期設定で接続する
           </Link>
         </div>

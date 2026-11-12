@@ -348,16 +348,26 @@ export default function ClientDetail() {
  */
 function ContactCard({ c, onEdit }: { c: Detail; onEdit: () => void }) {
   const [invite, setInvite] = useState(false);
+  // この依頼者に、こちらから新しく送る（LINE・メール・Chatwork を選んで、その会話の画面で書く）
+  const [composing, setComposing] = useState(false);
   const qc = useQueryClient();
   const waiting = !c.lineUserId && !!c.lineInvitedAt;
   return (
     <section className="card">
       <div className="mb-2 flex items-center">
         <h2 className="font-semibold">連絡先</h2>
-        <button className="btn btn-sm ml-auto" onClick={onEdit}>
+        <button className="btn btn-sm btn-primary ml-auto" onClick={() => setComposing(!composing)} aria-expanded={composing} title="この依頼者に、こちらから LINE・メール・Chatwork で送ります（その相手との画面で AI 下書き・添付も使えます）">
+          ✉ この依頼者に送る
+        </button>
+        <button className="btn btn-sm ml-2" onClick={onEdit}>
           連絡先を登録・変更
         </button>
       </div>
+      {composing && (
+        <div className="mb-2">
+          <NewMessagePanel initialClientId={c.id} onClose={() => setComposing(false)} />
+        </div>
+      )}
       <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[6rem_1fr]">
         {c.entityType === 'corporation' && (
           <>
