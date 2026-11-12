@@ -7,6 +7,8 @@ import { fmtDateTime } from '../lib/format';
 import { Icon } from '../lib/icons';
 import { Secretary } from '../lib/Secretary';
 
+type SecretaryProps = Parameters<typeof Secretary>[0];
+
 const KINDS = ['note', 'message', 'case', 'client', 'task', 'event', 'form', 'creditor'] as const;
 type Kind = (typeof KINDS)[number];
 
@@ -57,6 +59,14 @@ function others(r: AskResult): Hit[] {
 const EXAMPLES = ['山田さんの査定書はどうなっている？', '今週中に返事をしないといけない件は？', '交通事故で後遺障害の等級が付いた事件は？'];
 
 export default function Search() {
+  return <SearchPanel />;
+}
+
+/**
+ * AI 秘書（頼む）・AI に聞く・そのまま探す。
+ * ページとしても、どの画面からでも開く AI 秘書のシートの中（embedded）でも使う
+ */
+export function SearchPanel({ embedded = false, secretary }: { embedded?: boolean; secretary?: SecretaryProps } = {}) {
   const [q, setQ] = useState('');
   const [kinds, setKinds] = useState<Kind[]>([]);
   const [mode, setMode] = useState<'do' | 'ask' | 'plain'>('do');
@@ -90,12 +100,14 @@ export default function Search() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-baseline gap-3">
-        <h1>AI 秘書</h1>
-        <span className="text-sm text-slate-500">記録・予定・タスクの登録から、事務所のデータ探しまで頼めます</span>
-      </div>
+      {!embedded && (
+        <div className="flex flex-wrap items-baseline gap-3">
+          <h1>AI 秘書・検索</h1>
+          <span className="text-sm text-slate-500">記録・予定・タスクの登録から、事務所のデータ探しまで頼めます</span>
+        </div>
+      )}
 
-      <div className="segmented w-fit">
+      <div className="segmented w-fit max-w-full overflow-x-auto">
         {(['do', 'ask', 'plain'] as const).map((m) => (
           <button key={m} className={mode === m ? 'is-active' : ''} onClick={() => setMode(m)}>
             {m === 'do' ? '秘書に頼む' : m === 'ask' ? 'AI に聞く' : 'そのまま探す'}
@@ -103,7 +115,7 @@ export default function Search() {
         ))}
       </div>
 
-      {mode === 'do' && <Secretary />}
+      {mode === 'do' && <Secretary {...(secretary ?? {})} />}
 
       {mode !== 'do' && (
         <section className="card space-y-2">

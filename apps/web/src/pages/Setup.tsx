@@ -48,7 +48,8 @@ const STEPS: Record<string, string[]> = {
   zoom: ['任意です。未設定のときは Google 接続済みなら WEB 相談の確定時に Google Meet の URL を自動発行して送ります。', 'Zoom を使う場合: Zoom App Marketplace → Build App → Server-to-Server OAuth → Account ID / Client ID / Client Secret を貼り付け → Scopes に meeting:write:admin と meeting:read:admin を追加して Activate。'],
 };
 
-export default function Setup() {
+/** 各サービスの接続。設定の「接続（初期設定）」タブの中に出す（embedded のときは見出しを省く） */
+export default function Setup({ embedded = false }: { embedded?: boolean } = {}) {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['setup'], queryFn: () => api.get<SetupData>('/setup') });
   const [values, setValues] = useState<Record<string, string>>({});
@@ -89,7 +90,7 @@ export default function Setup() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-xl font-bold">初期設定</h1>
+        {embedded ? <h2 className="font-semibold">各サービスの接続（初期設定）</h2> : <h1 className="text-xl font-bold">初期設定</h1>}
         <p className="text-sm text-slate-600">
           各サービスのキーをここに貼り付けて保存すると、暗号化してアプリ内に保存されます（.env の編集は不要）。進捗: {done} / 6。詳しい取得手順は各カードの「手順書」を参照してください。
         </p>

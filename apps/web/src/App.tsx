@@ -21,7 +21,6 @@ import Tasks from './pages/Tasks';
 import Alerts from './pages/Alerts';
 import Files from './pages/Files';
 import Settings from './pages/Settings';
-import Setup from './pages/Setup';
 import { SecretarySheet } from './lib/SecretarySheet';
 
 interface NavCounts {
@@ -43,7 +42,7 @@ function navBadge(to: string, c: NavCounts): { n: number; tone: 'blue' | 'gray' 
 const NAV: { to: string; label: string; icon: IconName }[] = [
   { to: '/', label: 'ダッシュボード', icon: 'home' },
   { to: '/inbox', label: '受信箱', icon: 'inbox' },
-  { to: '/search', label: 'AI 秘書', icon: 'search' },
+  { to: '/search', label: 'AI 秘書・検索', icon: 'search' },
   { to: '/calendar', label: '予定', icon: 'calendar' },
   { to: '/clients', label: '依頼者', icon: 'person' },
   { to: '/cases', label: '事件', icon: 'scale' },
@@ -51,7 +50,6 @@ const NAV: { to: string; label: string; icon: IconName }[] = [
   { to: '/alerts', label: '要確認', icon: 'bell' },
   { to: '/files', label: 'ファイル', icon: 'clip' },
   { to: '/forms', label: '書式ライブラリ', icon: 'doc' },
-  { to: '/setup', label: '初期設定', icon: 'plug' },
   { to: '/settings', label: '設定', icon: 'gear' },
 ];
 
@@ -139,7 +137,7 @@ export default function App() {
             <Route path="/alerts" element={<Alerts />} />
             <Route path="/files" element={<Files />} />
             <Route path="/settings" element={<Settings />} />
-            <Route path="/setup" element={<Setup />} />
+            <Route path="/setup" element={<Navigate to="/settings?tab=connect" replace />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </div>

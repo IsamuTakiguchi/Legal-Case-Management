@@ -97,7 +97,7 @@ authRoutes.get('/google/callback', async (c) => {
     const email = await handleGoogleCallback(code);
     logger.info({ email }, 'Google 接続完了');
     setImmediate(() => runOnboardingAfterGoogle());
-    return c.redirect('/setup?connected=google');
+    return c.redirect('/settings?tab=connect&connected=google');
   } catch (err) {
     logger.error({ err }, 'Google 接続失敗');
     return c.text(`Google 接続に失敗しました: ${String(err)}`, 500);
@@ -123,7 +123,7 @@ authRoutes.get('/microsoft/callback', async (c) => {
     const user = await handleMsCallback(code);
     logger.info({ user }, 'Microsoft 接続完了');
     setImmediate(() => runOnboardingAfterMicrosoft());
-    return c.redirect('/setup?connected=microsoft');
+    return c.redirect('/settings?tab=connect&connected=microsoft');
   } catch (err) {
     logger.error({ err }, 'Microsoft 接続失敗');
     return c.text(`OneDrive 接続に失敗しました: ${String(err)}`, 500);

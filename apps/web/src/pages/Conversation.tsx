@@ -9,6 +9,7 @@ import { ClientPicker } from '../lib/ClientPicker';
 import { ConversationLinkForm } from '../lib/ConversationLinkForm';
 import { ConversationTaskPanel } from '../lib/ConversationTaskPanel';
 import { MessageTaskForm } from '../lib/MessageTaskForm';
+import { MoreMenu } from '../lib/MoreMenu';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { MemoBadge, MemoPanel, MemoSuggestionCard, type MemoSuggestion } from '../lib/Memo';
 import { ClientConfirmPanel } from '../lib/ClientConfirmPanel';
@@ -400,20 +401,11 @@ export default function Conversation() {
               依頼者ページ
             </Link>
           )}
-          {c.client && !c.contact && (c.client.entityType === 'corporation' || (c.clientPersons?.length ?? 0) > 0 || otherThanClient(c.channel, c.counterpartName, c.client.name)) && (
-            <ConversationPersonPicker
-              corporate={c.client.entityType === 'corporation'}
-              group={!!c.lineGroup}
-              conversationId={c.id}
-              current={c.clientPerson ?? null}
-              persons={c.clientPersons ?? []}
-              defaultName={c.lineGroup ? '' : (c.counterpartName ?? '')}
-              onDone={(text) => {
-                setMsg({ kind: 'ok', text });
-                invalidate();
-              }}
-              onError={(text) => setMsg({ kind: 'err', text })}
-            />
+          {c.clientPerson && !c.contact && (
+            <span className="text-sm text-slate-600" title="この会話の相手（「紐付け・相手を変更」で変えられます）">
+              相手: {c.client?.entityType === 'corporation' ? '担当' : '窓口'} {c.clientPerson.name}
+              {c.clientPerson.title ? `（${c.clientPerson.title}）` : ''}
+            </span>
           )}
           {(c.clientId || c.contactId) && (
             <button
@@ -421,9 +413,9 @@ export default function Conversation() {
               className={`btn btn-sm ${relinking ? 'text-[var(--accent)]' : ''}`}
               onClick={() => setRelinking(!relinking)}
               aria-expanded={relinking}
-              title="この会話の相手を、別の依頼者・ご家族や窓口・事件の関係者（相手方代理人など）に付け替えます"
+              title="この会話の相手を、別の依頼者・ご家族や窓口・事件の関係者（相手方代理人など）に付け替えます。法人の担当者・ご家族などの窓口もここで選びます"
             >
-              紐付けを変更
+              紐付け・相手を変更
             </button>
           )}
           {c.subject && !(c.channel === 'chatwork' && !c.client) && <span className="text-sm text-slate-500">件名: {c.subject}</span>}
@@ -453,6 +445,23 @@ export default function Conversation() {
                 閉じる
               </button>
             </div>
+            {c.client && !c.contact && (c.client.entityType === 'corporation' || (c.clientPersons?.length ?? 0) > 0 || otherThanClient(c.channel, c.counterpartName, c.client.name)) && (
+              <div className="border-b border-slate-100 pb-2">
+                <ConversationPersonPicker
+                  corporate={c.client.entityType === 'corporation'}
+                  group={!!c.lineGroup}
+                  conversationId={c.id}
+                  current={c.clientPerson ?? null}
+                  persons={c.clientPersons ?? []}
+                  defaultName={c.lineGroup ? '' : (c.counterpartName ?? '')}
+                  onDone={(text) => {
+                    setMsg({ kind: 'ok', text });
+                    invalidate();
+                  }}
+                  onError={(text) => setMsg({ kind: 'err', text })}
+                />
+              </div>
+            )}
             <ConversationLinkForm
               conversationId={c.id}
               group={!!c.lineGroup}
@@ -589,16 +598,6 @@ export default function Conversation() {
                       ↩ 返信
                     </button>
                   )}
-                  {c.channel === 'chatwork' && m.direction === 'in' && (c.reactions?.length ?? 0) > 0 && (
-                    <button
-                      type="button"
-                      className="hover:underline"
-                      onClick={() => setReactFor(reactFor === m.id ? null : m.id)}
-                      title="「了解しました」などの短い一言を、このメッセージへの返信としてワンタップで送ります"
-                    >
-                      😊 リアクション
-                    </button>
-                  )}
                   {c.channel === 'chatwork' && m.direction === 'in' && (
                     <button
                       type="button"
@@ -633,18 +632,25 @@ export default function Conversation() {
                       ✅ タスク化
                     </button>
                   )}
-                  <button type="button" className="hover:underline" onClick={() => setQuoteOf(m)} title={c.channel === 'chatwork' ? 'Chatwork の引用として本文に付けます' : '「> 」付きの引用文として本文に付けます'}>
-                    ❝ 引用
-                  </button>
-                  <button
-                    type="button"
-                    className="hover:underline"
-                    onClick={() => fixDirection.mutate({ id: m.id, direction: m.direction === 'out' ? 'in' : 'out' })}
-                    disabled={fixDirection.isPending}
-                    title={m.direction === 'out' ? 'これは相手からの受信だった、というときに戻します' : '自分が別の方法（Gmail や LINE アプリなど）で送ったものが受信として入ったときに直します'}
-                  >
-                    {m.direction === 'out' ? '↩ 受信に戻す' : '✓ 自分の送信に直す'}
-                  </button>
+                  {/* たまにしか使わない操作は「…」にまとめる */}
+                  <MoreMenu
+                    title="リアクション・引用・送信／受信の直し"
+                    align={m.direction === 'out' ? 'right' : 'left'}
+                    items={[
+                      {
+                        label: '😊 リアクション',
+                        hidden: !(c.channel === 'chatwork' && m.direction === 'in' && (c.reactions?.length ?? 0) > 0),
+                        onClick: () => setReactFor(reactFor === m.id ? null : m.id),
+                        title: '「了解しました」などの短い一言を、このメッセージへの返信としてワンタップで送ります',
+                      },
+                      { label: '❝ 引用', onClick: () => setQuoteOf(m), title: c.channel === 'chatwork' ? 'Chatwork の引用として本文に付けます' : '「> 」付きの引用文として本文に付けます' },
+                      {
+                        label: m.direction === 'out' ? '↩ 受信に戻す' : '✓ 自分の送信に直す',
+                        onClick: () => !fixDirection.isPending && fixDirection.mutate({ id: m.id, direction: m.direction === 'out' ? 'in' : 'out' }),
+                        title: m.direction === 'out' ? 'これは相手からの受信だった、というときに戻します' : '自分が別の方法（Gmail や LINE アプリなど）で送ったものが受信として入ったときに直します',
+                      },
+                    ]}
+                  />
                 </div>
                 {reactFor === m.id && c.reactions && (
                   <ReactionBar

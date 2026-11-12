@@ -84,7 +84,7 @@ export default function Dashboard() {
       {needsSetup && (
         <div className="card border-yellow-300 bg-yellow-50 text-sm">
           まだ接続していないサービスがあります。{' '}
-          <Link to="/setup" className="font-semibold text-blue-700 hover:underline">
+          <Link to="/settings?tab=connect" className="font-semibold text-blue-700 hover:underline">
             初期設定
           </Link>{' '}
           からキーを貼り付けて接続テストを行ってください。
