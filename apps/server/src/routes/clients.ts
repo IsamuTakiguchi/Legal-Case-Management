@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { normalizeStaffMessage } from '../services/secretaryActions.js';
 import { createClientRecord, updateClientRecord } from '../services/clientWrite.js';
 import { deleteCase } from '../services/caseDelete.js';
 import { noteContactSuggestions } from '../services/noteContacts.js';
@@ -443,6 +444,8 @@ clientRoutes.post('/cases/:id/notes/structure', async (c) => {
   const kase = getCase(id);
   if (!kase) return c.json({ error: 'not found' }, 404);
   const r = await structureNote(body.rawText, { caseTitle: kase.title, clientName: kase.client?.name, kind: body.kind, counterpart: body.counterpart, phone: body.phone, context: body.context });
+  // 担当事務への送信案は、1 行目に依頼者の氏名、2 行目から本題の形にそろえる
+  if (r.suggestions.staffMessage.text) r.suggestions.staffMessage.text = normalizeStaffMessage({ type: 'message_send', to: 'staff', text: r.suggestions.staffMessage.text, caseId: id } as never as { type: string; text: string }).text;
   return c.json(r);
 });
 

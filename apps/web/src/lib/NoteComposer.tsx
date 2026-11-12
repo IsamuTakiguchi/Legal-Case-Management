@@ -30,6 +30,22 @@ export function ActionDeadlineInputs({ due, replyBy, onChange }: { due: string; 
   );
 }
 
+/** AI が整理のときに挙げた、記録のあとにすること（保存したら開く） */
+export interface NoteFollowUps {
+  /** 予定の登録・日程調整（日程案の説明） */
+  schedule: string | null;
+  /** 依頼者に送る本文案 */
+  clientText: string | null;
+  /** 担当事務に送る本文案 */
+  staffText: string | null;
+}
+
+interface Suggestions {
+  schedule: { suggested: boolean; note: string };
+  clientMessage: { suggested: boolean; text: string };
+  staffMessage: { suggested: boolean; text: string };
+}
+
 /** 電話の伝言への折り返しとして記録するとき（タスクから使う） */
 export interface NoteCallback {
   taskId: number;
@@ -42,7 +58,7 @@ export interface NoteCallback {
 }
 
 /**
- * 事件の記録を追加するフォーム（走り書き → AI で要旨・発言・決定事項・次のアクションに整理 → 保存）。
+ * 事件の記録を追加するフォーム（走り書き → AI で要約・決定事項・タスク案と、日程・依頼者・担当事務への連絡の案に整理 → 保存）。
  * callback を渡すと、電話の伝言への折り返しとして記録する（種別は電話、伝言を記録に添え、タスクを完了にできる）
  */
 export function NoteComposer({
@@ -51,7 +67,7 @@ export function NoteComposer({
   callback,
 }: {
   caseId: number;
-  onSaved: (note?: { id: number; kind: string }, extra?: { taskStatus?: string; caseId?: number }) => void;
+  onSaved: (note?: { id: number; kind: string }, extra?: { taskStatus?: string; caseId?: number; followUps?: NoteFollowUps }) => void;
   callback?: NoteCallback;
 }) {
   const [kind, setKind] = useState<CaseNoteKind>('phone');
@@ -61,10 +77,15 @@ export function NoteComposer({
   const [completeTask, setCompleteTask] = useState(true);
   const [occurredAt, setOccurredAt] = useState(toLocalInput(new Date().toISOString()));
   const [raw, setRaw] = useState('');
-  const [theirSaid, setTheirSaid] = useState('');
-  const [ourSaid, setOurSaid] = useState('');
-  const [preview, setPreview] = useState<{ gist: string; theirSaid: string[]; ourSaid: string[]; phone: string | null; decisions: string[]; nextActions: { title: string; due: string | null; replyBy?: string | null }[]; waitingFor: WaitingFor; counterpart: string | null } | null>(null);
-  const lines = (t: string) => t.split(/\n/).map((x) => x.replace(/^[・\-\s]+/, '').trim()).filter(Boolean);
+  const [preview, setPreview] = useState<{ gist: string; phone: string | null; decisions: string[]; nextActions: { title: string; due: string | null; replyBy?: string | null }[]; waitingFor: WaitingFor; counterpart: string | null; suggestions?: Suggestions } | null>(null);
+  // AI の要約（直してから保存できる）
+  const [gist, setGist] = useState('');
+  // AI の案のうち、保存したら開くもの（依頼者・担当事務への本文は直せる）
+  const [useSchedule, setUseSchedule] = useState(false);
+  const [useClient, setUseClient] = useState(false);
+  const [useStaff, setUseStaff] = useState(false);
+  const [clientText, setClientText] = useState('');
+  const [staffText, setStaffText] = useState('');
   // タスク化の方法: アクションごと／1 つにまとめる／作らない。タスク化するアクションはチェックで選ぶ
   const [taskMode, setTaskMode] = useState<'each' | 'single' | 'none'>('single');
   const [taskPick, setTaskPick] = useState<Set<number>>(new Set());
@@ -74,8 +95,6 @@ export function NoteComposer({
     counterpart: { value: counterpart, set: setCounterpart },
     phone: { value: phone, set: setPhone },
     raw: { value: raw, set: setRaw },
-    theirSaid: { value: theirSaid, set: setTheirSaid },
-    ourSaid: { value: ourSaid, set: setOurSaid },
   });
   const structure = useMutation({
     // 事件がまだ決まっていなければ、事件なしで整理する
@@ -83,9 +102,14 @@ export function NoteComposer({
       api.post<NonNullable<typeof preview>>(caseId ? `/cases/${caseId}/notes/structure` : '/notes/structure', { rawText: raw, kind, counterpart: counterpart || null, phone: phone || null, context: callback?.context ?? null }),
     onSuccess: (r) => {
       setPreview(r);
+      setGist(r.gist);
       setTaskPick(new Set(r.nextActions.map((_, i) => i)));
-      setTheirSaid(r.theirSaid.map((x) => `・${x}`).join('\n'));
-      setOurSaid(r.ourSaid.map((x) => `・${x}`).join('\n'));
+      const sg = r.suggestions;
+      setUseSchedule(!!sg?.schedule.suggested);
+      setUseClient(!!sg?.clientMessage.suggested);
+      setUseStaff(!!sg?.staffMessage.suggested);
+      setClientText(sg?.clientMessage.text ?? '');
+      setStaffText(sg?.staffMessage.text ?? '');
       if (!phone && r.phone) setPhone(r.phone);
     },
     onError: (e) => setErr((e as Error).message),
@@ -98,9 +122,9 @@ export function NoteComposer({
         phone: phone || preview?.phone || null,
         occurredAt: fromLocalInput(occurredAt),
         rawText: raw,
-        gist: preview?.gist ?? null,
-        theirSaid: lines(theirSaid),
-        ourSaid: lines(ourSaid),
+        gist: preview ? gist.trim() || preview.gist : null,
+        theirSaid: [],
+        ourSaid: [],
         decisions: preview?.decisions ?? [],
         nextActions: preview?.nextActions ?? [],
         waitingFor: preview?.waitingFor ?? null,
@@ -116,14 +140,20 @@ export function NoteComposer({
       return r;
     },
     onSuccess: (r) => {
+      const followUps: NoteFollowUps | undefined = preview
+        ? {
+            schedule: useSchedule ? preview.suggestions?.schedule.note || '予定の登録・日程調整' : null,
+            clientText: useClient && clientText.trim() ? clientText.trim() : null,
+            staffText: useStaff && staffText.trim() ? staffText.trim() : null,
+          }
+        : undefined;
       setRaw('');
-      setTheirSaid('');
-      setOurSaid('');
       setPhone('');
       noteDraft.clear();
       setPreview(null);
+      setGist('');
       setErr('');
-      onSaved(r.note, { taskStatus: r.taskStatus, caseId: r.caseId });
+      onSaved(r.note, { taskStatus: r.taskStatus, caseId: r.caseId, followUps });
     },
     onError: (e) => setErr((e as Error).message),
   });
@@ -164,19 +194,9 @@ export function NoteComposer({
         onChange={(e) => setRaw(e.target.value)}
       />
       <DraftHint handle={noteDraft} />
-      <div className="grid gap-2 md:grid-cols-2">
-        <div>
-          <label className="label">相手が言ったこと（1 行 1 項目。AI 整理で自動入力、手で直せます）</label>
-          <textarea className="input min-h-20 text-sm" value={theirSaid} onChange={(e) => setTheirSaid(e.target.value)} placeholder="・和解案として 300 万円を提示&#10;・証拠の追加提出は不要" />
-        </div>
-        <div>
-          <label className="label">こちらが言ったこと</label>
-          <textarea className="input min-h-20 text-sm" value={ourSaid} onChange={(e) => setOurSaid(e.target.value)} placeholder="・依頼者に持ち帰って検討する&#10;・来週金曜までに回答する" />
-        </div>
-      </div>
       <div className="flex flex-wrap items-center gap-2">
         <button className="btn" onClick={() => structure.mutate()} disabled={!raw.trim() || structure.isPending}>
-          {structure.isPending ? '整理中…' : 'AI で要旨・発言の整理・決定事項・次のアクションに整理'}
+          {structure.isPending ? '整理中…' : 'AI で整理（要約・タスク・日程・連絡の案）'}
         </button>
         <select className="input w-full min-w-0 text-sm sm:w-auto" value={taskMode} onChange={(e) => setTaskMode(e.target.value as typeof taskMode)} title="AI が挙げた次のアクションをどうタスクにするか">
           <option value="single">次のアクションを 1 つのタスクにまとめる</option>
@@ -195,9 +215,10 @@ export function NoteComposer({
       {err && <div className="fade-in text-sm text-red-600">{err}</div>}
       {preview && (
         <div className="rounded border border-blue-200 bg-blue-50 p-3 text-sm">
-          <div>
-            <b>要旨:</b> {preview.gist}
-          </div>
+          <label className="block">
+            <b>要約</b>
+            <textarea className="input mt-0.5 min-h-20 bg-white text-sm" value={gist} onChange={(e) => setGist(e.target.value)} aria-label="要約" />
+          </label>
           {preview.decisions.length > 0 && (
             <div>
               <b>決定事項:</b> {preview.decisions.join(' / ')}
@@ -205,7 +226,7 @@ export function NoteComposer({
           )}
           {preview.nextActions.length > 0 && (
             <div>
-              <b>次のアクション:</b>
+              <b>タスク案:</b>
               {taskMode !== 'none' && <span className="ml-2 text-xs text-slate-500">チェックしたものを{taskMode === 'single' ? '1 つのタスクにまとめます' : 'それぞれタスクにします'}</span>}
               <ul className="ml-1 mt-1 space-y-1.5">
                 {preview.nextActions.map((a, i) => (
@@ -253,6 +274,40 @@ export function NoteComposer({
           <div>
             <b>待ち:</b> {WAITING_FOR_LABEL[preview.waitingFor]}
           </div>
+          {preview.suggestions && (preview.suggestions.schedule.suggested || preview.suggestions.clientMessage.suggested || preview.suggestions.staffMessage.suggested) && (
+            <div className="mt-2 space-y-2 border-t border-blue-200 pt-2">
+              <div className="text-xs text-slate-600">AI の案（チェックしたものは、保存したあとにその場で開きます。送る前に確認できます）</div>
+              {preview.suggestions.schedule.suggested && (
+                <label className="flex items-start gap-1.5">
+                  <input type="checkbox" className="mt-1" checked={useSchedule} onChange={(e) => setUseSchedule(e.target.checked)} />
+                  <span>
+                    <b>📅 日程案:</b> {preview.suggestions.schedule.note}
+                    <span className="block text-xs text-slate-500">保存したら「予定に登録・日程調整」を開きます</span>
+                  </span>
+                </label>
+              )}
+              {preview.suggestions.clientMessage.suggested && (
+                <div className="space-y-1">
+                  <label className="flex items-center gap-1.5">
+                    <input type="checkbox" checked={useClient} onChange={(e) => setUseClient(e.target.checked)} />
+                    <b>📨 依頼者への送信案</b>
+                    <span className="text-xs text-slate-500">（保存したら送る画面を開きます）</span>
+                  </label>
+                  {useClient && <textarea className="input min-h-20 bg-white text-sm" value={clientText} onChange={(e) => setClientText(e.target.value)} aria-label="依頼者への送信案" />}
+                </div>
+              )}
+              {preview.suggestions.staffMessage.suggested && (
+                <div className="space-y-1">
+                  <label className="flex items-center gap-1.5">
+                    <input type="checkbox" checked={useStaff} onChange={(e) => setUseStaff(e.target.checked)} />
+                    <b>💬 担当事務への送信案</b>
+                    <span className="text-xs text-slate-500">（保存したら Chatwork で送る画面を開きます）</span>
+                  </label>
+                  {useStaff && <textarea className="input min-h-16 bg-white text-sm" value={staffText} onChange={(e) => setStaffText(e.target.value)} aria-label="担当事務への送信案" />}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </section>
