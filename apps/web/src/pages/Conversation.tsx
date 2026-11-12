@@ -145,9 +145,8 @@ export default function Conversation() {
   const qc = useQueryClient();
   const conv = useQuery({ queryKey: ['conversation', id], queryFn: () => api.get<Conv>(`/conversations/${id}`), refetchInterval: 30_000 });
   const templates = useQuery({ queryKey: ['templates'], queryFn: () => api.get<Template[]>('/templates') });
-  const sessions = useQuery({ queryKey: ['scheduling', id], queryFn: () => api.get<Session[]>(`/scheduling?conversationId=${id}`) });
-  // 要確認の「日程調整が停滞」から ?session=… で来たら、その 1 件まで動かして光らせる
-  const spotlightSession = useSpotlight('session', !!sessions.data);
+  // 要確認の「日程調整が停滞」から ?session=… で来たら、「日程・予定」を開いて仮押さえの候補を出す
+  const sessionParam = useSpotlight('session', false);
 
   const [text, setText] = useState('');
   const [instruction, setInstruction] = useState('');
@@ -180,15 +179,16 @@ export default function Conversation() {
   const [driveFiles, setDriveFiles] = useState<DriveFile[]>([]);
   // パソコンから選んだファイル
   const uploads = useLocalUploads();
+  // ファイルの添付（フォルダ・パソコン・受け取ったファイル）を選ぶ欄
   const [showFiles, setShowFiles] = useState(false);
-  const [showSchedule, setShowSchedule] = useState(false);
   const [showStaffAsk, setShowStaffAsk] = useState(false);
-  // 事務局からの確認事項を依頼者に確認するパネル（ボタンから開くときは、いちばん新しい受信メッセージを対象にする）
-  const [showClientConfirm, setShowClientConfirm] = useState(false);
-  const [showMemo, setShowMemo] = useState(false);
-  const [showExtract, setShowExtract] = useState(false);
-  // 会話からタスクを登録するパネル
-  const [showTasks, setShowTasks] = useState(false);
+  // 「日程・予定」: やり取りから登録・確定（extract）／空き時間から候補日を提案（propose）
+  const [schedTab, setSchedTab] = useState<'extract' | 'propose' | null>(null);
+  useEffect(() => {
+    if (sessionParam) setSchedTab('extract');
+  }, [sessionParam]);
+  // 「タスク・備忘」: 会話からタスクを登録（tasks）／時期未定の備忘（memo）
+  const [taskTab, setTaskTab] = useState<'tasks' | 'memo' | null>(null);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
   // 自分が別の手段で送ったものが「受信」で入ったときに、向きを直す
@@ -844,40 +844,44 @@ export default function Conversation() {
           <LocalFileBadges uploads={uploads} />
           {c.channel === 'line' && (selectedAtt.length > 0 || driveFiles.length > 0 || uploads.items.length > 0) && <div className="text-xs text-orange-700">LINE はファイルを直接送れないため、OneDrive の共有リンクとして送ります（発行できない場合は手動送付の案内文になります）。</div>}
           <div className="flex flex-wrap items-center gap-2">
-            <button className="btn btn-sm" onClick={() => setShowFiles(!showFiles)} disabled={!c.client}>
-              📄 フォルダのファイルを添付
+            <button
+              className={`btn btn-sm ${showFiles ? 'text-[var(--accent)]' : ''}`}
+              onClick={() => setShowFiles(!showFiles)}
+              aria-expanded={showFiles}
+              title="依頼者のフォルダ・パソコン・受け取ったファイルから選んで添付します（この欄にファイルをドラッグ＆ドロップしても添付できます）"
+            >
+              📎 ファイルを添付{uploads.uploading.length > 0 ? '（読み込み中…）' : ''}
             </button>
-            <LocalFileButton uploads={uploads} />
-            <button className="btn btn-sm" onClick={() => setShowSchedule(!showSchedule)}>
-              📅 日程調整
+            <button
+              className={`btn btn-sm ${schedTab ? 'text-[var(--accent)]' : ''}`}
+              onClick={() => setSchedTab(schedTab ? null : (c.pendingHolds ?? 0) > 0 ? 'extract' : 'propose')}
+              aria-expanded={!!schedTab}
+              title="空き時間から候補日を提案して仮押さえ／やり取りから日時を読み取って登録・仮押さえの候補で確定"
+            >
+              📅 日程・予定{(c.pendingHolds ?? 0) > 0 && <span className="badge badge-orange ml-1">仮押さえ {c.pendingHolds}</span>}
             </button>
-            <button className="btn btn-sm" onClick={() => setShowExtract(!showExtract)} title="やり取りから日時を読み取ってカレンダーに登録します。仮押さえ中の候補があれば、その候補で確定できます">
-              🗓 会話から予定を登録{(c.pendingHolds ?? 0) > 0 && <span className="badge badge-orange ml-1">仮押さえ {c.pendingHolds}</span>}
-            </button>
-            <button className="btn btn-sm" onClick={() => setShowTasks(!showTasks)} title="やり取りから、頼まれたこと・約束したこと・返事を待っていることを読み取ってタスクにします">
-              ✅ 会話からタスクを登録
+            <button
+              className={`btn btn-sm ${taskTab ? 'text-[var(--accent)]' : ''}`}
+              onClick={() => setTaskTab(taskTab ? null : 'tasks')}
+              aria-expanded={!!taskTab}
+              title="やり取りから、頼まれたこと・約束したこと・返事を待っていることをタスクにします。日付がまだ決まらない宿題は備忘に残せます"
+            >
+              ✅ タスク・備忘
             </button>
             <button className="btn btn-sm" onClick={() => setShowStaffAsk(!showStaffAsk)} title="届いた連絡を引用して、Chatwork で担当事務局に確認します">
               💬 事務局に確認
             </button>
-            {c.channel === 'chatwork' && latestInbound && (
-              <button
-                className="btn btn-sm"
-                onClick={() => setShowClientConfirm(!showClientConfirm)}
-                title="事務局からの確認事項（いちばん新しい受信メッセージ）を、自分から依頼者に確認する文に書き直して、Gmail・LINE・Chatwork で依頼者に送ります。ほかのメッセージは、メッセージの下の「📨 依頼者に確認」から"
-              >
-                📨 依頼者に確認
-              </button>
-            )}
-            <button className="btn btn-sm" onClick={() => setShowMemo(!showMemo)} title="「和解の前に教えてほしい」のように、日付がまだ決まらない宿題を備忘に残します">
-              ⏳ 備忘
-            </button>
-            <button className="btn btn-sm" onClick={() => judge.mutate()} disabled={!text || judge.isPending}>
-              返信待ちになる？
-            </button>
             <label className="flex items-center gap-1 text-sm">
               <input type="checkbox" checked={createWaiting} onChange={(e) => setCreateWaiting(e.target.checked)} /> 送信後「返信待ち」タスクを作る
             </label>
+            <button
+              className="text-xs text-blue-700 hover:underline disabled:text-slate-400 disabled:no-underline"
+              onClick={() => judge.mutate()}
+              disabled={!text || judge.isPending}
+              title="本文から、相手の返事を待つことになるかを AI が判定して、チェックを入れ直します"
+            >
+              {judge.isPending ? '判定中…' : 'AI に判定させる'}
+            </button>
             {createWaiting && <WaitDeadlineSelect value={waitUntil} onChange={setWaitUntil} />}
             <div className="ml-auto flex items-center gap-1">
               <button className="btn btn-primary" onClick={() => send.mutate(undefined)} disabled={!text.trim() || send.isPending || uploads.uploading.length > 0}>
@@ -951,59 +955,93 @@ export default function Conversation() {
             </div>
           )}
           {msg && <div className={`fade-in text-sm ${msg.kind === 'ok' ? 'text-green-700' : 'text-red-600'}`}>{msg.text}</div>}
-          {showFiles && c.client && <FilePicker clientId={c.client.id} caseId={c.caseId ?? null} selectedPaths={driveFiles.map((f) => f.path)} onToggle={(f) => setDriveFiles(driveFiles.some((x) => x.path === f.path) ? driveFiles.filter((x) => x.path !== f.path) : [...driveFiles, f])} />}
-          {storedAtts.length > 0 && showFiles && (
-            <div className="text-xs">
-              <div className="label">受領済みの添付を送り返す</div>
-              <div className="flex flex-wrap gap-1">
-                {storedAtts.map((a) => (
-                  <label key={a.id} className="badge badge-gray cursor-pointer">
-                    <input type="checkbox" className="mr-1" checked={selectedAtt.includes(a.id)} onChange={(e) => setSelectedAtt(e.target.checked ? [...selectedAtt, a.id] : selectedAtt.filter((x) => x !== a.id))} />
-                    {a.filename}
-                  </label>
-                ))}
+          {showFiles && (
+            <div className="fade-in space-y-2 rounded-[10px] border border-slate-200 p-2 text-sm">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-semibold text-slate-600">添付するファイルを選ぶ</span>
+                <LocalFileButton uploads={uploads} disabled={send.isPending} />
+                <span className="text-xs text-slate-400">パソコンのファイルは、この欄のどこにドラッグ＆ドロップしても添付できます</span>
+                <button type="button" className="ml-auto text-xs text-slate-500 hover:text-slate-800" onClick={() => setShowFiles(false)}>
+                  閉じる
+                </button>
               </div>
+              {c.client ? (
+                <div>
+                  <div className="label">依頼者のフォルダから</div>
+                  <FilePicker clientId={c.client.id} caseId={c.caseId ?? null} selectedPaths={driveFiles.map((f) => f.path)} onToggle={(f) => setDriveFiles(driveFiles.some((x) => x.path === f.path) ? driveFiles.filter((x) => x.path !== f.path) : [...driveFiles, f])} />
+                </div>
+              ) : (
+                <div className="text-xs text-slate-400">依頼者に紐付けると、依頼者のフォルダからも選べます</div>
+              )}
+              {storedAtts.length > 0 && (
+                <div className="text-xs">
+                  <div className="label">この会話で受け取ったファイルを送り返す</div>
+                  <div className="flex flex-wrap gap-1">
+                    {storedAtts.map((a) => (
+                      <label key={a.id} className="badge badge-gray cursor-pointer">
+                        <input type="checkbox" className="mr-1" checked={selectedAtt.includes(a.id)} onChange={(e) => setSelectedAtt(e.target.checked ? [...selectedAtt, a.id] : selectedAtt.filter((x) => x !== a.id))} />
+                        {a.filename}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
-          {showMemo && <MemoPanel key={latestInbound?.id ?? 0} messageId={latestInbound?.id ?? null} conversationId={c.id} clientId={c.clientId} onClose={() => setShowMemo(false)} />}
-          {showClientConfirm && latestInbound && (
-            <ClientConfirmPanel
-              key={latestInbound.id}
-              messageId={latestInbound.id}
-              onClose={() => setShowClientConfirm(false)}
-              onSent={invalidate}
-            />
-          )}
           {showStaffAsk && <StaffAskPanel base={`/conversations/${c.id}`} draftKey={`conv:${c.id}`} onClose={() => setShowStaffAsk(false)} onSent={invalidate} />}
-          {showSchedule && <SchedulePanel conversationId={c.id} onText={(t) => setText((prev) => (prev ? `${prev}\n\n${t}` : t))} onDone={invalidate} />}
-          {showTasks && (
-            <ConversationTaskPanel
-              conversationId={c.id}
-              onClose={() => setShowTasks(false)}
-              onDone={(text) => {
-                setShowTasks(false);
-                setMsg({ kind: 'ok', text });
-                invalidate();
-              }}
-            />
+          {taskTab && (
+            <div className="fade-in space-y-2">
+              <PanelTabs
+                tabs={[
+                  { key: 'tasks', label: '✅ タスクを登録', hint: 'やり取りから、頼まれたこと・返事待ちのことをタスクにします' },
+                  { key: 'memo', label: '⏳ 時期未定の備忘', hint: '「和解の前に教えてほしい」のように、日付がまだ決まらない宿題を残します' },
+                ]}
+                value={taskTab}
+                onChange={(v) => setTaskTab(v as 'tasks' | 'memo')}
+                onClose={() => setTaskTab(null)}
+              />
+              {taskTab === 'tasks' && (
+                <ConversationTaskPanel
+                  conversationId={c.id}
+                  onClose={() => setTaskTab(null)}
+                  onDone={(text) => {
+                    setTaskTab(null);
+                    setMsg({ kind: 'ok', text });
+                    invalidate();
+                  }}
+                />
+              )}
+              {taskTab === 'memo' && <MemoPanel key={latestInbound?.id ?? 0} messageId={latestInbound?.id ?? null} conversationId={c.id} clientId={c.clientId} onClose={() => setTaskTab(null)} />}
+            </div>
           )}
-          {showExtract && (
-            <ExtractSchedulePanel conversationId={c.id} cases={c.cases} onText={(t) => setText((prev) => (prev ? `${prev}\n\n${t}` : t))} onDone={invalidate} />
+          {schedTab && (
+            <div className="fade-in space-y-2">
+              <PanelTabs
+                tabs={[
+                  { key: 'extract', label: `🗓 やり取りから登録・確定${(c.pendingHolds ?? 0) > 0 ? `（仮押さえ ${c.pendingHolds}）` : ''}`, hint: 'やり取りから日時を読み取って予定に登録します。仮押さえ中の候補があれば、その候補で確定できます' },
+                  { key: 'propose', label: '📅 空き時間から候補日を提案', hint: 'カレンダーの空き時間から候補日を探して仮押さえし、提案の文を本文に入れます' },
+                ]}
+                value={schedTab}
+                onChange={(v) => setSchedTab(v as 'extract' | 'propose')}
+                onClose={() => setSchedTab(null)}
+              />
+              {schedTab === 'extract' && <ExtractSchedulePanel conversationId={c.id} cases={c.cases} onText={(t) => setText((prev) => (prev ? `${prev}\n\n${t}` : t))} onDone={invalidate} />}
+              {schedTab === 'propose' && (
+                <SchedulePanel
+                  conversationId={c.id}
+                  onText={(t) => setText((prev) => (prev ? `${prev}\n\n${t}` : t))}
+                  onDone={() => {
+                    invalidate();
+                    setMsg({ kind: 'ok', text: '候補日を仮押さえして、提案の文を本文に入れました。確定・候補の変更は「やり取りから登録・確定」から行えます' });
+                  }}
+                />
+              )}
+            </div>
           )}
         </FileDropZone>
       </div>
 
       <aside className="space-y-4">
-        {sessions.data && sessions.data.filter((s) => s.state !== 'cancelled').length > 0 && (
-          <div className="card">
-            <h3 className="mb-2 text-sm font-semibold">日程調整</h3>
-            {sessions.data
-              .filter((s) => s.state !== 'cancelled')
-              .map((s) => (
-                <SessionCard key={s.id} s={s} spotlight={s.id === spotlightSession} onText={(t) => setText((prev) => (prev ? `${prev}\n\n${t}` : t))} onDone={invalidate} />
-              ))}
-          </div>
-        )}
         {c.cases.length > 0 && (
           <div className="card">
             <h3 className="mb-2 text-sm font-semibold">事件</h3>
@@ -1043,26 +1081,7 @@ export default function Conversation() {
             </ul>
           </div>
         )}
-        {(c.memos?.length ?? 0) > 0 && (
-          <div className="card">
-            <h3 className="mb-2 text-sm font-semibold">時期未定の備忘</h3>
-            <ul className="space-y-1.5 text-xs">
-              {c.memos!.map((m) => (
-                <li key={m.id}>
-                  <div className="font-medium">{m.title}</div>
-                  <div className="mt-0.5 flex flex-wrap items-center gap-1">
-                    <MemoBadge trigger={m.trigger} reviewAt={m.reviewAt} />
-                    {m.reviewAt && <span className="text-slate-400">見直し {fmtDeadline(m.reviewAt)}</span>}
-                  </div>
-                </li>
-              ))}
-            </ul>
-            <Link to="/tasks" className="mt-1 inline-block text-xs text-blue-700 hover:underline">
-              タスク一覧で締切を決める・完了にする
-            </Link>
-          </div>
-        )}
-        <TaskMini conversationId={c.id} clientId={c.clientId} />
+        <TaskMini conversationId={c.id} clientId={c.clientId} memos={c.memos ?? []} />
       </aside>
     </div>
   );
@@ -1389,70 +1408,8 @@ function SchedulePanel({ conversationId, onText, onDone }: { conversationId: num
       </div>
       {err && <div className="fade-in mt-2 text-red-600">{err}</div>}
       <div className="mt-2 text-xs text-slate-500">
-        Google カレンダーの空きから候補を出し、「{'{姓} {内容} 仮'}」として仮押さえします。外出予定の前後は移動時間を、予定同士の間は設定の間隔を空けます。候補文は返信欄に追加されます。
+        カレンダーの空きから候補を出し、「{'{姓} {内容} 仮'}」として仮押さえします（Google 未接続ならアプリ内の予定で空きを探します）。外出予定の前後は移動時間を、予定同士の間は設定の間隔を空けます。候補文は返信欄に追加され、確定・候補の変更は「やり取りから登録・確定」から行えます。
       </div>
-    </div>
-  );
-}
-
-function SessionCard({ s, onText, onDone, spotlight }: { s: Session; onText: (t: string) => void; onDone: () => void; spotlight?: boolean }) {
-  const [chosen, setChosen] = useState(s.candidates[0]?.startAt ?? '');
-  const [custom, setCustom] = useState('');
-  const [zoom, setZoom] = useState(s.kind === 'WEB');
-  const [err, setErr] = useState('');
-  const confirm = useMutation({
-    mutationFn: () => api.post<{ text: string }>('/scheduling/confirm', { sessionId: s.id, startAt: custom ? fromLocalInput(custom) : chosen, durationMinutes: 60, createZoom: zoom }),
-    onSuccess: (r) => {
-      onText(`では、${r.text}\nでお願いいたします。`);
-      onDone();
-    },
-    onError: (e) => setErr((e as Error).message),
-  });
-  const cancel = useMutation({ mutationFn: () => api.post(`/scheduling/${s.id}/cancel`), onSuccess: onDone });
-  return (
-    <div id={`session-${s.id}`} className={`mb-2 rounded border border-slate-200 p-2 text-xs ${spotlight ? 'spotlight' : ''}`}>
-      <div className="flex items-center justify-between">
-        <span className="font-semibold">
-          {s.kind} <span className="badge badge-gray">{s.state === 'proposing' ? '調整中' : s.state === 'confirmed' ? '確定' : s.state}</span>
-        </span>
-        {s.state === 'proposing' && (
-          <button className="text-slate-500 hover:underline" onClick={() => cancel.mutate()}>
-            取消
-          </button>
-        )}
-      </div>
-      {s.state === 'proposing' && (
-        <div className="mt-1 space-y-1">
-          {s.candidates.map((c) => (
-            <label key={c.startAt} className="flex items-center gap-1">
-              <input type="radio" checked={!custom && chosen === c.startAt} onChange={() => setChosen(c.startAt)} /> {fmtDateTime(c.startAt)}
-            </label>
-          ))}
-          <div className="flex items-center gap-1">
-            <span>別日時:</span>
-            <input type="datetime-local" className="input" value={custom} onChange={(e) => setCustom(e.target.value)} />
-          </div>
-          <label className="flex items-center gap-1">
-            <input type="checkbox" checked={zoom} onChange={(e) => setZoom(e.target.checked)} /> Zoom を発行
-          </label>
-          <button className="btn btn-primary btn-sm" onClick={() => confirm.mutate()} disabled={confirm.isPending}>
-            確定（他の仮押さえを削除）
-          </button>
-          {err && <div className="fade-in text-red-600">{err}</div>}
-        </div>
-      )}
-      {s.state === 'confirmed' && (
-        <div className="mt-1">
-          {fmtDateTime(s.confirmedStartAt)}
-          {s.zoom && (
-            <div className="mt-1 break-all text-slate-600">
-              Zoom: {s.zoom.joinUrl}
-              <br />
-              パスコード: {s.zoom.password}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -1460,7 +1417,7 @@ function SessionCard({ s, onText, onDone, spotlight }: { s: Session; onText: (t:
 /** 狭い欄に出す短い状態名 */
 const SHORT_TASK_STATUS: Record<string, string> = { open: '対応中', drafted: '起案・検討完了', waiting_client: '依頼者待ち', waiting_other: '相手方待ち', waiting_staff: '事務局待ち' };
 
-function TaskMini({ conversationId, clientId }: { conversationId: number; clientId: number | null }) {
+function TaskMini({ conversationId, clientId, memos }: { conversationId: number; clientId: number | null; memos: { id: number; title: string; trigger: string; reviewAt: string | null }[] }) {
   const qc = useQueryClient();
   const tasks = useQuery({ queryKey: ['tasks', 'conv', conversationId], queryFn: () => api.get<{ id: number; title: string; note: string | null; status: string; followUpAt: string | null; dueAt: string | null; chatworkTaskId: number | null }[]>(`/tasks?conversationId=${conversationId}&status=active`) });
   const [title, setTitle] = useState('');
@@ -1520,6 +1477,25 @@ function TaskMini({ conversationId, clientId }: { conversationId: number; client
         )}
         {tasks.data?.length === 0 && <li className="text-slate-500">なし</li>}
       </ul>
+      {memos.length > 0 && (
+        <div className="mb-2 border-t border-slate-100 pt-2">
+          <h4 className="mb-1 text-xs font-semibold text-slate-600">時期未定の備忘（タスクの数には入りません）</h4>
+          <ul className="space-y-1.5 text-xs">
+            {memos.map((m) => (
+              <li key={m.id}>
+                <div className="font-medium">{m.title}</div>
+                <div className="mt-0.5 flex flex-wrap items-center gap-1">
+                  <MemoBadge trigger={m.trigger} reviewAt={m.reviewAt} />
+                  {m.reviewAt && <span className="text-slate-400">見直し {fmtDeadline(m.reviewAt)}</span>}
+                </div>
+              </li>
+            ))}
+          </ul>
+          <Link to="/tasks" className="mt-1 inline-block text-xs text-blue-700 hover:underline">
+            タスク一覧で締切を決める・完了にする
+          </Link>
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-1">
         <input className="input min-w-0 flex-1" placeholder="タスクを追加" value={title} onChange={(e) => setTitle(e.target.value)} />
         <select className="input w-auto" value={status} onChange={(e) => setStatus(e.target.value)}>
@@ -2403,5 +2379,29 @@ function ConversationPersonPicker({
         <option value="new">{corporate ? '＋ 新しい担当者として登録…' : '＋ 窓口の方（ご家族など）として登録…'}</option>
       </select>
     </label>
+  );
+}
+
+/** ひとつのボタンから開く欄の中で、似た機能を切り替えるタブ */
+function PanelTabs({ tabs, value, onChange, onClose }: { tabs: { key: string; label: string; hint: string }[]; value: string; onChange: (v: string) => void; onClose: () => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1 border-b border-slate-200 text-sm" role="tablist">
+      {tabs.map((t) => (
+        <button
+          key={t.key}
+          type="button"
+          role="tab"
+          aria-selected={value === t.key}
+          className={`-mb-px border-b-2 px-2.5 py-1.5 ${value === t.key ? 'border-[var(--accent)] font-semibold text-[var(--accent)]' : 'border-transparent text-slate-600 hover:text-slate-900'}`}
+          onClick={() => onChange(t.key)}
+          title={t.hint}
+        >
+          {t.label}
+        </button>
+      ))}
+      <button type="button" className="ml-auto px-2 text-xs text-slate-500 hover:text-slate-800" onClick={onClose}>
+        閉じる
+      </button>
+    </div>
   );
 }

@@ -5,7 +5,7 @@ import { EVENT_KIND_LABEL, type EventKind, isAllDayRange } from '@lcm/shared';
 import { api } from '../lib/api';
 import { PendingHoldsPanel } from '../lib/PendingHolds';
 import { EventNoticePanel } from '../lib/EventNotice';
-import { HoldForm, HoldLocationEditor, HoldAddCandidates, HoldCandidateEdit, WindowConfirm, isHoldWindow, type RescheduleTarget } from '../lib/HoldForm';
+import { HoldForm, WindowConfirm, isHoldWindow, type RescheduleTarget } from '../lib/HoldForm';
 import { EventForm } from '../lib/EventForm';
 
 interface Ev {
@@ -105,10 +105,6 @@ export default function Calendar() {
   const [editing, setEditing] = useState<Ev | 'new' | null>(null);
   const [holdOpen, setHoldOpen] = useState(false);
   const [rescheduling, setRescheduling] = useState<RescheduleTarget | null>(null);
-  // 候補を足すフォームを開いている予定（その予定の行の下に出す）
-  const [addingAt, setAddingAt] = useState<number | null>(null);
-  // 日時を変えている仮押さえの候補（予定の ID）
-  const [movingAt, setMovingAt] = useState<number | null>(null);
   // 枠で押さえた候補を確定する時間を選んでいる予定
   const [windowFor, setWindowFor] = useState<number | null>(null);
   // 依頼者に報告している予定（行の下に出す）
@@ -160,22 +156,6 @@ export default function Calendar() {
       invalidate();
       setMsg({ kind: 'ok', text: '確定の予定にしました' });
       setConfirmed({ id: r.id, open: false });
-    },
-    onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
-  });
-  const cancelHold = useMutation({
-    mutationFn: (sessionId: number) => api.post(`/calendar/holds/${sessionId}/cancel`),
-    onSuccess: () => {
-      invalidate();
-      setMsg({ kind: 'ok', text: '仮押さえをすべて取り消しました' });
-    },
-    onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
-  });
-  const cancelOne = useMutation({
-    mutationFn: (v: { sessionId: number; eventId: number }) => api.post<{ remaining: number }>(`/calendar/holds/${v.sessionId}/candidates/${v.eventId}/cancel`),
-    onSuccess: (r) => {
-      invalidate();
-      setMsg({ kind: 'ok', text: r.remaining ? `この候補の仮押さえを取り消しました（残り ${r.remaining} 件）` : '最後の候補だったので、日程調整を取り消しました' });
     },
     onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
   });
@@ -347,40 +327,11 @@ export default function Calendar() {
                           </button>
                           <button
                             className="btn btn-sm"
-                            disabled={cancelOne.isPending}
-                            title="この候補だけ仮押さえを取り消します（ほかの候補は残ります）"
-                            onClick={() => {
-                              if (window.confirm(`この候補の仮押さえだけを取り消しますか？${e.sessionCandidates <= 1 ? '\n最後の候補なので、日程調整も取り消されます。' : ''}`)) cancelOne.mutate({ sessionId: e.sessionId!, eventId: e.id });
-                            }}
+                            onClick={() => document.getElementById(`pending-hold-${e.sessionId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+                            title="候補の日時変更・追加・取消、場所の変更は、上の「調整中の日程」でまとめて行えます"
                           >
-                            この候補を取消
+                            候補を変更・取消 ↑
                           </button>
-                          <button className="btn btn-sm" onClick={() => setMovingAt(movingAt === e.id ? null : e.id)} title="この候補の日時だけを変えます（ほかの候補はそのまま）">
-                            日時を変更
-                          </button>
-                          <button
-                            className="btn btn-sm"
-                            disabled={cancelHold.isPending}
-                            onClick={() => {
-                              if (window.confirm(`この日程調整の仮押さえ ${e.sessionCandidates} 件をすべて取り消しますか？`)) cancelHold.mutate(e.sessionId!);
-                            }}
-                            title="候補をすべて取り消す"
-                          >
-                            全候補を取消
-                          </button>
-                          <button className="btn btn-sm" onClick={() => setAddingAt(addingAt === e.id ? null : e.id)} title="この日程調整に候補日時を足します">
-                            候補を追加
-                          </button>
-                          <HoldLocationEditor
-                            sessionId={e.sessionId}
-                            location={e.location}
-                            compact
-                            onSaved={(text) => {
-                              invalidate();
-                              setMsg({ kind: 'ok', text });
-                            }}
-                            onError={(text) => setMsg({ kind: 'err', text })}
-                          />
                         </>
                       )}
                       {!e.sessionId && (e.kind === 'hold' || e.status === 'tentative') && (
@@ -420,6 +371,7 @@ export default function Calendar() {
                       <button className="btn btn-sm" onClick={() => setEditing(e)}>
                         編集
                       </button>
+                      {!e.sessionId && (
                       <button
                         className="btn btn-sm text-red-600"
                         disabled={remove.isPending}
@@ -429,6 +381,7 @@ export default function Calendar() {
                       >
                         削除
                       </button>
+                      )}
                     </div>
                   </div>
                   {(e.clientId || e.caseId || e.location) && (
@@ -465,38 +418,6 @@ export default function Calendar() {
                   {reportFor === e.id && (
                     <div className="md:pl-[6.5rem]">
                       <EventNoticePanel eventId={e.id} onClose={() => setReportFor(null)} />
-                    </div>
-                  )}
-                  {movingAt === e.id && e.sessionId && (
-                    <div className="md:pl-[6.5rem]">
-                      <HoldCandidateEdit
-                        sessionId={e.sessionId}
-                        candidate={{ eventId: e.id, startAt: e.startAt, endAt: e.endAt }}
-                        minutes={e.sessionDurationMinutes ?? Math.round((new Date(e.endAt).getTime() - new Date(e.startAt).getTime()) / 60_000)}
-                        onClose={() => setMovingAt(null)}
-                        onSaved={(text) => {
-                          setMovingAt(null);
-                          invalidate();
-                          setMsg({ kind: 'ok', text });
-                        }}
-                        onError={(text) => setMsg({ kind: 'err', text })}
-                      />
-                    </div>
-                  )}
-                  {addingAt === e.id && e.sessionId && (
-                    <div className="md:pl-[6.5rem]">
-                      <HoldAddCandidates
-                        sessionId={e.sessionId}
-                        after={(list.data ?? []).filter((x) => x.sessionId === e.sessionId).reduce((m, x) => (x.startAt > m ? x.startAt : m), e.startAt)}
-                        minutes={Math.round((new Date(e.endAt).getTime() - new Date(e.startAt).getTime()) / 60_000)}
-                        onClose={() => setAddingAt(null)}
-                        onSaved={(text) => {
-                          setAddingAt(null);
-                          invalidate();
-                          setMsg({ kind: 'ok', text });
-                        }}
-                        onError={(text) => setMsg({ kind: 'err', text })}
-                      />
                     </div>
                   )}
                 </li>

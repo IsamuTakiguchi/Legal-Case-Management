@@ -81,7 +81,7 @@ export function PendingHoldsPanel({ onMsg, onConfirmed }: { onMsg: (m: { kind: '
           <div className="text-xs text-slate-500">相手の返事が来たら、ここで候補を選んで確定できます（ほかの候補の仮押さえは消えます）。候補の日時を変えたり、足したり、取り消したりもできます。</div>
           <ul className="space-y-2">
             {sets.map((s) => (
-              <li key={s.sessionId} className="rounded-md border border-slate-200 p-2">
+              <li key={s.sessionId} id={`pending-hold-${s.sessionId}`} className="scroll-mt-4 rounded-md border border-slate-200 p-2">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="badge badge-gray">{s.rescheduleOf ? '日程変更' : s.kind}</span>
                   <span className="font-medium">{s.title}</span>
