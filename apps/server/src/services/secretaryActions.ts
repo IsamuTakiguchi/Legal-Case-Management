@@ -25,7 +25,7 @@ import { createCase, updateCase, getCase, listCaseTypes } from './cases.js';
 import { createClientRecord, updateClientRecord } from './clientWrite.js';
 import { createContact, updateContact, getContact, listContacts } from './contacts.js';
 import { updateTask, deleteTask } from './tasks.js';
-import { editCalendarEvent, removeCalendarEvent } from './court.js';
+import { editCalendarEvent, removeCalendarEvent, confirmHold, cancelHoldSet, listPendingHoldSets } from './court.js';
 import { listStaff, createStaff, updateStaff } from './staff.js';
 import { clientSendTargets, contactSendTargets, staffSendTargets, startClientConversation, startContactConversation, startRoomConversation } from './newMessage.js';
 import { sendToConversation } from './send.js';
@@ -159,6 +159,22 @@ export const eventUpdateSchema = z.object({
 
 export const eventDeleteSchema = z.object({ type: z.literal('event_delete'), summary, eventId: z.number().int() });
 
+export const holdConfirmSchema = z.object({
+  type: z.literal('hold_confirm'),
+  summary,
+  sessionId: z.number().int().describe('仮押さえ（日程調整）の ID（find_holds で確かめたもの）'),
+  eventId: z.number().int().describe('確定する候補の予定 ID（find_holds の候補の eventId）'),
+  startAt: isoAt.optional().describe('枠（13:00〜17:00 の中で 60 分など）で押さえた候補を、その中の時間で確定するときの開始'),
+  endAt: isoAt.optional().describe('同じく終了'),
+  web: z.boolean().optional().describe('WEB 会議にするなら true、来所なら false。言われていなければ書かない（仮押さえのときの設定のまま）'),
+});
+
+export const holdCancelSchema = z.object({
+  type: z.literal('hold_cancel'),
+  summary,
+  sessionId: z.number().int().describe('取り消す仮押さえ（日程調整）の ID。候補をすべて消す'),
+});
+
 export const messageSendSchema = z.object({
   type: z.literal('message_send'),
   summary,
@@ -211,6 +227,8 @@ export const extendedActionSchemas = [
   taskDeleteSchema,
   eventUpdateSchema,
   eventDeleteSchema,
+  holdConfirmSchema,
+  holdCancelSchema,
   messageSendSchema,
 ] as const;
 
@@ -226,6 +244,8 @@ export type ExtendedAction =
   | z.infer<typeof taskDeleteSchema>
   | z.infer<typeof eventUpdateSchema>
   | z.infer<typeof eventDeleteSchema>
+  | z.infer<typeof holdConfirmSchema>
+  | z.infer<typeof holdCancelSchema>
   | z.infer<typeof messageSendSchema>;
 
 export const EXTENDED_TYPES = extendedActionSchemas.map((s) => s.shape.type.value) as ExtendedAction['type'][];
@@ -380,6 +400,20 @@ export function previewExtended(a: ExtendedAction): { label: string; changes: Ch
       const e = d.select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, a.eventId)).get();
       return { label: `予定の削除: ${e ? `${e.title}（${formatJaEventTime(e.startAt, e.endAt)}）` : `予定 ${a.eventId}（見つかりません）`}`, changes: [] };
     }
+    case 'hold_confirm': {
+      const set = listPendingHoldSets().find((h) => h.sessionId === a.sessionId);
+      const e = d.select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, a.eventId)).get();
+      if (!set || !e) return { label: `仮押さえの確定（日程調整 ${a.sessionId} が見つからないか、すでに確定・取消済み）`, changes: [] };
+      const when = a.startAt && a.endAt ? formatJaEventTime(a.startAt, a.endAt) : formatJaEventTime(e.startAt, e.endAt);
+      const others = set.candidates.filter((c) => c.eventId !== a.eventId).map((c) => formatJaEventTime(c.startAt, c.endAt));
+      if (a.web !== undefined) push('web', '方法', set.web ? 'WEB 会議' : '来所', a.web ? 'WEB 会議' : '来所');
+      return { label: `仮押さえを確定: ${set.title}（${when}）${others.length ? ` ／ ほかの候補（${others.join('、')}）は消します` : ''}`, changes: ch };
+    }
+    case 'hold_cancel': {
+      const set = listPendingHoldSets().find((h) => h.sessionId === a.sessionId);
+      if (!set) return { label: `仮押さえの取消（日程調整 ${a.sessionId} が見つからないか、すでに確定・取消済み）`, changes: [] };
+      return { label: `仮押さえを取消: ${set.title}（候補 ${set.candidates.map((c) => formatJaEventTime(c.startAt, c.endAt)).join('、')}）`, changes: [] };
+    }
     case 'message_send': {
       const who =
         a.to === 'client'
@@ -496,7 +530,17 @@ export async function applyExtended(a: ExtendedAction): Promise<{ label: string;
       return { label };
     }
     case 'event_update': {
-      if (!d.select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, a.eventId)).get()) throw new Error('予定が見つかりません');
+      const ev = d.select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, a.eventId)).get();
+      if (!ev) throw new Error('予定が見つかりません');
+      // 日程調整の候補（仮押さえ）を「確定」にするなら、その候補で確定する（ほかの候補を消す）
+      const holdSet = a.tentative === false ? listPendingHoldSets().find((h) => h.candidates.some((c) => c.eventId === a.eventId)) : undefined;
+      if (holdSet) {
+        const time = a.startAt && a.endAt ? { startAt: a.startAt, endAt: a.endAt } : null;
+        await confirmHold(holdSet.sessionId, a.eventId, { time });
+        const rest = { ...(a.title !== undefined ? { title: a.title } : {}), ...(a.kind !== undefined && a.kind !== 'hold' ? { kind: a.kind } : {}), ...(a.location !== undefined ? { location: a.location } : {}) };
+        if (Object.keys(rest).length) await editCalendarEvent(a.eventId, rest);
+        return { label: `${label}（日程調整のほかの候補は消しました）`, link: `/calendar?focus=${a.eventId}` };
+      }
       await editCalendarEvent(a.eventId, {
         ...(a.title !== undefined ? { title: a.title } : {}),
         ...(a.startAt !== undefined ? { startAt: a.startAt } : {}),
@@ -510,6 +554,16 @@ export async function applyExtended(a: ExtendedAction): Promise<{ label: string;
     case 'event_delete': {
       if (!d.select().from(schema.calendarEvents).where(eq(schema.calendarEvents.id, a.eventId)).get()) throw new Error('予定が見つかりません');
       await removeCalendarEvent(a.eventId);
+      return { label };
+    }
+    case 'hold_confirm': {
+      const time = a.startAt && a.endAt ? { startAt: a.startAt, endAt: a.endAt } : null;
+      const r = await confirmHold(a.sessionId, a.eventId, { time, ...(a.web !== undefined ? { web: a.web } : {}) });
+      return { label: `${label}${r.webText ? `（${r.webText.split('\n')[0]}）` : ''}`, link: `/calendar?focus=${a.eventId}` };
+    }
+    case 'hold_cancel': {
+      if (!listPendingHoldSets().some((h) => h.sessionId === a.sessionId)) throw new Error('この仮押さえは見つからないか、すでに確定・取消済みです');
+      await cancelHoldSet(a.sessionId);
       return { label };
     }
     case 'message_send': {
@@ -556,6 +610,26 @@ const shorten = (s: string | null | undefined, n = 80) => (s ?? '').replace(/\s+
 
 export function extendedReadTools(): AgentTool[] {
   return [
+    agentTool({
+      name: 'find_holds',
+      description:
+        '調整中の仮押さえ（日程調整）と、その候補（予定 ID・日時）を返します。依頼者・事件で絞れます。「〜で確定」「〜に決まった」と言われたら、予定を新しく入れる前に必ずこれで仮押さえを確かめます。',
+      schema: z.object({ clientId: z.number().int().optional(), caseId: z.number().int().optional() }),
+      run: (i) =>
+        listPendingHoldSets()
+          .filter((h) => (!i.clientId || h.clientId === i.clientId) && (!i.caseId || h.caseId === i.caseId || h.caseId === null))
+          .map((h) => ({
+            sessionId: h.sessionId,
+            title: h.title,
+            client: h.clientName,
+            clientId: h.clientId,
+            case: h.caseTitle,
+            caseId: h.caseId,
+            web: h.web,
+            durationMinutes: h.durationMinutes,
+            candidates: h.candidates.filter((c) => c.eventId).map((c) => ({ eventId: c.eventId, when: formatJaEventTime(c.startAt, c.endAt), startAt: c.startAt, endAt: c.endAt })),
+          })),
+    }),
     agentTool({
       name: 'get_case',
       description: '事件の詳細（区分・段階・類型・裁判所・事件番号・担当事務局・方針・関係者とその連絡先・未了のタスク・これからの予定）を返します。事件を変えるとき・関係者に送るときは、まずこれで今の内容を確かめます。',

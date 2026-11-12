@@ -219,6 +219,49 @@ describe('AI 秘書: 開いた画面', () => {
   });
 });
 
+describe('AI 秘書: 仮押さえの確定・取消', () => {
+  const day = (n: number, h: number) => new Date(Math.floor(Date.now() / 86400_000) * 86400_000 + n * 86400_000 + h * 3600_000).toISOString();
+  async function holdSet(name: string) {
+    const { createHoldSet } = await import('../services/court.js');
+    const client = db().insert(schema.clients).values({ name }).returning().get();
+    const kase = db().insert(schema.cases).values({ clientId: client.id, title: '自己破産', caseType: 'general_civil' }).returning().get();
+    const r = await createHoldSet({ title: '管財人面談', kind: 'meeting', clientId: client.id, caseId: kase.id, slots: [{ startAt: day(10, 4), endAt: day(10, 5) }, { startAt: day(11, 4), endAt: day(11, 5) }] });
+    return { client, kase, ...r };
+  }
+  const alive = (ids: number[]) => db().select().from(schema.calendarEvents).all().filter((e) => ids.includes(e.id));
+
+  it('find_holds で候補を確かめ、hold_confirm でその候補を確定するとほかの候補は消える', async () => {
+    const h = await holdSet('上村 正人');
+    const tool = extendedReadTools().find((t) => t.name === 'find_holds')!;
+    const found = (await tool.run({ clientId: h.client.id })) as { sessionId: number; candidates: { eventId: number }[] }[];
+    expect(found).toHaveLength(1);
+    expect(found[0]!.candidates.map((c) => c.eventId)).toEqual(h.events.map((e) => e.id));
+    expect(previewAction(parse({ type: 'hold_confirm', summary: 'x', sessionId: h.sessionId, eventId: h.events[1]!.id })).label).toContain('ほかの候補');
+    const r = await applySecretaryActions([parse({ type: 'hold_confirm', summary: 'x', sessionId: h.sessionId, eventId: h.events[1]!.id })]);
+    expect(r.applied[0]!.ok).toBe(true);
+    const left = alive(h.events.map((e) => e.id));
+    expect(left.map((e) => e.id)).toEqual([h.events[1]!.id]);
+    expect(left[0]).toMatchObject({ status: 'confirmed', title: '上村 管財人面談' });
+  });
+
+  it('仮押さえの候補を event_update で「確定」にしても、ほかの候補を消す', async () => {
+    const h = await holdSet('上村 次郎');
+    await applySecretaryActions([parse({ type: 'event_update', summary: 'x', eventId: h.events[0]!.id, tentative: false })]);
+    const left = alive(h.events.map((e) => e.id));
+    expect(left.map((e) => e.id)).toEqual([h.events[0]!.id]);
+    expect(left[0]!.status).toBe('confirmed');
+  });
+
+  it('事務局が別に予定を入れていたら、残った仮押さえは hold_cancel で消せる', async () => {
+    const h = await holdSet('上村 三郎');
+    const r = await applySecretaryActions([parse({ type: 'hold_cancel', summary: 'x', sessionId: h.sessionId })]);
+    expect(r.applied[0]!.ok).toBe(true);
+    expect(alive(h.events.map((e) => e.id))).toHaveLength(0);
+    const again = await applySecretaryActions([parse({ type: 'hold_cancel', summary: 'x', sessionId: h.sessionId })]);
+    expect(again.applied[0]!.ok).toBe(false);
+  });
+});
+
 describe('AI 秘書: 調べる道具', () => {
   it('get_case は担当事務局・関係者・未了のタスクを返し、list_staff_and_types は事務局の ID を返す', async () => {
     const s = seed();

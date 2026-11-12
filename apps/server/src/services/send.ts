@@ -229,8 +229,12 @@ async function tryShareLink(f: OutboundFile, stored: StoredRef | null, client: {
     if (stored) return await st.shareLink(stored, expires);
     if (client) {
       const { caseFolder, caseOfClient } = await import('./attachments.js');
+      // OneDrive 側で別の区分へ移されたフォルダを見つけてから置く（元の区分に同じフォルダを作り直さないため）
+      const { syncClientFolderName } = await import('./clientFolders.js');
+      await syncClientFolderName(client.id).catch(() => null);
+      const fresh = db().select().from(schema.clients).where(eq(schema.clients.id, client.id)).get() ?? client;
       // 会話に事件が付いていれば、その事件のフォルダに置く
-      const folder = `${caseFolder(client, caseOfClient(client.id, caseId))}/送付ファイル`;
+      const folder = `${caseFolder(fresh, caseOfClient(fresh.id, caseId))}/送付ファイル`;
       const stored = await st.put(folder, f.filename, f.data);
       return await st.shareLink({ itemId: stored.itemId, path: stored.path }, expires);
     }

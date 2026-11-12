@@ -578,3 +578,29 @@ export const pushSubscriptions = sqliteTable('push_subscriptions', {
   lastError: text('last_error'),
   failCount: integer('fail_count').notNull().default(0),
 });
+
+/** AI 秘書とのやり取り（1 回の頼みごと＝1 行。threadId でひと続きの会話にまとめる） */
+export const secretaryTurns = sqliteTable(
+  'secretary_turns',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    /** ひと続きの会話の ID（画面で「最初から」にすると変わる） */
+    threadId: text('thread_id').notNull(),
+    /** 頼んだ文 */
+    request: text('request').notNull(),
+    /** 秘書の返事 */
+    reply: text('reply').notNull().default(''),
+    /** 開いていた画面（依頼者・事件・会話） */
+    context: text('context', { mode: 'json' }).$type<{ clientId?: number; caseId?: number; conversationId?: number } | null>(),
+    /** 秘書が出した案（登録前） */
+    actions: text('actions', { mode: 'json' }).$type<unknown[]>().notNull().default([]),
+    /** 案の説明（画面に出す一行） */
+    previews: text('previews', { mode: 'json' }).$type<unknown[]>().notNull().default([]),
+    questions: text('questions', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    /** 登録した結果（登録していなければ null） */
+    applied: text('applied', { mode: 'json' }).$type<unknown[] | null>(),
+    appliedAt: text('applied_at'),
+    createdAt: text('created_at').notNull().default(now()),
+  },
+  (t) => [index('secretary_thread').on(t.threadId, t.createdAt), index('secretary_created').on(t.createdAt)],
+);

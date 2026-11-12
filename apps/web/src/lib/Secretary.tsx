@@ -92,6 +92,8 @@ type ExtendedType =
   | 'task_delete'
   | 'event_update'
   | 'event_delete'
+  | 'hold_confirm'
+  | 'hold_cancel'
   | 'message_send';
 export type Action = NoteAction | EventAction | TaskAction | ExtendedAction;
 
@@ -125,6 +127,51 @@ interface Plan {
   used: string[];
 }
 
+/** 画面に出すやり取りの 1 行（返事の下に、登録したものも出す） */
+interface Turn {
+  role: 'user' | 'assistant';
+  text: string;
+  at?: string;
+  applied?: Applied[] | null;
+}
+
+/** サーバーに残っているやり取り（頼みごと 1 回分） */
+interface StoredTurn {
+  id: number;
+  threadId: string;
+  request: string;
+  reply: string;
+  actions: Action[];
+  previews: Preview[];
+  questions: string[];
+  applied: Applied[] | null;
+  createdAt: string;
+}
+
+function turnsOf(rows: StoredTurn[]): Turn[] {
+  return rows.flatMap((r) => [
+    { role: 'user' as const, text: r.request, at: r.createdAt },
+    { role: 'assistant' as const, text: r.reply, applied: r.applied },
+  ]);
+}
+
+const THREAD_KEY = 'secretary:thread';
+function readThreadId(): string | null {
+  try {
+    return localStorage.getItem(THREAD_KEY);
+  } catch {
+    return null;
+  }
+}
+function writeThreadId(id: string | null) {
+  try {
+    if (id) localStorage.setItem(THREAD_KEY, id);
+    else localStorage.removeItem(THREAD_KEY);
+  } catch {
+    /* 保存できなくても続ける */
+  }
+}
+
 interface Applied {
   type: string;
   ok: boolean;
@@ -155,10 +202,12 @@ const TYPE_LABEL: Record<Action['type'], string> = {
   task_delete: 'タスクの削除',
   event_update: '予定の変更',
   event_delete: '予定の削除',
+  hold_confirm: '仮押さえの確定',
+  hold_cancel: '仮押さえの取消',
   message_send: '送信',
 };
 /** 取り消せない・外に出るもの（赤で目立たせる） */
-const DANGER = new Set<string>(['task_delete', 'event_delete', 'message_send']);
+const DANGER = new Set<string>(['task_delete', 'event_delete', 'hold_cancel', 'message_send']);
 
 const EXAMPLES = [
   '山田さんから電話。査定書は今週中に送るとのこと。記録しておいて',
@@ -197,7 +246,15 @@ export function Secretary({ context, compact = false, autoFocus = false }: { con
     setText((prev) => (prev.trim() ? `${head}${prev}` : head));
     inputRef.current?.focus();
   };
-  const [turns, setTurns] = useState<{ role: 'user' | 'assistant'; text: string }[]>([]);
+  const [turns, setTurns] = useState<Turn[]>([]);
+  // ひと続きのやり取り（サーバーに残る。閉じても・再読み込みしても続きから）と、いまの案の頼みごと
+  const [threadId, setThreadIdState] = useState<string | null>(() => readThreadId());
+  const [turnId, setTurnId] = useState<number | null>(null);
+  const setThreadId = (id: string | null) => {
+    setThreadIdState(id);
+    writeThreadId(id);
+  };
+  const [showHistory, setShowHistory] = useState(false);
   const [plan, setPlan] = useState<Plan | null>(null);
   /** 画面で直したあとの案（登録するのはこちら） */
   const [actions, setActions] = useState<Action[]>([]);
@@ -209,9 +266,42 @@ export function Secretary({ context, compact = false, autoFocus = false }: { con
   const clients = useClients();
   const cases = useQuery({ queryKey: ['cases', 'all'], queryFn: () => api.get<CaseOption[]>('/cases') });
 
+  // 前回の続き（このブラウザで最後に使ったやり取り）を出す。まだ登録していない案があればそれも
+  const loadThread = async (id: string) => {
+    const rows = await api.get<StoredTurn[]>(`/secretary/threads/${encodeURIComponent(id)}`).catch(() => [] as StoredTurn[]);
+    if (!rows.length) {
+      setThreadId(null);
+      return;
+    }
+    setThreadId(id);
+    setTurns(turnsOf(rows));
+    const last = rows[rows.length - 1]!;
+    const pending = !last.applied && last.actions.length > 0;
+    setPlan({ reply: last.reply, actions: pending ? last.actions : [], previews: pending ? last.previews : [], questions: last.questions, sources: [], used: [] });
+    setActions(pending ? last.actions : []);
+    setPreviews(pending ? last.previews : []);
+    setTurnId(pending ? last.id : null);
+    setSkip(new Set());
+    setApplied(null);
+    setErr(null);
+  };
+  useEffect(() => {
+    if (threadId) void loadThread(threadId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const ask = useMutation({
-    mutationFn: (t: string) => api.post<Plan>('/secretary/plan', { text: t, history: turns.slice(-8), ...(context && (context.clientId || context.caseId || context.conversationId) ? { context } : {}) }),
+    mutationFn: (t: string) =>
+      api.post<Plan & { threadId: string; turnId: number }>('/secretary/plan', {
+        text: t,
+        history: turns.slice(-8).map(({ role, text }) => ({ role, text })),
+        ...(threadId ? { threadId } : {}),
+        ...(context && (context.clientId || context.caseId || context.conversationId) ? { context } : {}),
+      }),
     onSuccess: (r, t) => {
+      setThreadId(r.threadId);
+      setTurnId(r.turnId);
+      qc.invalidateQueries({ queryKey: ['secretary-threads'] });
       setTurns((prev) => [...prev, { role: 'user', text: t }, { role: 'assistant', text: r.reply }]);
       setPlan(r);
       setActions(r.actions);
@@ -226,9 +316,16 @@ export function Secretary({ context, compact = false, autoFocus = false }: { con
   });
 
   const apply = useMutation({
-    mutationFn: () => api.post<{ applied: Applied[] }>('/secretary/apply', { actions: actions.filter((_, i) => !skip.has(i)) }),
+    mutationFn: () => api.post<{ applied: Applied[] }>('/secretary/apply', { actions: actions.filter((_, i) => !skip.has(i)), ...(turnId ? { turnId } : {}) }),
     onSuccess: (r) => {
       setApplied(r.applied);
+      // 履歴の返事の下にも、登録したものを出す
+      setTurns((prev) => {
+        const i = prev.map((t) => t.role).lastIndexOf('assistant');
+        return i < 0 ? prev : prev.map((t, n) => (n === i ? { ...t, applied: r.applied } : t));
+      });
+      setTurnId(null);
+      qc.invalidateQueries({ queryKey: ['secretary-threads'] });
       setActions([]);
       setPlan((p) => (p ? { ...p, actions: [] } : p));
       setErr(null);
@@ -258,6 +355,8 @@ export function Secretary({ context, compact = false, autoFocus = false }: { con
     setActions([]);
     setApplied(null);
     setErr(null);
+    setTurnId(null);
+    setThreadId(null);
   };
 
   return (
@@ -303,12 +402,29 @@ export function Secretary({ context, compact = false, autoFocus = false }: { con
             </button>
           )}
           {!compact && <span className="text-xs text-slate-400">⌘ / Ctrl + Enter でも送れます</span>}
-          {turns.length > 0 && (
-            <button className="btn btn-sm ml-auto" onClick={reset}>
-              最初から
+          <span className="ml-auto flex gap-1.5">
+            <button className={`btn btn-sm ${showHistory ? 'text-[var(--accent)]' : ''}`} onClick={() => setShowHistory(!showHistory)} aria-expanded={showHistory} title="これまでのやり取りを見返す・続きから頼む">
+              🕘 履歴
             </button>
-          )}
+            {turns.length > 0 && (
+              <button className="btn btn-sm" onClick={reset} title="新しいやり取りを始めます（今までのやり取りは履歴に残ります）">
+                新しく頼む
+              </button>
+            )}
+          </span>
         </div>
+        {showHistory && (
+          <SecretaryHistory
+            current={threadId}
+            onOpen={(id) => {
+              setShowHistory(false);
+              void loadThread(id);
+            }}
+            onDeleted={(id) => {
+              if (id === threadId) reset();
+            }}
+          />
+        )}
         <DraftHint handle={draft} />
         {voice.error && <div className="text-xs text-red-600">{voice.error}</div>}
         {!compact && turns.length === 0 && !ask.isPending && (
@@ -330,8 +446,26 @@ export function Secretary({ context, compact = false, autoFocus = false }: { con
         <section className="card space-y-2">
           {turns.map((t, i) => (
             <div key={i} className={t.role === 'user' ? 'text-sm' : 'fade-in rounded-md bg-[var(--accent-soft)] p-2 text-sm'}>
+              {t.at && t.role === 'user' && <span className="mr-1.5 text-[11px] text-slate-400">{fmtDateTime(t.at)}</span>}
               <span className="mr-1.5 text-xs text-slate-500">{t.role === 'user' ? 'あなた' : '秘書'}</span>
               <span className="whitespace-pre-wrap">{t.text}</span>
+              {t.applied && t.applied.length > 0 && (
+                <ul className="mt-1 space-y-0.5 text-xs">
+                  {t.applied.map((r, n) => (
+                    <li key={n} className="flex flex-wrap items-center gap-1.5">
+                      <span className={`badge ${r.ok ? 'badge-blue' : 'badge-orange'}`}>{r.ok ? '登録済み' : '失敗'}</span>
+                      {r.ok && r.link ? (
+                        <Link className="underline" to={r.link}>
+                          {r.label}
+                        </Link>
+                      ) : (
+                        <span>{r.label}</span>
+                      )}
+                      {r.error && <span className="text-red-600">{r.error}</span>}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           ))}
           {plan && plan.questions.length > 0 && (
@@ -549,7 +683,7 @@ function LinkRow({ a, onChange, clients, cases }: { a: EventAction | TaskAction;
   );
 }
 
-const EXTENDED = new Set<string>(['staff_create', 'case_update', 'case_create', 'client_create', 'client_update', 'contact_create', 'contact_update', 'task_update', 'task_delete', 'event_update', 'event_delete', 'message_send']);
+const EXTENDED = new Set<string>(['staff_create', 'case_update', 'case_create', 'client_create', 'client_update', 'contact_create', 'contact_update', 'task_update', 'task_delete', 'event_update', 'event_delete', 'hold_confirm', 'hold_cancel', 'message_send']);
 function isExtended(a: Action): a is ExtendedAction {
   return EXTENDED.has(a.type);
 }
@@ -643,7 +777,8 @@ function ExtendedEditor({ a, changes, onChange }: { a: ExtendedAction; changes: 
   const set = (field: string, v: unknown) => onChange({ [field]: v } as Partial<Action>);
   const fields = Object.keys(a).filter((k) => !HIDDEN.has(k) && a[k] !== undefined);
   const clear = (a.clear as string[] | undefined) ?? [];
-  if (a.type === 'task_delete' || a.type === 'event_delete') return <div className="pl-6 text-xs text-red-700">登録すると削除します（元に戻せません）。</div>;
+  if (a.type === 'task_delete' || a.type === 'event_delete' || a.type === 'hold_cancel') return <div className="pl-6 text-xs text-red-700">登録すると削除します（元に戻せません）。</div>;
+  if (a.type === 'hold_confirm') return <div className="pl-6 text-xs text-slate-600">登録すると、この候補で確定し、ほかの候補の仮押さえは消えます。</div>;
   return (
     <div className="space-y-1.5 pl-6">
       {fields.map((f) => {
@@ -712,6 +847,61 @@ function ExtendedEditor({ a, changes, onChange }: { a: ExtendedAction; changes: 
         </div>
       )}
       {a.type === 'message_send' && <div className="text-xs text-red-700">登録すると、この本文がそのまま送られます。</div>}
+    </div>
+  );
+}
+
+interface ThreadSummary {
+  threadId: string;
+  first: string;
+  last: string;
+  turns: number;
+  appliedOk: number;
+  startedAt: string;
+  updatedAt: string;
+}
+
+/** これまでのやり取りの一覧。押すと、そのやり取りの続きから頼める */
+function SecretaryHistory({ current, onOpen, onDeleted }: { current: string | null; onOpen: (threadId: string) => void; onDeleted: (threadId: string) => void }) {
+  const qc = useQueryClient();
+  const [q, setQ] = useState('');
+  const list = useQuery({ queryKey: ['secretary-threads', q], queryFn: () => api.get<ThreadSummary[]>(`/secretary/threads${q.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''}`) });
+  const del = useMutation({
+    mutationFn: (id: string) => api.del(`/secretary/threads/${encodeURIComponent(id)}`),
+    onSuccess: (_r, id) => {
+      qc.invalidateQueries({ queryKey: ['secretary-threads'] });
+      onDeleted(id);
+    },
+  });
+  return (
+    <div className="fade-in space-y-2 rounded-lg border border-slate-200 bg-white p-2 text-sm">
+      <input className="input py-1 text-sm" value={q} onChange={(e) => setQ(e.target.value)} placeholder="履歴を探す（例: 吉堂、審査回付）" aria-label="履歴を探す" />
+      {list.isLoading && <div className="loading-text text-xs text-slate-500">読み込み中…</div>}
+      {list.data?.length === 0 && <div className="text-xs text-slate-500">{q.trim() ? '見つかりませんでした' : 'まだやり取りはありません'}</div>}
+      <ul className="max-h-80 divide-y divide-slate-100 overflow-y-auto">
+        {list.data?.map((t) => (
+          <li key={t.threadId} className={`flex items-start gap-2 py-1.5 ${t.threadId === current ? 'bg-[var(--accent-soft)]' : ''}`}>
+            <button type="button" className="min-w-0 flex-1 rounded px-1 text-left hover:bg-slate-50" onClick={() => onOpen(t.threadId)} title="このやり取りを開いて、続きから頼む">
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+                <span>{fmtDateTime(t.updatedAt)}</span>
+                {t.turns > 1 && <span>{t.turns} 回</span>}
+                {t.appliedOk > 0 && <span className="badge badge-blue">登録 {t.appliedOk} 件</span>}
+                {t.threadId === current && <span className="badge badge-gray">いまのやり取り</span>}
+              </div>
+              <div className="truncate">{t.first}</div>
+              {t.turns > 1 && <div className="truncate text-xs text-slate-500">… {t.last}</div>}
+            </button>
+            <button
+              type="button"
+              className="shrink-0 px-1 text-xs text-slate-400 hover:text-red-600"
+              onClick={() => confirm('このやり取りを履歴から消しますか？（登録した記録・予定・タスクは消えません）') && del.mutate(t.threadId)}
+              aria-label="履歴から消す"
+            >
+              ×
+            </button>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

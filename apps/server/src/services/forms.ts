@@ -458,8 +458,13 @@ ${sources}`;
   let webUrl: string | undefined;
   if (req.saveToClientFolder && client) {
     try {
+      // OneDrive 側で別の区分へ移されたフォルダを見つけてから保存する（元の区分に同じフォルダを作り直さないため）
+      const { syncClientFolderName } = await import('./clientFolders.js');
+      await syncClientFolderName(client.id).catch(() => null);
+      const fresh = db().select().from(schema.clients).where(eq(schema.clients.id, client.id)).get() ?? client;
+      const freshCase = kase ? (db().select().from(schema.cases).where(eq(schema.cases.id, kase.id)).get() ?? kase) : null;
       // 事件を選んでいれば、その事件のフォルダに保存する
-      const folder = joinPath(caseFolder(client, kase && kase.clientId === client.id ? kase : null), getSetting('draft_subfolder'));
+      const folder = joinPath(caseFolder(fresh, freshCase && freshCase.clientId === fresh.id ? freshCase : null), getSetting('draft_subfolder'));
       const stored = await storage().put(folder, filename, docx);
       savedPath = stored.path;
       itemId = stored.itemId;

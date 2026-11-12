@@ -184,9 +184,12 @@ export function nudgeTask(id: number): TaskRow {
   return db().select().from(schema.tasks).where(eq(schema.tasks.id, id)).get()!;
 }
 
-export function listTasks(filter: { status?: TaskStatus | 'active' | 'waiting'; clientId?: number; caseId?: number; conversationId?: number }) {
+export function listTasks(filter: { status?: TaskStatus | 'active' | 'waiting' | 'all'; clientId?: number; caseId?: number; conversationId?: number }) {
   const conds = [];
-  if (filter.status === 'active') conds.push(inArray(schema.tasks.status, [...ACTIVE_TASK_STATUSES]));
+  // all はすべての状態（完了・時期未定の備忘も含む）
+  if (filter.status === 'all') {
+    /* 絞らない */
+  } else if (filter.status === 'active') conds.push(inArray(schema.tasks.status, [...ACTIVE_TASK_STATUSES]));
   // 連絡待ち（依頼者の返信待ち＋相手方・裁判所待ち）
   else if (filter.status === 'waiting') conds.push(inArray(schema.tasks.status, [...WAITING_TASK_STATUSES]));
   else if (filter.status) conds.push(eq(schema.tasks.status, filter.status));
