@@ -284,13 +284,37 @@ function systemPrompt(): string {
  *
  * @param history これまでのやり取り（秘書が聞き返したときの続き）
  */
-export async function planSecretary(text: string, history: { role: 'user' | 'assistant'; text: string }[] = []): Promise<SecretaryPlan> {
+/** 秘書を開いた画面（依頼者・事件・会話） */
+export interface SecretaryContext {
+  clientId?: number;
+  caseId?: number;
+  conversationId?: number;
+}
+
+/** 秘書を開いた画面を、AI に渡す一文にする（「この件」「この人」が誰のことか分かるように） */
+export function secretaryContextNote(ctx: SecretaryContext | undefined): string | null {
+  if (!ctx) return null;
+  const d = db();
+  const parts: string[] = [];
+  const kase = ctx.caseId ? d.select().from(schema.cases).where(eq(schema.cases.id, ctx.caseId)).get() : null;
+  const conv = ctx.conversationId ? d.select().from(schema.conversations).where(eq(schema.conversations.id, ctx.conversationId)).get() : null;
+  const clientId = ctx.clientId ?? kase?.clientId ?? conv?.clientId ?? null;
+  const client = clientId ? d.select().from(schema.clients).where(eq(schema.clients.id, clientId)).get() : null;
+  if (client) parts.push(`依頼者「${client.name}」（clientId=${client.id}）`);
+  if (kase) parts.push(`事件「${kase.title}」（caseId=${kase.id}）`);
+  if (conv) parts.push(`会話（${conv.channel}、相手「${conv.counterpartName ?? conv.counterpartAddress ?? '不明'}」、conversationId=${conv.id}）`);
+  if (!parts.length) return null;
+  return `（いま開いている画面: ${parts.join('／')}。頼みごとに名前が無いときや「この件」「この人」「本人」は、これを指します。別の名前が書かれていればそちらに従います。）`;
+}
+
+export async function planSecretary(text: string, history: { role: 'user' | 'assistant'; text: string }[] = [], context?: SecretaryContext): Promise<SecretaryPlan> {
   const q = text.trim();
   if (!q) throw new Error('頼みたいことを入力してください');
   const sources: SearchHit[] = [];
+  const ctxNote = secretaryContextNote(context);
   const messages: Anthropic.MessageParam[] = [
     ...history.slice(-8).map((m) => ({ role: m.role, content: m.text }) as Anthropic.MessageParam),
-    { role: 'user' as const, content: q },
+    { role: 'user' as const, content: ctxNote ? `${ctxNote}\n${q}` : q },
   ];
   const r = await runToolLoop({
     purpose: 'AI 秘書',

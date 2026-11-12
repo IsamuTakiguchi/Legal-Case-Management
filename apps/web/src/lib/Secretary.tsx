@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from './api';
@@ -7,6 +7,7 @@ import { DeadlineInput, DUE_LABEL, FOLLOW_LABEL } from './Deadline';
 import { useDraft, DraftHint } from './draft';
 import { Icon } from './icons';
 import { useClients } from './ClientPicker';
+import { useDictation } from './dictation';
 
 /**
  * AI 秘書。
@@ -167,9 +168,35 @@ const EXAMPLES = [
   '山田さんの答弁書のタスクを起案・検討完了にして',
 ];
 
-export function Secretary() {
+/** よく使う頼み方（押すと書き出しが入る。続きを書くか、声で話す） */
+const QUICK: [string, string][] = [
+  ['📝 記録', '記録して：'],
+  ['💬 事務局に送る', '担当事務にチャットで送って：'],
+  ['📨 依頼者に送る', '依頼者に送って：'],
+  ['📅 予定', '予定を入れて：'],
+  ['✅ タスク', 'タスクを作って：'],
+];
+
+/** 秘書を開いた画面（依頼者・事件・会話）。頼みごとに名前が無ければ、これのことだと秘書に伝える */
+export interface SecretaryContext {
+  clientId?: number;
+  caseId?: number;
+  conversationId?: number;
+}
+
+export function Secretary({ context, compact = false, autoFocus = false }: { context?: SecretaryContext | null; /** シートなど狭いところに出すとき（説明と例を省く） */ compact?: boolean; autoFocus?: boolean } = {}) {
   const qc = useQueryClient();
   const [text, setText] = useState('');
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (autoFocus) inputRef.current?.focus();
+  }, [autoFocus]);
+  // 声で頼む（話した文を入力欄の末尾に足す）
+  const voice = useDictation((t) => setText((prev) => `${prev}${t}`));
+  const insert = (head: string) => {
+    setText((prev) => (prev.trim() ? `${head}${prev}` : head));
+    inputRef.current?.focus();
+  };
   const [turns, setTurns] = useState<{ role: 'user' | 'assistant'; text: string }[]>([]);
   const [plan, setPlan] = useState<Plan | null>(null);
   /** 画面で直したあとの案（登録するのはこちら） */
@@ -183,7 +210,7 @@ export function Secretary() {
   const cases = useQuery({ queryKey: ['cases', 'all'], queryFn: () => api.get<CaseOption[]>('/cases') });
 
   const ask = useMutation({
-    mutationFn: (t: string) => api.post<Plan>('/secretary/plan', { text: t, history: turns.slice(-8) }),
+    mutationFn: (t: string) => api.post<Plan>('/secretary/plan', { text: t, history: turns.slice(-8), ...(context && (context.clientId || context.caseId || context.conversationId) ? { context } : {}) }),
     onSuccess: (r, t) => {
       setTurns((prev) => [...prev, { role: 'user', text: t }, { role: 'assistant', text: r.reply }]);
       setPlan(r);
@@ -213,6 +240,7 @@ export function Secretary() {
 
   const run = () => {
     if (!text.trim() || ask.isPending) return;
+    if (voice.listening) voice.stop();
     ask.mutate(text.trim());
   };
   const patch = (i: number, p: Partial<Action>) => setActions((prev) => prev.map((a, n) => (n === i ? ({ ...a, ...p } as Action) : a)));
@@ -234,25 +262,47 @@ export function Secretary() {
 
   return (
     <div className="space-y-3">
-      <section className="card space-y-2">
-        <div className="text-sm text-slate-600">
-          頼みたいことを日本語で書いてください。依頼者と事件は秘書が探します。
-          <span className="text-slate-500">登録されるのは、下の内容を確かめて「この内容で登録」を押したときだけです。</span>
+      <section className={compact ? 'space-y-2' : 'card space-y-2'}>
+        {!compact && (
+          <div className="text-sm text-slate-600">
+            頼みたいことを日本語で書いてください。依頼者と事件は秘書が探します。
+            <span className="text-slate-500">登録されるのは、下の内容を確かめて「この内容で登録」を押したときだけです。</span>
+          </div>
+        )}
+        <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-0.5 text-xs" aria-label="よく使う頼み方">
+          {QUICK.map(([label, head]) => (
+            <button key={label} type="button" className="shrink-0 whitespace-nowrap rounded-full border border-slate-200 bg-white px-2.5 py-1 text-slate-700 hover:bg-slate-50" onClick={() => insert(head)}>
+              {label}
+            </button>
+          ))}
         </div>
         <textarea
+          ref={inputRef}
           className="input min-h-[72px]"
-          value={text}
+          value={voice.interim ? `${text}${voice.interim}` : text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) run();
           }}
-          placeholder="例: 山田さんから電話。査定書は今週中に送るとのこと。記録しておいて"
+          placeholder={context ? '例: 本人から書類が届いたので、法テラスへ審査回付をお願いと担当事務へ送って' : '例: 山田さんから電話。査定書は今週中に送るとのこと。記録しておいて'}
         />
         <div className="flex flex-wrap items-center gap-2">
           <button className="btn btn-primary" onClick={run} disabled={!text.trim() || ask.isPending}>
             {ask.isPending ? '調べています…' : '案を作ってもらう'}
           </button>
-          <span className="text-xs text-slate-400">⌘ / Ctrl + Enter でも送れます</span>
+          {voice.supported && (
+            <button
+              type="button"
+              className={`btn ${voice.listening ? 'border-red-300 bg-red-50 text-red-600' : ''}`}
+              onClick={voice.toggle}
+              aria-pressed={voice.listening}
+              title={voice.listening ? '話し終わったら押して止めます' : '声で頼みます（話した文が入力欄に入ります）'}
+            >
+              <Icon name="mic" className={`h-4 w-4 ${voice.listening ? 'animate-pulse' : ''}`} />
+              {voice.listening ? '聞いています…（押して止める）' : '声で'}
+            </button>
+          )}
+          {!compact && <span className="text-xs text-slate-400">⌘ / Ctrl + Enter でも送れます</span>}
           {turns.length > 0 && (
             <button className="btn btn-sm ml-auto" onClick={reset}>
               最初から
@@ -260,7 +310,8 @@ export function Secretary() {
           )}
         </div>
         <DraftHint handle={draft} />
-        {turns.length === 0 && !ask.isPending && (
+        {voice.error && <div className="text-xs text-red-600">{voice.error}</div>}
+        {!compact && turns.length === 0 && !ask.isPending && (
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
             例:
             {EXAMPLES.map((e) => (

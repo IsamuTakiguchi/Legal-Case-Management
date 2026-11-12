@@ -1,6 +1,6 @@
 import { Routes, Route, NavLink, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError, ServerTimeoutError, withTimeout } from './lib/api';
 import { applyAppBadge, badgeSource, badgeToApply } from './lib/badge';
 import { useTheme, THEME_CHOICES, THEME_LABEL, useFont, FONT_CHOICES, FONT_LABEL } from './lib/theme';
@@ -22,6 +22,7 @@ import Alerts from './pages/Alerts';
 import Files from './pages/Files';
 import Settings from './pages/Settings';
 import Setup from './pages/Setup';
+import { SecretarySheet } from './lib/SecretarySheet';
 
 interface NavCounts {
   inbox: number;
@@ -82,6 +83,19 @@ export default function App() {
   useEffect(() => {
     document.title = officeName ? `T-Lex — ${officeName}` : 'T-Lex';
   }, [officeName]);
+  // AI 秘書（どの画面からでも開く。⌘/Ctrl + K でも）
+  const [aiOpen, setAiOpen] = useState(false);
+  const closeAi = useCallback(() => setAiOpen(false), []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setAiOpen((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   if (loc.pathname === '/login') return <Login />;
   if (me.isLoading) return <div className="loading-text p-8 text-slate-500">読み込み中…</div>;
@@ -130,7 +144,21 @@ export default function App() {
           </Routes>
         </div>
       </main>
-      <MobileTabs counts={nav} />
+      <MobileTabs counts={nav} aiOpen={aiOpen} onAi={() => setAiOpen((v) => !v)} />
+      {/* パソコンでは右下のボタンから（AI 秘書のページを開いているときは出さない） */}
+      {loc.pathname !== '/search' && !aiOpen && (
+        <button
+          type="button"
+          onClick={() => setAiOpen(true)}
+          className="fixed bottom-6 right-6 z-40 hidden items-center gap-2 rounded-full bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-white shadow-[0_8px_24px_rgba(16,32,48,0.28)] transition-transform hover:scale-[1.03] md:flex"
+          title="AI 秘書に頼む（⌘ / Ctrl + K）"
+        >
+          <Icon name="sparkle" className="h-5 w-5" />
+          AI 秘書
+          <span className="rounded bg-white/20 px-1.5 text-[10px] font-medium">⌘K</span>
+        </button>
+      )}
+      <SecretarySheet open={aiOpen} onClose={closeAi} />
     </div>
   );
 }
@@ -482,8 +510,11 @@ function LogoutButton({ className = '' }: { className?: string }) {
   );
 }
 
-/** スマホ幅では左メニューの代わりに下部タブを出す。「その他」で残りのメニューをシートで開く */
-const PRIMARY_TABS = ['/', '/inbox', '/tasks', '/alerts'];
+/**
+ * スマホ幅では左メニューの代わりに下部タブを出す。「その他」で残りのメニューをシートで開く。
+ * 真ん中は AI 秘書（どの画面からでもシートで開く）。要確認は「その他」に入れ、件数は「その他」に出す
+ */
+const PRIMARY_TABS = ['/', '/inbox', '/tasks'];
 
 /** 開閉をアニメーションさせるため、閉じた後も一定時間は描画を残す */
 function useSheet(open: boolean, duration = 420) {
@@ -502,13 +533,15 @@ function useSheet(open: boolean, duration = 420) {
   return { mounted, shown };
 }
 
-function MobileTabs({ counts }: { counts: NavCounts }) {
+function MobileTabs({ counts, aiOpen, onAi }: { counts: NavCounts; aiOpen: boolean; onAi: () => void }) {
   const [open, setOpen] = useState(false);
   const { mounted, shown } = useSheet(open);
   const loc = useLocation();
   useEffect(() => setOpen(false), [loc.pathname]);
   const primary = NAV.filter((n) => PRIMARY_TABS.includes(n.to));
-  const rest = NAV.filter((n) => !PRIMARY_TABS.includes(n.to));
+  // AI 秘書はタブの真ん中から開くので、その他には「聞く・探す」のページとして残す
+  const rest = NAV.filter((n) => !PRIMARY_TABS.includes(n.to)).map((n) => (n.to === '/search' ? { ...n, label: 'AI に聞く・探す' } : n));
+  const restBadge = navBadge('/alerts', counts);
   const restActive = rest.some((n) => loc.pathname.startsWith(n.to));
   const short = (label: string) => label.replace('・返信待ち', '').replace('ダッシュボード', 'ホーム');
   // 選んだタブの下に敷くガラスの粒（横に滑る）
@@ -526,7 +559,10 @@ function MobileTabs({ counts }: { counts: NavCounts }) {
               {rest.map((n) => (
                 <NavLink key={n.to} to={n.to} className={({ isActive }) => `card-press flex flex-col items-center gap-1.5 whitespace-nowrap rounded-2xl px-1 py-3 text-xs tracking-tight ${isActive ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'bg-black/[0.04] text-slate-700'}`}>
                   <Icon name={n.icon} className="h-6 w-6" strokeWidth={1.6} />
-                  {n.label}
+                  <span className="flex items-center gap-1">
+                    {n.label}
+                    {n.to === '/alerts' && restBadge && <span className="rounded-full bg-[#ff3b30] px-1.5 text-[10px] font-semibold tabular-nums text-white">{restBadge.n > 99 ? '99+' : restBadge.n}</span>}
+                  </span>
                 </NavLink>
               ))}
             </div>
@@ -545,25 +581,43 @@ function MobileTabs({ counts }: { counts: NavCounts }) {
         aria-label="主要メニュー"
       >
         {tabPill.pill && <div className={`${tabPill.className} tab-pill`} style={tabPill.style} aria-hidden />}
-        {primary.map((n) => (
-          <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => `tab-item relative flex flex-col items-center gap-0.5 pb-1 pt-2 text-[10px] font-medium ${isActive ? 'text-[var(--accent)]' : 'text-slate-500'}`}>
-            {({ isActive }) => (
-              <>
-                <Icon name={n.icon} className={`h-6 w-6 ${isActive ? 'tab-pop' : ''}`} strokeWidth={1.6} />
-                {short(n.label)}
-                {(() => {
-                  const b = navBadge(n.to, counts);
-                  if (!b) return null;
-                  const bg = b.tone === 'orange' ? 'bg-[#ff3b30] text-white' : b.tone === 'blue' ? 'bg-[var(--accent)] text-white' : 'bg-[#8e8e93] text-white';
-                  return <span className={`pop-in absolute left-1/2 top-0.5 ml-1.5 rounded-full px-1.5 text-[10px] font-semibold tabular-nums ${bg}`}>{b.n > 99 ? '99+' : b.n}</span>;
-                })()}
-              </>
+        {primary.map((n, idx) => (
+          <Fragment key={n.to}>
+            {idx === 2 && (
+              <button
+                type="button"
+                onClick={onAi}
+                className="tab-item relative flex flex-col items-center gap-0.5 pb-1 pt-1 text-[10px] font-semibold text-[var(--accent)]"
+                aria-expanded={aiOpen}
+                aria-label="AI 秘書"
+              >
+                <span className={`-mt-3 flex h-11 w-11 items-center justify-center rounded-full shadow-[0_4px_14px_rgba(16,32,48,0.25)] transition-transform ${aiOpen ? 'scale-95 bg-[var(--accent)] text-white' : 'bg-[var(--accent)] text-white'}`}>
+                  <Icon name={aiOpen ? 'close' : 'sparkle'} className="h-6 w-6" />
+                </span>
+                AI 秘書
+              </button>
             )}
-          </NavLink>
+            <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => `tab-item relative flex flex-col items-center gap-0.5 pb-1 pt-2 text-[10px] font-medium ${isActive ? 'text-[var(--accent)]' : 'text-slate-500'}`}>
+              {({ isActive }) => (
+                <>
+                  <Icon name={n.icon} className={`h-6 w-6 ${isActive ? 'tab-pop' : ''}`} strokeWidth={1.6} />
+                  {short(n.label)}
+                  {(() => {
+                    const b = navBadge(n.to, counts);
+                    if (!b) return null;
+                    const bg = b.tone === 'orange' ? 'bg-[#ff3b30] text-white' : b.tone === 'blue' ? 'bg-[var(--accent)] text-white' : 'bg-[#8e8e93] text-white';
+                    return <span className={`pop-in absolute left-1/2 top-0.5 ml-1.5 rounded-full px-1.5 text-[10px] font-semibold tabular-nums ${bg}`}>{b.n > 99 ? '99+' : b.n}</span>;
+                  })()}
+                </>
+              )}
+            </NavLink>
+
+          </Fragment>
         ))}
-        <button type="button" onClick={() => setOpen((v) => !v)} className={`tab-item flex flex-col items-center gap-0.5 pb-1 pt-2 text-[10px] font-medium ${open || restActive ? 'text-[var(--accent)]' : 'text-slate-500'}`} aria-expanded={open}>
+        <button type="button" onClick={() => setOpen((v) => !v)} className={`tab-item relative flex flex-col items-center gap-0.5 pb-1 pt-2 text-[10px] font-medium ${open || restActive ? 'text-[var(--accent)]' : 'text-slate-500'}`} aria-expanded={open}>
           <Icon name={open ? 'close' : 'menu'} className={`h-6 w-6 transition-transform duration-300 ${open ? 'rotate-90' : ''}`} strokeWidth={1.6} />
           その他
+          {restBadge && !open && <span className="pop-in absolute left-1/2 top-0.5 ml-1.5 rounded-full bg-[#ff3b30] px-1.5 text-[10px] font-semibold tabular-nums text-white" title={`要確認 ${restBadge.n} 件`}>{restBadge.n > 99 ? '99+' : restBadge.n}</span>}
         </button>
       </nav>
     </>

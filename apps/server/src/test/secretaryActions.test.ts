@@ -9,7 +9,7 @@ process.env.DATA_DIR = tmp;
 
 const { openTestDatabase, closeDatabase, db, schema } = await import('../db/index.js');
 const { setAdapter } = await import('../channels/registry.js');
-const { applySecretaryActions, previewAction, secretaryActionSchema } = await import('../services/secretary.js');
+const { applySecretaryActions, previewAction, secretaryActionSchema, secretaryContextNote } = await import('../services/secretary.js');
 const { extendedReadTools, normalizeStaffMessage } = await import('../services/secretaryActions.js');
 const { eq } = await import('drizzle-orm');
 
@@ -200,6 +200,22 @@ describe('AI 秘書: 事務局へのチャットの書き方', () => {
     const client = db().insert(schema.clients).values({ name: '山田 太郎' }).returning().get();
     const a = normalizeStaffMessage({ type: 'message_send', summary: 'x', to: 'client', clientId: client.id, channel: 'gmail', text: '本文' } as never) as { text: string };
     expect(a.text).toBe('本文');
+  });
+});
+
+describe('AI 秘書: 開いた画面', () => {
+  it('依頼者・事件・会話の画面から開くと、「この件」が誰のことかを AI に伝える', () => {
+    const client = db().insert(schema.clients).values({ name: '吉堂 壱星' }).returning().get();
+    const kase = db().insert(schema.cases).values({ clientId: client.id, title: '自己破産', caseType: 'general_civil' }).returning().get();
+    const conv = db().insert(schema.conversations).values({ channel: 'line', externalThreadId: `ctx-${client.id}`, clientId: client.id, counterpartName: '吉堂 壱星' }).returning().get();
+    const byCase = secretaryContextNote({ caseId: kase.id })!;
+    expect(byCase).toContain(`依頼者「吉堂 壱星」（clientId=${client.id}）`);
+    expect(byCase).toContain(`事件「自己破産」（caseId=${kase.id}）`);
+    expect(byCase).toContain('「この件」');
+    expect(secretaryContextNote({ conversationId: conv.id })).toContain(`conversationId=${conv.id}`);
+    expect(secretaryContextNote({ conversationId: conv.id })).toContain('依頼者「吉堂 壱星」');
+    expect(secretaryContextNote(undefined)).toBeNull();
+    expect(secretaryContextNote({ caseId: 999999 })).toBeNull();
   });
 });
 
