@@ -10,7 +10,7 @@ import { createTask } from './tasks.js';
 import { createCalendarEvent } from './court.js';
 import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, EVENT_KINDS, EVENT_KIND_LABEL, TASK_STATUSES, TASK_STATUS_LABEL, formatJaDateTime, toJstParts, phoneDigits, isPhoneLike, representativeLabel } from '@lcm/shared';
 import { logger } from '../logger.js';
-import { extendedActionSchemas, extendedReadTools, previewExtended, applyExtended, EXTENDED_TYPES, type ExtendedAction, type Change } from './secretaryActions.js';
+import { extendedActionSchemas, extendedReadTools, previewExtended, applyExtended, EXTENDED_TYPES, normalizeStaffMessage, type ExtendedAction, type Change } from './secretaryActions.js';
 
 /**
  * AI 秘書。
@@ -273,6 +273,7 @@ function systemPrompt(): string {
     '・変更の案（〜_update）には、変える項目だけを書きます。変えない項目は書きません。項目を空にする（担当事務局を外す など）ときだけ clear に項目名を書きます。',
     '・削除（task_delete・event_delete）は、はっきり頼まれたときだけ案にします。',
     '・メッセージの送信は、送ってほしいとはっきり頼まれたときだけ案にします。宛先と手段は get_client・get_case の送れる宛先から選びます。本文は弁護士本人から送る文として、頼まれた内容だけを書きます（事実・期限・金額を足さない）。メールで、その相手とのメールがまだ無いときは件名を付けます。',
+    '・事務局へのチャット（message_send の to=staff）は、1 行目に誰の件か（依頼者の氏名をフルネームで。「さん」「様」・事件の種類は付けない）だけを書き、2 行目から本題を書きます。本題に「○○さんについて」のような前置きは付けません。例:「吉堂壱星（改行）本人から書類が届きましたので、法テラスへ審査回付をお願いします。」事件が分かっていれば caseId を付けます。',
     '・質問された（「どうなっている？」など）だけのときは、search_data で調べて reply に答えを書き、actions は空にします。',
     '・reply は 2〜4 文。登録したい内容は画面に一覧で出るので、繰り返しません。',
   ].join('\n');
@@ -307,6 +308,8 @@ export async function planSecretary(text: string, history: { role: 'user' | 'ass
     return { reply: r.text || 'うまく聞き取れませんでした。もう一度、具体的に書いてください。', actions: [], previews: [], questions: [], sources, used: r.used };
   }
   const plan = parsed.data;
+  // 事務局へのチャットは、1 行目に依頼者の氏名、2 行目から本題の形にそろえる（AI が崩しても直す）
+  plan.actions = plan.actions.map(normalizeStaffMessage);
   logger.info({ used: r.used, actions: plan.actions.length }, 'AI 秘書が案を作りました');
   return { reply: plan.reply.trim(), actions: plan.actions, previews: plan.actions.map(previewAction), questions: plan.questions, sources, used: r.used };
 }

@@ -10,7 +10,7 @@ process.env.DATA_DIR = tmp;
 const { openTestDatabase, closeDatabase, db, schema } = await import('../db/index.js');
 const { setAdapter } = await import('../channels/registry.js');
 const { applySecretaryActions, previewAction, secretaryActionSchema } = await import('../services/secretary.js');
-const { extendedReadTools } = await import('../services/secretaryActions.js');
+const { extendedReadTools, normalizeStaffMessage } = await import('../services/secretaryActions.js');
 const { eq } = await import('drizzle-orm');
 
 /** Gmail に送ったもの（実際には送らない） */
@@ -176,6 +176,30 @@ describe('AI 秘書: メッセージの送信', () => {
     expect(r.applied[0]).toMatchObject({ ok: false });
     expect(r.applied[0]!.error).toContain('件名を入れてください');
     expect(sent).toHaveLength(0);
+  });
+});
+
+describe('AI 秘書: 事務局へのチャットの書き方', () => {
+  const msg = (text: string, extra: Record<string, unknown>) => normalizeStaffMessage({ type: 'message_send', summary: 'x', to: 'staff', staffId: 1, channel: 'chatwork', text, ...extra } as never) as { text: string };
+  it('1 行目に依頼者の氏名、2 行目から本題にする（「○○さん（自己破産）について、」の前置きは外す）', () => {
+    const client = db().insert(schema.clients).values({ name: '吉堂 壱星' }).returning().get();
+    const kase = db().insert(schema.cases).values({ clientId: client.id, title: '自己破産', caseType: 'general_civil' }).returning().get();
+    expect(msg('吉堂さん（自己破産）について、本人から書類が届きましたので、法テラスへ審査回付をお願いします。', { caseId: kase.id }).text).toBe('吉堂壱星\n本人から書類が届きましたので、法テラスへ審査回付をお願いします。');
+    expect(msg('吉堂壱星様の件で、書類の確認をお願いします。', { caseId: kase.id }).text).toBe('吉堂壱星\n書類の確認をお願いします。');
+    // 前置きが無ければ、本文はそのまま 2 行目から
+    expect(msg('本人から書類が届きました。\n審査回付をお願いします。', { caseId: kase.id }).text).toBe('吉堂壱星\n本人から書類が届きました。\n審査回付をお願いします。');
+    // すでにその形ならそのまま
+    expect(msg('吉堂壱星\n審査回付をお願いします。', { caseId: kase.id }).text).toBe('吉堂壱星\n審査回付をお願いします。');
+    expect(msg('吉堂 壱星さん\n審査回付をお願いします。', { clientId: client.id }).text).toBe('吉堂 壱星さん\n審査回付をお願いします。');
+    // 「吉堂さんから」は意味が変わるので外さない
+    expect(msg('吉堂さんから電話がありました。', { clientId: client.id }).text).toBe('吉堂壱星\n吉堂さんから電話がありました。');
+  });
+
+  it('依頼者が分からないとき・事務局宛てでないときは変えない', () => {
+    expect(msg('書類の確認をお願いします。', {}).text).toBe('書類の確認をお願いします。');
+    const client = db().insert(schema.clients).values({ name: '山田 太郎' }).returning().get();
+    const a = normalizeStaffMessage({ type: 'message_send', summary: 'x', to: 'client', clientId: client.id, channel: 'gmail', text: '本文' } as never) as { text: string };
+    expect(a.text).toBe('本文');
   });
 });
 

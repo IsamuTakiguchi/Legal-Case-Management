@@ -14,6 +14,7 @@ import {
   ACTIVE_TASK_STATUSES,
   CHANNEL_LABEL,
   formatJaEventTime,
+  familyName,
   messageLink,
   type CaseContactRole,
   type CaseStatus,
@@ -171,6 +172,32 @@ export const messageSendSchema = z.object({
   text: z.string().describe('送る本文（弁護士本人から送る文）'),
   caseId: z.number().int().optional().describe('送った文を付ける事件'),
 });
+
+/**
+ * 事務局へのチャットは、1 行目に誰の件か（依頼者の氏名）を書き、2 行目から本題を書く形にそろえる。
+ * 例: 「吉堂さん（自己破産）について、本人から書類が届きましたので…」→「吉堂壱星\n本人から書類が届きましたので…」
+ */
+export function normalizeStaffMessage<T extends { type: string }>(a: T): T {
+  if (a.type !== 'message_send') return a;
+  const m = a as unknown as z.infer<typeof messageSendSchema>;
+  if (m.to !== 'staff' || !m.text.trim()) return a;
+  const d = db();
+  const clientId = m.caseId ? (d.select({ clientId: schema.cases.clientId }).from(schema.cases).where(eq(schema.cases.id, m.caseId)).get()?.clientId ?? null) : (m.clientId ?? null);
+  const client = clientId ? d.select({ name: schema.clients.name }).from(schema.clients).where(eq(schema.clients.id, clientId)).get() : null;
+  if (!client) return a;
+  const squash = (x: string) => x.replace(/[\s　]+/g, '');
+  const name = squash(client.name);
+  const surname = squash(familyName(client.name));
+  const lines = m.text.replace(/\r\n/g, '\n').split('\n');
+  while (lines.length && !lines[0]!.trim()) lines.shift();
+  // すでに 1 行目が氏名（「さん」「様」付きも）なら、そのまま
+  if (squash(lines[0] ?? '').replace(/(さん|様|氏)$/, '') === name) return a;
+  // 1 行目の頭の「吉堂さん（自己破産）について、」「吉堂壱星様の件で、」のような前置きは外す（氏名の行と重なるので）
+  const lead = new RegExp(`^\\s*(${[name, surname].map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})[\\s　]*(さん|様|氏)?[\\s　]*([（(][^）)]*[）)])?[\\s　]*((の件について|について|の件で|の件)[、,：:\\s　]*|[、,：:]+[\\s　]*)`);
+  const first = (lines[0] ?? '').replace(lead, '');
+  const body = [first, ...lines.slice(1)].join('\n').replace(/^\n+/, '');
+  return { ...a, text: `${name}\n${body}` };
+}
 
 export const extendedActionSchemas = [
   staffCreateSchema,
