@@ -13,11 +13,11 @@ const { listTasks } = await import('../services/tasks.js');
 beforeAll(() => openTestDatabase());
 afterAll(() => closeDatabase());
 
-describe('タスクの一覧の「すべて」', () => {
-  it('状態で絞らず、完了・時期未定の備忘も含めてすべて出す', () => {
+describe('タスクの一覧の「完了以外すべて」', () => {
+  it('完了だけを除き、時期未定の備忘も含めて出す', () => {
     for (const status of ['open', 'drafted', 'waiting_client', 'memo', 'done'] as const) db().insert(schema.tasks).values({ title: `t-${status}`, status }).run();
-    const all = listTasks({ status: 'all' }).map((t) => t.status).sort();
-    expect(all).toEqual(['done', 'drafted', 'memo', 'open', 'waiting_client']);
+    const notDone = listTasks({ status: 'notdone' }).map((t) => t.status).sort();
+    expect(notDone).toEqual(['drafted', 'memo', 'open', 'waiting_client']);
     expect(listTasks({ status: 'active' }).map((t) => t.status).sort()).toEqual(['drafted', 'open', 'waiting_client']);
   });
 });

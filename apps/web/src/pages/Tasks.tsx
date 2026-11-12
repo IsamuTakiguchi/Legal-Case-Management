@@ -86,7 +86,7 @@ export default function Tasks() {
   const [sync, setSync] = useState(false);
   const list = useQuery({ queryKey: ['tasks', status], queryFn: () => api.get<Task[]>(`/tasks?status=${status}`), refetchInterval: 60_000 });
   // 時期未定の備忘は、きっかけが来るまで未完了の数に入れない（件数だけ別に出す）
-  const memos = useQuery({ queryKey: ['tasks', 'memo'], queryFn: () => api.get<Task[]>('/tasks?status=memo'), enabled: status !== 'memo' && status !== 'all', refetchInterval: 60_000 });
+  const memos = useQuery({ queryKey: ['tasks', 'memo'], queryFn: () => api.get<Task[]>('/tasks?status=memo'), enabled: status !== 'memo' && status !== 'notdone', refetchInterval: 60_000 });
   const sort = useSort('tasks', TASK_SORTS, 'deadline');
   const rows = sort.apply(list.data ?? []);
   const [clientId, setClientId] = useState('');
@@ -164,7 +164,7 @@ export default function Tasks() {
         <h1 className="text-xl font-bold">タスク・返信待ち</h1>
         {/* スマホでは見出しの下に左寄せで幅いっぱい（右寄せにすると中途半端な位置にずれる）。PC は右寄せ */}
         <select className="input w-full md:ml-auto md:w-auto" value={status} onChange={(e) => setStatus(e.target.value)} aria-label="表示するタスク">
-          <option value="all">すべて（完了・時期未定の備忘も含む）</option>
+          <option value="notdone">完了以外すべて（時期未定の備忘も含む）</option>
           <option value="active">未完了</option>
           <option value="waiting">連絡待ち（依頼者・相手方・事務局）</option>
           {TASK_STATUSES.map((s) => (
@@ -191,7 +191,7 @@ export default function Tasks() {
           <span className="text-xs text-slate-400">Chatwork のタスクは 10 分ごとに自動で取り込みます</span>
         )}
       </div>
-      {status !== 'memo' && status !== 'all' && (memos.data?.length ?? 0) > 0 && (
+      {status !== 'memo' && status !== 'notdone' && (memos.data?.length ?? 0) > 0 && (
         <div className="text-xs text-slate-500">
           ⏳ 時期未定の備忘が {memos.data!.length} 件あります（きっかけが来るまでタスクの数には入れていません）{' '}
           <button type="button" className="text-blue-700 hover:underline" onClick={() => setStatus('memo')}>

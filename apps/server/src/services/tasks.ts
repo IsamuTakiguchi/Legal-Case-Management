@@ -1,4 +1,4 @@
-import { and, eq, desc, inArray, lt, isNotNull } from 'drizzle-orm';
+import { and, eq, ne, desc, inArray, lt, isNotNull } from 'drizzle-orm';
 import { looksLikePhoneMessage } from './phoneMessage.js';
 import { db, schema } from '../db/index.js';
 import { addBusinessDays, dateOnlyDeadline, jstYmd, formatJaDateTime, TASK_STATUS_LABEL, isWaitingStatus, WAITING_TASK_STATUSES, ACTIVE_TASK_STATUSES, type TaskInput, type TaskStatus } from '@lcm/shared';
@@ -184,12 +184,11 @@ export function nudgeTask(id: number): TaskRow {
   return db().select().from(schema.tasks).where(eq(schema.tasks.id, id)).get()!;
 }
 
-export function listTasks(filter: { status?: TaskStatus | 'active' | 'waiting' | 'all'; clientId?: number; caseId?: number; conversationId?: number }) {
+export function listTasks(filter: { status?: TaskStatus | 'active' | 'waiting' | 'notdone'; clientId?: number; caseId?: number; conversationId?: number }) {
   const conds = [];
-  // all はすべての状態（完了・時期未定の備忘も含む）
-  if (filter.status === 'all') {
-    /* 絞らない */
-  } else if (filter.status === 'active') conds.push(inArray(schema.tasks.status, [...ACTIVE_TASK_STATUSES]));
+  // notdone は完了以外のすべて（未完了＋時期未定の備忘）
+  if (filter.status === 'notdone') conds.push(ne(schema.tasks.status, 'done'));
+  else if (filter.status === 'active') conds.push(inArray(schema.tasks.status, [...ACTIVE_TASK_STATUSES]));
   // 連絡待ち（依頼者の返信待ち＋相手方・裁判所待ち）
   else if (filter.status === 'waiting') conds.push(inArray(schema.tasks.status, [...WAITING_TASK_STATUSES]));
   else if (filter.status) conds.push(eq(schema.tasks.status, filter.status));
