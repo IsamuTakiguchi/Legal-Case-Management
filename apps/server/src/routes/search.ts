@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { recordTurn, recordApplied, listThreads, getThread, deleteThread, newThreadId } from '../services/secretaryHistory.js';
 import { z } from 'zod';
 import { searchAll, SEARCH_KINDS, SEARCH_KIND_LABEL } from '../services/search.js';
 import { askAcrossData } from '../services/askSearch.js';
@@ -36,13 +37,29 @@ searchRoutes.post('/secretary/plan', async (c) => {
       history: z.array(z.object({ role: z.enum(['user', 'assistant']), text: z.string() })).max(20).optional(),
       /** 秘書を開いた画面（依頼者・事件・会話）。「この件」「この人」はこれを指す */
       context: z.object({ clientId: z.number().int().optional(), caseId: z.number().int().optional(), conversationId: z.number().int().optional() }).optional(),
+      /** ひと続きのやり取りの ID（無ければ新しく始める） */
+      threadId: z.string().max(100).optional(),
     })
     .parse(await c.req.json());
-  return c.json(await planSecretary(body.text, body.history ?? [], body.context));
+  const plan = await planSecretary(body.text, body.history ?? [], body.context);
+  // やり取りを残す（あとで履歴から見返せるように）
+  const threadId = body.threadId || newThreadId();
+  const turn = recordTurn({ threadId, request: body.text, reply: plan.reply, context: body.context ?? null, actions: plan.actions, previews: plan.previews, questions: plan.questions });
+  return c.json({ ...plan, threadId, turnId: turn.id });
 });
+
+/** AI 秘書: これまでのやり取り（新しい順） */
+searchRoutes.get('/secretary/threads', (c) => c.json(listThreads({ q: c.req.query('q') || undefined, limit: Number(c.req.query('limit') ?? 50) || 50 })));
+
+/** AI 秘書: ひと続きのやり取り */
+searchRoutes.get('/secretary/threads/:id', (c) => c.json(getThread(c.req.param('id'))));
+
+searchRoutes.delete('/secretary/threads/:id', (c) => c.json(deleteThread(c.req.param('id'))));
 
 /** AI 秘書: 確認した案を実際に登録する */
 searchRoutes.post('/secretary/apply', async (c) => {
-  const body = z.object({ actions: z.array(secretaryActionSchema).min(1).max(12) }).parse(await c.req.json());
-  return c.json(await applySecretaryActions(body.actions));
+  const body = z.object({ actions: z.array(secretaryActionSchema).min(1).max(12), turnId: z.number().int().optional() }).parse(await c.req.json());
+  const r = await applySecretaryActions(body.actions);
+  if (body.turnId) recordApplied(body.turnId, r.applied);
+  return c.json(r);
 });
