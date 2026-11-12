@@ -44,11 +44,11 @@ const QUOTE_LABEL: Record<string, string> = { message: '届いた連絡', note: 
  * 届いた連絡・事件の記録・タスクを引用して、Chatwork で担当事務局に確認・報告する。
  * base に `/conversations/12`・`/case-notes/34`・`/tasks/56` を渡して、受信箱・事件ページ・タスク一覧から使う。
  */
-export function StaffAskPanel({ base, draftKey, onClose, onSent }: { base: string; draftKey: string; onClose: () => void; onSent: () => void }) {
+export function StaffAskPanel({ base, draftKey, onClose, onSent, initialText }: { base: string; draftKey: string; onClose: () => void; onSent: () => void; /** はじめから入れておく本文（AI の送信案など） */ initialText?: string }) {
   const ctx = useQuery({ queryKey: ['staff-ask', base], queryFn: () => api.get<StaffAskCtx>(`${base}/staff-ask`) });
   const [staffId, setStaffId] = useState('');
   const [roomId, setRoomId] = useState('');
-  const [text, setText] = useState('');
+  const [text, setText] = useState(initialText ?? '');
   const [instruction, setInstruction] = useState('');
   const [quote, setQuote] = useState(true);
   const [asTask, setAsTask] = useState(false);
@@ -72,7 +72,7 @@ export function StaffAskPanel({ base, draftKey, onClose, onSent }: { base: strin
     setAsTask(false);
   }, [reply]);
   // 書きかけの確認文はこの端末に自動保存する
-  const askDraft = useDraft(`${draftKey}:staff-ask`, text, setText, '');
+  const askDraft = useDraft(`${draftKey}:staff-ask`, text, setText, initialText ?? '');
   // ask=確認・依頼の文、report=状況報告の文を AI に書いてもらう
   const draft = useMutation({
     mutationFn: (mode: 'ask' | 'report') => api.post<{ text: string; title: string }>(`${base}/staff-ask/draft`, { instruction: instruction || null, mode }),

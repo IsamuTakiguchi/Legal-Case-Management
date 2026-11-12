@@ -238,9 +238,9 @@ export function caseTimeline(id: number, limit = 200) {
 }
 
 const phoneMemoSchema = z.object({
-  gist: z.string().describe('要旨（2〜3 文）'),
-  theirSaid: z.array(z.string()).describe('相手が言ったこと・相手の主張や要望を、1 項目ずつ簡潔に。メモに無ければ空'),
-  ourSaid: z.array(z.string()).describe('こちら（弁護士側）が言ったこと・伝えたこと・回答を、1 項目ずつ簡潔に。メモに無ければ空'),
+  gist: z
+    .string()
+    .describe('要約。相手が言ったこと・こちらが伝えたことも含めて、発言者で分けずに 1 つの文章にまとめる（3〜6 文。誰が何を言ったかは「先方は〜とのこと」「〜と伝えた」のように文中に書く）'),
   phone: z.string().nullable().describe('メモに電話番号があればそのまま（ハイフン付き）。無ければ null'),
   decisions: z.array(z.string()).describe('決定事項・合意事項'),
   nextActions: z
@@ -252,12 +252,37 @@ const phoneMemoSchema = z.object({
         owner: z.enum(['self', 'client', 'counterpart', 'court', 'other']),
       }),
     )
-    .describe('タスクとして追いかける価値のある「次のアクション」だけを、多くても 3 件。細かい手順は 1 件にまとめる'),
+    .describe('タスク案: タスクとして追いかける価値のある「次のアクション」だけを、多くても 3 件。細かい手順は 1 件にまとめる'),
   waitingFor: z.enum(WAITING_FOR).describe('この後、誰の対応待ちになるか（staff は事務所の職員＝事務局）'),
   counterpart: z.string().nullable().describe('通話相手（メモから分かれば）'),
+  schedule: z
+    .object({
+      suggested: z.boolean().describe('予定に入れる・日程を決める必要があるか（次回期日・打合せ日時が決まった／これから日程を調整する、とメモにあるとき true）'),
+      note: z.string().describe('日程案。何の予定を、いつ（決まっていれば日時、未定なら希望・期間）登録・調整するかを 1 文で。不要なら空'),
+    })
+    .describe('日程案'),
+  clientMessage: z
+    .object({
+      suggested: z.boolean().describe('依頼者に知らせる・お願いすることがあるか（依頼者本人との通話・打合せで、その場で伝え終わっているなら false）'),
+      text: z.string().describe('依頼者に送る本文案（弁護士本人から依頼者へ。宛名・挨拶を含めて短く丁寧に。メモに無い事実・期限・金額は書かない）。不要なら空'),
+    })
+    .describe('依頼者への送信案'),
+  staffMessage: z
+    .object({
+      suggested: z.boolean().describe('担当事務局に頼む作業・伝えることがあるか（書類の準備・発送・法テラスへの回付・期日の管理など）'),
+      text: z.string().describe('担当事務局へのチャット本文案。1 行目に依頼者の氏名（フルネーム。「さん」「様」・事件の種類は付けない）だけ、2 行目から本題（「○○さんについて」の前置きは付けない）。不要なら空'),
+    })
+    .describe('担当事務への送信案'),
 });
 
-/** 走り書きのメモを要旨・決定事項・次のアクションに整理 */
+/** AI が整理のときに挙げる、記録のあとにすること（日程・依頼者への連絡・担当事務への連絡）の案 */
+export interface NoteSuggestions {
+  schedule: { suggested: boolean; note: string };
+  clientMessage: { suggested: boolean; text: string };
+  staffMessage: { suggested: boolean; text: string };
+}
+
+/** 走り書きのメモを、1 つの要約・決定事項・タスク案と、日程・依頼者への連絡・担当事務への連絡の案に整理 */
 export async function structureNote(rawText: string, ctx: { caseTitle?: string; clientName?: string; kind: string; counterpart?: string | null; phone?: string | null; context?: string | null }) {
   // 年まで渡す（「11/10」を去年と読まないように）
   const today = formatJaDate(new Date());
@@ -266,21 +291,39 @@ export async function structureNote(rawText: string, ctx: { caseTitle?: string; 
     system: [
       '法律事務所の事務補助者として、弁護士の走り書きメモを整理します。事実の創作はせず、メモにある内容だけを使います。日付は今日を基準に解釈します。',
       '年の書かれていない日付（「11/10」「11月10日」など）は、今日以降で最も近いその日付にします（今日より前の月日なら来年）。ただし、すでに過ぎた出来事の日付として書かれているものは今年のままにします。',
-      '「相手が言ったこと」と「こちら（弁護士）が言ったこと」は必ず分けてください。「〜とのこと」「〜と言われた」「先方は〜」は相手の発言、「〜と伝えた」「〜と回答」「こちらからは〜」は自分の発言です。どちらか判然としない場合は文脈で判断し、決定事項と重複しても構いません。',
+      '要約（gist）は、発言者ごとに分けず 1 つの文章にまとめます。「〜とのこと」「〜と言われた」「先方は〜」は相手の発言、「〜と伝えた」「〜と回答」「こちらからは〜」は自分の発言なので、要約の中で「先方は〜とのこと。〜と伝えた。」のように分かるように書きます。',
       '次のアクションの期限は 2 つに分けます。due（締切）はそのこと自体をいつまでに済ませるか（提出期限・回答期限など）、replyBy（返信期限）は依頼者・相手方などの返事や資料をいつまで待つかです。例: 「答弁書は 10/15 提出。答弁書案を依頼者に送り 10/10 までに返事をもらう」→ due=10/15、replyBy=10/10。メモに無い期限は作らず null にします。',
       '次のアクションは、弁護士がタスクとして追いかける単位で挙げます。細かく分けず、ひとまとまりの仕事は 1 件にします（例: 「依頼者に和解案を説明して意向を確認し、来週金曜までに相手方へ回答する」は 1 件）。多くても 3 件。決定事項の言い換えや、すでに終わったこと、「メモを残す」のような当然の作業は含めません。何も無ければ空にします。',
+      '日程案・依頼者への送信案・担当事務への送信案は、メモから見て必要なときだけ suggested=true にして中身を書きます。必要なければ suggested=false で空にします。無理に作りません。',
+      `担当事務への送信案は、1 行目に依頼者の氏名（${ctx.clientName ? `「${ctx.clientName.replace(/[\s　]+/g, '')}」` : 'フルネーム'}）だけを書き、2 行目から頼みたいことを書きます。`,
     ].join('\n'),
     user: `今日: ${today}\n事件: ${ctx.caseTitle ?? '不明'}\n依頼者: ${ctx.clientName ?? '不明'}\n種別: ${ctx.kind}\n相手: ${ctx.counterpart ?? '（メモから判断）'}\n電話番号: ${ctx.phone ?? '（メモから判断）'}\n\nメモ:\n${rawText}${
       ctx.context
-        ? `\n\n（参考）この電話は、次の伝言への折り返しです。伝言は事務局が受けたもので、今回の通話の発言ではありません。相手が言ったこと・こちらが言ったことには、メモにある今回の通話の内容だけを入れてください。要旨には「◯◯の件で折り返し」のように用件を含めて構いません。\n${ctx.context}`
+        ? `\n\n（参考）この電話は、次の伝言への折り返しです。伝言は事務局が受けたもので、今回の通話の発言ではありません。要約には、メモにある今回の通話の内容を中心に書き、「◯◯の件で折り返し」のように用件を含めて構いません。\n${ctx.context}`
         : ''
     }`,
     schema: phoneMemoSchema,
     effort: 'low',
-    maxTokens: 2000,
+    maxTokens: 3000,
   });
-  // それでも去年などになっていたら直す
-  return { ...r, nextActions: r.nextActions.map((a) => ({ ...a, due: fixDueYear(a.due), replyBy: fixDueYear(a.replyBy) })) };
+  const suggestions: NoteSuggestions = {
+    schedule: { suggested: !!r.schedule?.suggested && !!r.schedule.note?.trim(), note: r.schedule?.note?.trim() ?? '' },
+    clientMessage: { suggested: !!r.clientMessage?.suggested && !!r.clientMessage.text?.trim(), text: r.clientMessage?.text?.trim() ?? '' },
+    staffMessage: { suggested: !!r.staffMessage?.suggested && !!r.staffMessage.text?.trim(), text: r.staffMessage?.text?.trim() ?? '' },
+  };
+  return {
+    gist: r.gist,
+    phone: r.phone,
+    decisions: r.decisions,
+    waitingFor: r.waitingFor,
+    counterpart: r.counterpart,
+    // 発言者で分けたブロックはやめ、要約 1 つにまとめる（古い記録の表示のために項目だけ残す）
+    theirSaid: [] as string[],
+    ourSaid: [] as string[],
+    // それでも去年などになっていたら直す
+    nextActions: r.nextActions.map((a) => ({ ...a, due: fixDueYear(a.due), replyBy: fixDueYear(a.replyBy) })),
+    suggestions,
+  };
 }
 
 export interface AddNoteOptions {

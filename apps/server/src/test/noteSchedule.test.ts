@@ -20,6 +20,8 @@ vi.mock('../integrations/anthropic.js', () => ({
 }));
 /** カレンダーは空（予定なし）にして、空き枠の選び方だけを見る */
 vi.mock('../integrations/calendar.js', () => ({ listEvents: async () => [] }));
+// Google の接続（既定は未接続。空きを Google から読むテストだけ接続にする）
+vi.mock('../integrations/google.js', async (orig) => ({ ...(await orig<typeof import('../integrations/google.js')>()), isGoogleConnected: vi.fn(() => false) }));
 
 const { openTestDatabase, closeDatabase, db, schema } = await import('../db/index.js');
 const { proposeScheduleFromNote, registerScheduleFromNote } = await import('../services/noteSchedule.js');
@@ -225,6 +227,8 @@ describe('記録から日程調整', () => {
 
   it('カレンダーの空きが読めなくても、読み取った条件は返す', async () => {
     const cal = await import('../integrations/calendar.js');
+    const google = await import('../integrations/google.js');
+    vi.mocked(google.isGoogleConnected).mockReturnValue(true);
     const spy = vi.spyOn(cal, 'listEvents').mockRejectedValueOnce(new Error('Google に接続されていません'));
     const { note } = seedNote();
     extracted = extraction({ note: '来週の午後を希望' });
@@ -234,6 +238,7 @@ describe('記録から日程調整', () => {
     expect(r.slots).toEqual([]);
     expect(r.blocked).toContain('Google に接続されていません');
     spy.mockRestore();
+    vi.mocked(google.isGoogleConnected).mockReturnValue(false);
   });
 });
 

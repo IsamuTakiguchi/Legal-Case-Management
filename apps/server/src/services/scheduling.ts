@@ -1,4 +1,4 @@
-import { eq, and, inArray } from 'drizzle-orm';
+import { eq, and, inArray, lt, gt } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/index.js';
 import * as cal from '../integrations/calendar.js';
@@ -59,9 +59,23 @@ export function needsTravel(ev: { location?: string | null; title?: string | nul
   return true;
 }
 
-/** Google カレンダーの予定を、空き検索用のブロックにする（「予定なし」扱いのものは除く） */
+/**
+ * Google カレンダーの予定を、空き検索用のブロックにする（「予定なし」扱いのものは除く）。
+ * Google 未接続なら、アプリ内に登録した予定で空きを探す
+ */
 export async function busyBlocks(from: Date, to: Date): Promise<BusyBlock[]> {
-  const events = await cal.listEvents(new Date(from.getTime() - 86400_000), new Date(to.getTime() + 86400_000));
+  const lo = new Date(from.getTime() - 86400_000);
+  const hi = new Date(to.getTime() + 86400_000);
+  if (!isGoogleConnected()) {
+    return db()
+      .select()
+      .from(schema.calendarEvents)
+      .where(and(lt(schema.calendarEvents.startAt, hi.toISOString()), gt(schema.calendarEvents.endAt, lo.toISOString())))
+      .all()
+      .filter((e) => e.status !== 'cancelled')
+      .map((e) => ({ start: e.startAt, end: e.endAt, travel: needsTravel(e), title: e.title }));
+  }
+  const events = await cal.listEvents(lo, hi);
   return events.filter((e) => !e.transparent).map((e) => ({ start: e.startAt, end: e.endAt, travel: needsTravel(e), title: e.title }));
 }
 
@@ -150,22 +164,19 @@ export async function findFreeSlots(opts: FreeSlotOptions): Promise<Slot[]> {
   return pickSlots(busy, opts);
 }
 
-export function holdTitle(clientName: string, kind: string): string {
-  const label = kind === 'WEB' ? 'WEB相談' : kind === '面談' ? '新規相談' : kind;
-  return `${familyName(clientName)} ${label} 仮`;
-}
-
 export function confirmedTitle(clientName: string, kind: string): string {
   const label = kind === 'WEB' ? 'WEB相談' : kind === '面談' ? '新規相談' : kind;
   return `${familyName(clientName)} ${label}`;
 }
 
-/** 候補を提案し、仮押さえイベントを作成 */
+/**
+ * 空き時間から候補を探して仮押さえする。
+ * 仮押さえは予定ページ・事件ページ・会話の「日程・予定」と同じ仕組み（createHoldSet）で入れるので、
+ * どの画面からでも確定・候補の変更・取消ができる
+ */
 export async function proposeSlots(input: ProposeSlotsInput): Promise<{ session: SchedulingRow; slots: Slot[]; text: string }> {
   const conv = db().select().from(schema.conversations).where(eq(schema.conversations.id, input.conversationId)).get();
   if (!conv) throw new Error('会話が見つかりません');
-  const client = conv.clientId ? db().select().from(schema.clients).where(eq(schema.clients.id, conv.clientId)).get() : null;
-  const name = client?.name ?? conv.counterpartName ?? '相手';
   const slots = await findFreeSlots({
     from: new Date(input.from),
     to: new Date(input.to),
@@ -177,27 +188,22 @@ export async function proposeSlots(input: ProposeSlotsInput): Promise<{ session:
     gapMinutes: input.gapMinutes ?? null,
   });
   if (slots.length === 0) throw new Error('指定期間に空き枠がありません（相手の希望や移動時間の条件を緩めると見つかることがあります）');
-  const session = db()
-    .insert(schema.schedulingSessions)
-    .values({ clientId: conv.clientId ?? null, conversationId: conv.id, kind: input.kind, state: 'proposing', candidates: slots, location: input.location || null, proposedAt: new Date().toISOString() })
-    .returning()
-    .get();
-  const candidates: { startAt: string; endAt: string; eventId?: string }[] = [];
-  for (const s of slots) {
-    const ev = await cal.createEvent({
-      title: holdTitle(name, input.kind),
-      startAt: new Date(s.startAt),
-      endAt: new Date(s.endAt),
-      tentative: true,
-      location: input.location || null,
-      description: `日程調整中（アプリで管理: セッション ${session.id}）`,
-      tag: { clientId: conv.clientId ?? null, kind: 'hold', sessionId: session.id },
-    });
-    candidates.push({ ...s, eventId: ev.id });
-  }
-  db().update(schema.schedulingSessions).set({ candidates, updatedAt: new Date().toISOString() }).where(eq(schema.schedulingSessions.id, session.id)).run();
+  const { createHoldSet } = await import('./court.js');
+  const r = await createHoldSet({
+    title: input.kind === 'WEB' ? 'WEB相談' : input.kind === '面談' ? '新規相談' : input.kind,
+    kind: input.kind === '期日' ? 'hearing' : input.kind === '打合せ' ? 'meeting' : 'consult',
+    clientId: conv.clientId ?? null,
+    caseId: conv.caseId ?? null,
+    counterpartName: conv.clientId ? null : (conv.counterpartName ?? null),
+    location: input.location || null,
+    web: input.kind === 'WEB',
+    conversationId: conv.id,
+    durationMinutes: input.durationMinutes,
+    slots: slots.map((s) => ({ startAt: s.startAt, endAt: s.endAt })),
+  });
+  const session = db().select().from(schema.schedulingSessions).where(eq(schema.schedulingSessions.id, r.sessionId)).get()!;
   const text = [slots.map((s) => `・${formatJaDateTime(new Date(s.startAt))}〜`).join('\n'), input.location ? `場所: ${input.location}` : ''].filter(Boolean).join('\n');
-  return { session: { ...session, candidates }, slots, text };
+  return { session, slots, text };
 }
 
 /** 確定: 他の仮押さえを削除し確定イベントを作成、WEB なら Zoom 発行 */

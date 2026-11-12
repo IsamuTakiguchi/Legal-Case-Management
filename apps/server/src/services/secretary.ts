@@ -10,7 +10,7 @@ import { createTask } from './tasks.js';
 import { createCalendarEvent } from './court.js';
 import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, EVENT_KINDS, EVENT_KIND_LABEL, TASK_STATUSES, TASK_STATUS_LABEL, formatJaDateTime, toJstParts, phoneDigits, isPhoneLike, representativeLabel } from '@lcm/shared';
 import { logger } from '../logger.js';
-import { extendedActionSchemas, extendedReadTools, previewExtended, applyExtended, EXTENDED_TYPES, type ExtendedAction, type Change } from './secretaryActions.js';
+import { extendedActionSchemas, extendedReadTools, previewExtended, applyExtended, EXTENDED_TYPES, normalizeStaffMessage, type ExtendedAction, type Change } from './secretaryActions.js';
 
 /**
  * AI 秘書。
@@ -273,6 +273,7 @@ function systemPrompt(): string {
     '・変更の案（〜_update）には、変える項目だけを書きます。変えない項目は書きません。項目を空にする（担当事務局を外す など）ときだけ clear に項目名を書きます。',
     '・削除（task_delete・event_delete）は、はっきり頼まれたときだけ案にします。',
     '・メッセージの送信は、送ってほしいとはっきり頼まれたときだけ案にします。宛先と手段は get_client・get_case の送れる宛先から選びます。本文は弁護士本人から送る文として、頼まれた内容だけを書きます（事実・期限・金額を足さない）。メールで、その相手とのメールがまだ無いときは件名を付けます。',
+    '・事務局へのチャット（message_send の to=staff）は、1 行目に誰の件か（依頼者の氏名をフルネームで。「さん」「様」・事件の種類は付けない）だけを書き、2 行目から本題を書きます。本題に「○○さんについて」のような前置きは付けません。例:「吉堂壱星（改行）本人から書類が届きましたので、法テラスへ審査回付をお願いします。」事件が分かっていれば caseId を付けます。',
     '・質問された（「どうなっている？」など）だけのときは、search_data で調べて reply に答えを書き、actions は空にします。',
     '・reply は 2〜4 文。登録したい内容は画面に一覧で出るので、繰り返しません。',
   ].join('\n');
@@ -283,13 +284,37 @@ function systemPrompt(): string {
  *
  * @param history これまでのやり取り（秘書が聞き返したときの続き）
  */
-export async function planSecretary(text: string, history: { role: 'user' | 'assistant'; text: string }[] = []): Promise<SecretaryPlan> {
+/** 秘書を開いた画面（依頼者・事件・会話） */
+export interface SecretaryContext {
+  clientId?: number;
+  caseId?: number;
+  conversationId?: number;
+}
+
+/** 秘書を開いた画面を、AI に渡す一文にする（「この件」「この人」が誰のことか分かるように） */
+export function secretaryContextNote(ctx: SecretaryContext | undefined): string | null {
+  if (!ctx) return null;
+  const d = db();
+  const parts: string[] = [];
+  const kase = ctx.caseId ? d.select().from(schema.cases).where(eq(schema.cases.id, ctx.caseId)).get() : null;
+  const conv = ctx.conversationId ? d.select().from(schema.conversations).where(eq(schema.conversations.id, ctx.conversationId)).get() : null;
+  const clientId = ctx.clientId ?? kase?.clientId ?? conv?.clientId ?? null;
+  const client = clientId ? d.select().from(schema.clients).where(eq(schema.clients.id, clientId)).get() : null;
+  if (client) parts.push(`依頼者「${client.name}」（clientId=${client.id}）`);
+  if (kase) parts.push(`事件「${kase.title}」（caseId=${kase.id}）`);
+  if (conv) parts.push(`会話（${conv.channel}、相手「${conv.counterpartName ?? conv.counterpartAddress ?? '不明'}」、conversationId=${conv.id}）`);
+  if (!parts.length) return null;
+  return `（いま開いている画面: ${parts.join('／')}。頼みごとに名前が無いときや「この件」「この人」「本人」は、これを指します。別の名前が書かれていればそちらに従います。）`;
+}
+
+export async function planSecretary(text: string, history: { role: 'user' | 'assistant'; text: string }[] = [], context?: SecretaryContext): Promise<SecretaryPlan> {
   const q = text.trim();
   if (!q) throw new Error('頼みたいことを入力してください');
   const sources: SearchHit[] = [];
+  const ctxNote = secretaryContextNote(context);
   const messages: Anthropic.MessageParam[] = [
     ...history.slice(-8).map((m) => ({ role: m.role, content: m.text }) as Anthropic.MessageParam),
-    { role: 'user' as const, content: q },
+    { role: 'user' as const, content: ctxNote ? `${ctxNote}\n${q}` : q },
   ];
   const r = await runToolLoop({
     purpose: 'AI 秘書',
@@ -307,6 +332,8 @@ export async function planSecretary(text: string, history: { role: 'user' | 'ass
     return { reply: r.text || 'うまく聞き取れませんでした。もう一度、具体的に書いてください。', actions: [], previews: [], questions: [], sources, used: r.used };
   }
   const plan = parsed.data;
+  // 事務局へのチャットは、1 行目に依頼者の氏名、2 行目から本題の形にそろえる（AI が崩しても直す）
+  plan.actions = plan.actions.map(normalizeStaffMessage);
   logger.info({ used: r.used, actions: plan.actions.length }, 'AI 秘書が案を作りました');
   return { reply: plan.reply.trim(), actions: plan.actions, previews: plan.actions.map(previewAction), questions: plan.questions, sources, used: r.used };
 }

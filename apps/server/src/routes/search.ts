@@ -34,9 +34,11 @@ searchRoutes.post('/secretary/plan', async (c) => {
     .object({
       text: z.string().min(1),
       history: z.array(z.object({ role: z.enum(['user', 'assistant']), text: z.string() })).max(20).optional(),
+      /** 秘書を開いた画面（依頼者・事件・会話）。「この件」「この人」はこれを指す */
+      context: z.object({ clientId: z.number().int().optional(), caseId: z.number().int().optional(), conversationId: z.number().int().optional() }).optional(),
     })
     .parse(await c.req.json());
-  return c.json(await planSecretary(body.text, body.history ?? []));
+  return c.json(await planSecretary(body.text, body.history ?? [], body.context));
 });
 
 /** AI 秘書: 確認した案を実際に登録する */

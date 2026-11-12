@@ -16,7 +16,8 @@ import { TaskDeadlines, NewTaskDeadlines, TaskDeadlineSelect, FOLLOW_LABEL, DUE_
 import { MemoBadge, MemoForm, MEMO_HINT } from '../lib/Memo';
 import { StaffAskPanel } from '../lib/StaffAskPanel';
 import { CaseFolderCard, type CaseFolderInfo } from '../lib/CaseFolderCard';
-import { NoteComposer, ActionDeadlineInputs, dueYmd } from '../lib/NoteComposer';
+import { NoteComposer, ActionDeadlineInputs, dueYmd, type NoteFollowUps } from '../lib/NoteComposer';
+import { ClientSendPanel } from '../lib/ClientSendPanel';
 import { fmtDateTime, fmtDate, fmtYen, fmtBytes, toLocalInput, fromLocalInput, channelLabel, fmtEventTime } from '../lib/format';
 import { CASE_NOTE_KINDS, CASE_NOTE_KIND_LABEL, WAITING_FOR, WAITING_FOR_LABEL, EVENT_KINDS, CREDITOR_EVENT_CHANNELS, CREDITOR_EVENT_CHANNEL_LABEL, CREDITOR_IMPORT_FIELD_LABEL, EVENT_KIND_LABEL, TASK_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, CASE_CONTACT_ROLES, CASE_CONTACT_ROLE_LABEL, messageLink, ACTIVE_TASK_STATUSES, taskStatusForWaiting, formatWareki, parseJaDate, addYearsIso, taskDeadline, jstYmd, actionDeadlinesLabel, isWaitingStatus, type CaseNoteKind, type WaitingFor, type EventKind, type TaskStatus, isAllDayRange, NEW_TASK_STATUSES } from '@lcm/shared';
 import { CaseStatusBadge } from './Cases';
@@ -161,6 +162,8 @@ export default function CaseDetail() {
   }, [loaded]);
   // 期日の記録を保存した直後（または記録の「依頼者に期日連絡」「依頼者に連絡」）に開く連絡パネル。期日と打合せで中身が変わる
   const [notice, setNotice] = useState<{ noteId: number; kind: NoticeKind } | null>(null);
+  // 記録を保存したあとに開く、AI の案（日程・依頼者への送信・担当事務への送信）
+  const [followUp, setFollowUp] = useState<{ noteId: number; f: NoteFollowUps } | null>(null);
   // 「予定」から選んだ、日程変更（リスケ）する予定
   const [rescheduling, setRescheduling] = useState<RescheduleTarget | null>(null);
   const holds = useCaseHolds(id ? Number(id) : null);
@@ -264,11 +267,30 @@ export default function CaseDetail() {
             )}
             <NoteComposer
               caseId={c.id}
-              onSaved={(note) => {
+              onSaved={(note, extra) => {
                 qc.invalidateQueries({ queryKey: ['case', id] });
-                if (note?.kind === 'court') setNotice({ noteId: note.id, kind: 'court' });
+                // 期日の記録は、依頼者への連絡を「依頼者に期日連絡」（結果と次回期日を入れた文）で行う
+                const court = note?.kind === 'court';
+                if (court) setNotice({ noteId: note.id, kind: 'court' });
+                const f = extra?.followUps ? { ...extra.followUps, clientText: court ? null : extra.followUps.clientText } : null;
+                if (note && f && (f.schedule || f.clientText || f.staffText)) setFollowUp({ noteId: note.id, f });
               }}
             />
+            {followUp && (
+              <NoteFollowUpPanel
+                key={followUp.noteId}
+                note={c.notes.find((n) => n.id === followUp.noteId) ?? null}
+                noteId={followUp.noteId}
+                f={followUp.f}
+                clientId={c.client?.id ?? null}
+                caseId={c.id}
+                onChanged={() => {
+                  qc.invalidateQueries({ queryKey: ['case', id] });
+                  qc.invalidateQueries({ queryKey: ['timeline', c.id] });
+                }}
+                onClose={() => setFollowUp(null)}
+              />
+            )}
             {notice && (
               <NoteNoticePanel
                 key={`${notice.kind}:${notice.noteId}`}
@@ -1962,19 +1984,24 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
         }}
       />
       <div>
-        <label className="label">要旨</label>
+        <label className="label">要約</label>
         <textarea className="input min-h-16 text-sm" value={gist} onChange={(e) => setGist(e.target.value)} placeholder="空なら元メモがそのまま表示されます" />
         <DraftHint handle={editDraft} />
       </div>
       <div className="grid gap-2 md:grid-cols-2">
-        <div>
-          <label className="label">相手が言ったこと（1 行 1 項目）</label>
-          <textarea className="input min-h-16 text-sm" value={theirSaid} onChange={(e) => setTheirSaid(e.target.value)} />
-        </div>
-        <div>
-          <label className="label">こちらが言ったこと（1 行 1 項目）</label>
-          <textarea className="input min-h-16 text-sm" value={ourSaid} onChange={(e) => setOurSaid(e.target.value)} />
-        </div>
+        {/* 発言者で分けた欄は、前に分けて記録したもの（中身があるもの）だけに出す。いまは要約 1 つにまとめる */}
+        {(theirSaid.trim() || ourSaid.trim()) && (
+          <>
+            <div>
+              <label className="label">相手が言ったこと（1 行 1 項目）</label>
+              <textarea className="input min-h-16 text-sm" value={theirSaid} onChange={(e) => setTheirSaid(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">こちらが言ったこと（1 行 1 項目）</label>
+              <textarea className="input min-h-16 text-sm" value={ourSaid} onChange={(e) => setOurSaid(e.target.value)} />
+            </div>
+          </>
+        )}
         <div>
           <label className="label">決定事項（1 行 1 項目）</label>
           <textarea className="input min-h-14 text-sm" value={decisions} onChange={(e) => setDecisions(e.target.value)} />
@@ -1993,9 +2020,9 @@ function NoteEditor({ n, onSaved, onCancel }: { n: Note; onSaved: () => void; on
             className="btn btn-sm"
             onClick={() => organize.mutate()}
             disabled={organize.isPending || !rawText.trim()}
-            title="上の元メモの内容から、要旨・相手が言ったこと・こちらが言ったこと・決定事項・次のアクションを AI が作り直します。保存はしません"
+            title="上の元メモの内容から、要約（発言者で分けず 1 つ）・決定事項・次のアクションを AI が作り直します。保存はしません"
           >
-            {organize.isPending ? '整理中…' : '✨ AI で要旨・発言・決定事項・次のアクションに整理'}
+            {organize.isPending ? '整理中…' : '✨ AI で要約・決定事項・次のアクションに整理'}
           </button>
           {beforeAi && (
             <button type="button" className="btn btn-sm" onClick={undoAi}>
@@ -2501,6 +2528,64 @@ function NoteTaskPanel({ n, onDone, onClose }: { n: Note; onDone: () => void; on
       {msg && <div className="fade-in text-xs text-slate-700">{msg}</div>}
       <div className="text-xs text-slate-400">作ったタスクは、この事件・依頼者に紐付きます。記録には「タスク化済」として残ります。</div>
     </div>
+  );
+}
+
+/**
+ * 記録を保存したあと、AI が挙げた案（日程・依頼者への送信・担当事務への送信）をその場で開く。
+ * どれも送る前・登録する前に確かめられる
+ */
+function NoteFollowUpPanel({ note, noteId, f, clientId, caseId, onChanged, onClose }: { note: Note | null; noteId: number; f: NoteFollowUps; clientId: number | null; caseId: number; onChanged: () => void; onClose: () => void }) {
+  const [open, setOpen] = useState({ schedule: !!f.schedule, client: !!f.clientText, staff: !!f.staffText });
+  const anyOpen = open.schedule || open.client || open.staff;
+  return (
+    <section className="fade-in card space-y-2 border-blue-200 text-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="font-semibold">記録のあとにすること（AI の案）</h2>
+        <span className="text-xs text-slate-500">送る前・登録する前に確かめられます。不要なものは閉じてください</span>
+        <button className="btn btn-sm ml-auto" onClick={onClose}>
+          {anyOpen ? 'すべて閉じる' : '閉じる'}
+        </button>
+      </div>
+      {f.schedule && open.schedule && (
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 text-xs text-slate-600">
+            <span className="font-semibold text-slate-700">📅 日程案:</span> {f.schedule}
+          </div>
+          {note ? (
+            <NoteSchedulePanel
+              n={note}
+              onDone={onChanged}
+              onClose={() => setOpen((o) => ({ ...o, schedule: false }))}
+            />
+          ) : (
+            <div className="loading-text text-xs text-slate-500">記録を読み込んでいます…</div>
+          )}
+        </div>
+      )}
+      {f.clientText && open.client && (clientId ? (
+        <ClientSendPanel
+          clientId={clientId}
+          caseId={caseId}
+          initialText={f.clientText}
+          draftKey={`note:${noteId}`}
+          onClose={() => setOpen((o) => ({ ...o, client: false }))}
+          onSent={onChanged}
+        />
+      ) : (
+        <div className="text-xs text-orange-700">この事件に依頼者が紐付いていないので、依頼者には送れません</div>
+      ))}
+      {f.staffText && open.staff && (
+        <StaffAskPanel
+          base={`/case-notes/${noteId}`}
+          draftKey={`note:${noteId}`}
+          initialText={f.staffText}
+          onClose={() => setOpen((o) => ({ ...o, staff: false }))}
+          onSent={onChanged}
+        />
+      )}
+      {!anyOpen && <div className="text-xs text-slate-500">すべて閉じました。記録の「予定に登録・日程調整」「事務局に確認」からも、あとで開けます。</div>}
+    </section>
   );
 }
 
