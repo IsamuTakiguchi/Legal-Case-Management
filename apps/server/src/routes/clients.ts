@@ -18,7 +18,7 @@ import { staffAskContext, draftStaffAsk, sendStaffAsk, type StaffAskSource } fro
 import { listCaseTypes, upsertCaseType, createCase, updateCase, bulkUpdateCases, listCases, getCase, caseTimeline, addCaseNote, updateCaseNote, deleteCaseNote, generateCaseSummary, structureNote, restructureNote, createTasksFromNote, suggestNoteTasks } from '../services/cases.js';
 import * as creditors from '../services/creditors.js';
 import { onedriveCandidates, chatworkCandidates, applyImport, deleteClient } from '../services/clientImport.js';
-import { findDuplicateClients, mergeClients } from '../services/clientMerge.js';
+import { findDuplicateClients, mergeClients, ignoreDuplicate } from '../services/clientMerge.js';
 import { caseFolderRel, setCaseFolder, createCaseFolder, defaultCaseFolderRel, clientFolderParents, defaultClientFolderRel, syncClientFolderName, syncClientFolderNames, rememberClientFolderId, adoptClientFolderPath, renameClientFolder, folderStatusMismatches, applyFolderStatuses } from '../services/clientFolders.js';
 import { logger } from '../logger.js';
 import { listContacts, createContact, updateContact, deleteContact, contactBriefs } from '../services/contacts.js';
@@ -50,13 +50,19 @@ clientRoutes.post('/clients', async (c) => c.json(createClientRecord(clientInput
 
 // ---- 同じ名前で二重に登録した依頼者の統合 ----
 
-/** 名前が同じ依頼者の組（空白・全角半角の違いは無視） */
+/** 二重登録らしい依頼者の組（名前が同じ、法人格・括弧書きなどを除くと同じ、または 1 文字違い） */
 clientRoutes.get('/clients/duplicates', (c) => c.json(findDuplicateClients()));
 
 /** 選んだ依頼者を 1 件にまとめる。事件・会話・タスク・記録・ファイルの紐付けを残す側へ付け替える */
 clientRoutes.post('/clients/merge', async (c) => {
-  const body = z.object({ keepId: z.number().int(), mergeIds: z.array(z.number().int()).min(1).max(20) }).parse(await c.req.json());
-  return c.json(mergeClients(body.keepId, body.mergeIds));
+  const body = z.object({ keepId: z.number().int(), mergeIds: z.array(z.number().int()).min(1).max(20), name: z.string().max(200).nullable().optional() }).parse(await c.req.json());
+  return c.json(mergeClients(body.keepId, body.mergeIds, { name: body.name }));
+});
+
+/** 重複の候補に出た組を「別の依頼者」として、もう候補に出さない */
+clientRoutes.post('/clients/duplicates/ignore', async (c) => {
+  const body = z.object({ clientIds: z.array(z.number().int()).min(2).max(20), fuzzy: z.boolean().optional() }).parse(await c.req.json());
+  return c.json(ignoreDuplicate(body.clientIds, { fuzzy: body.fuzzy }));
 });
 
 clientRoutes.get('/clients/:id', (c) => {

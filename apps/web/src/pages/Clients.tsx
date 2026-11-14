@@ -102,7 +102,7 @@ export default function Clients() {
         <button className="btn" onClick={() => syncFolders.mutate()} disabled={syncFolders.isPending} title="OneDrive でフォルダ名を変えた・別の区分へ移した場合に、アプリ側の紐付けを付け直します">
           {syncFolders.isPending ? '確認中…' : 'フォルダ名の変更を取り込む'}
         </button>
-        <button className="btn" onClick={() => setShowMerge(!showMerge)} title="同じ名前で二重に登録した依頼者を 1 件にまとめます">
+        <button className="btn" onClick={() => setShowMerge(!showMerge)} title="二重に登録した依頼者（同じ名前、「正行寺」と「宗教法人正行寺」のような似た名前、1 文字違いの名前）を 1 件にまとめます">
           重複の統合
         </button>
         <button className="btn btn-primary" onClick={() => setShowNew(!showNew)}>
@@ -453,6 +453,14 @@ interface DuplicateGroup {
   name: string;
   clients: MergeCandidate[];
   suggestedKeepId: number;
+  /** 名前が同じ（空白・全角半角の違いだけ）か。false なら法人格などが違う似た名前 */
+  exact?: boolean;
+  /** 1 文字違いの名前の組（別人のことも多い） */
+  fuzzy?: boolean;
+  reasons?: string[];
+  /** 統合後の名前に選べるもの */
+  names?: string[];
+  suggestedName?: string;
 }
 
 interface MergeResult {
@@ -466,9 +474,19 @@ function MergeDuplicates({ onDone }: { onDone: () => void }) {
   const qc = useQueryClient();
   const dups = useQuery({ queryKey: ['client-duplicates'], queryFn: () => api.get<DuplicateGroup[]>('/clients/duplicates') });
   const [keep, setKeep] = useState<Record<string, number>>({});
+  // 統合後の名前（似た名前の組で、正式な名前を選ぶ）
+  const [finalName, setFinalName] = useState<Record<string, string>>({});
   const [msg, setMsg] = useState('');
+  const ignore = useMutation({
+    mutationFn: (v: { ids: number[]; fuzzy: boolean }) => api.post('/clients/duplicates/ignore', { clientIds: v.ids, fuzzy: v.fuzzy }),
+    onSuccess: () => {
+      setMsg('別の依頼者として、この組はもう候補に出しません');
+      qc.invalidateQueries({ queryKey: ['client-duplicates'] });
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
   const merge = useMutation({
-    mutationFn: (v: { keepId: number; mergeIds: number[] }) => api.post<MergeResult>('/clients/merge', v),
+    mutationFn: (v: { keepId: number; mergeIds: number[]; name?: string | null }) => api.post<MergeResult>('/clients/merge', v),
     onSuccess: (r) => {
       const m = r.moved;
       setMsg(
@@ -490,17 +508,31 @@ function MergeDuplicates({ onDone }: { onDone: () => void }) {
         </button>
       </div>
       <p className="text-xs text-slate-500">
-        名前が同じ依頼者（空白や全角半角の違いは無視）を探します。残す依頼者を選んで統合すると、もう一方の事件・会話・タスク・記録・受信ファイル・予定がすべて残す側に付け替わります。OneDrive のフォルダは自動では統合しません（別のフォルダがある場合はお知らせします）。
+        名前が同じ依頼者（空白や全角半角の違いは無視）と、法人格（宗教法人・株式会社・㈱ など）・括弧書き・「様」を除くと同じ名前の依頼者（「正行寺」と「宗教法人正行寺」など）、1 文字だけ違う名前の依頼者（「山田花子」と「山田華子」など。3 文字以上の名前）を探します。似た名前の組、とくに 1 文字違いは別の人・団体のことも多いので、事件・連絡先を見て確かめてから統合してください。残す依頼者を選んで統合すると、もう一方の事件・会話・タスク・記録・受信ファイル・予定がすべて残す側に付け替わります。OneDrive のフォルダは自動では統合しません（別のフォルダがある場合はお知らせします）。
       </p>
       {msg && <div className="fade-in whitespace-pre-wrap rounded border border-blue-200 bg-blue-50 p-2 text-slate-700">{msg}</div>}
       {dups.isLoading && <div className="loading-text text-slate-500">確認中…</div>}
-      {!dups.isLoading && groups.length === 0 && <div className="text-slate-500">同じ名前の依頼者は見つかりませんでした。</div>}
+      {!dups.isLoading && groups.length === 0 && <div className="text-slate-500">重複していそうな依頼者は見つかりませんでした。</div>}
       {groups.map((g) => {
         const keepId = keep[g.key] ?? g.suggestedKeepId;
         const mergeIds = g.clients.filter((c) => c.id !== keepId).map((c) => c.id);
+        const names = g.names ?? [];
+        const name = finalName[g.key] ?? g.suggestedName ?? g.clients.find((c) => c.id === keepId)?.name ?? g.name;
         return (
-          <div key={g.key} className="rounded border border-slate-200 p-2">
-            <div className="mb-1 font-semibold">{g.name}（{g.clients.length} 件）</div>
+          <div key={g.key} className={`rounded border p-2 ${g.exact === false ? 'border-orange-200' : 'border-slate-200'}`}>
+            <div className="mb-1 flex flex-wrap items-center gap-2">
+              <span className="font-semibold">{g.exact === false ? g.clients.map((c) => c.name).join(' ／ ') : g.name}</span>
+              <span className="text-xs text-slate-500">（{g.clients.length} 件）</span>
+              {g.exact === false ? (
+                (g.reasons ?? []).map((r) => (
+                  <span key={r} className="badge badge-orange">
+                    {r}
+                  </span>
+                ))
+              ) : (
+                <span className="badge badge-gray">名前が同じ</span>
+              )}
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead className="text-left text-slate-500">
@@ -543,19 +575,41 @@ function MergeDuplicates({ onDone }: { onDone: () => void }) {
                 </tbody>
               </table>
             </div>
-            <button
-              className="btn btn-primary btn-sm mt-2"
-              disabled={merge.isPending || mergeIds.length === 0}
-              onClick={() => {
-                const names = g.clients.filter((c) => mergeIds.includes(c.id)).map((c) => `${c.name}（ID ${c.id}）`).join('、');
-                const target = g.clients.find((c) => c.id === keepId);
-                if (confirm(`${names} を ${target?.name}（ID ${keepId}）に統合します。事件・会話・タスク・記録・ファイルは残す側に移り、統合した依頼者は削除されます。よろしいですか？`)) {
-                  merge.mutate({ keepId, mergeIds });
-                }
-              }}
-            >
-              {merge.isPending ? '統合中…' : 'この組を統合する'}
-            </button>
+            {names.length > 1 && (
+              <label className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                <span className="font-medium text-slate-700">統合後の名前</span>
+                <select className="input w-auto py-0.5 text-xs" value={name} onChange={(e) => setFinalName({ ...finalName, [g.key]: e.target.value })}>
+                  {names.map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-slate-500">ほかの名前は「別名」に残ります（メール・予定の照合に使います）</span>
+              </label>
+            )}
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button
+                className="btn btn-primary btn-sm"
+                disabled={merge.isPending || mergeIds.length === 0}
+                onClick={() => {
+                  const from = g.clients.filter((c) => mergeIds.includes(c.id)).map((c) => `${c.name}（ID ${c.id}）`).join('、');
+                  if (confirm(`${from} を「${name}」（ID ${keepId}）に統合します。事件・会話・タスク・記録・ファイルは残す側に移り、統合した依頼者は削除されます。よろしいですか？`)) {
+                    merge.mutate({ keepId, mergeIds, name });
+                  }
+                }}
+              >
+                {merge.isPending ? '統合中…' : 'この組を統合する'}
+              </button>
+              <button
+                className="btn btn-sm"
+                disabled={ignore.isPending}
+                onClick={() => ignore.mutate({ ids: g.clients.map((c) => c.id), fuzzy: !!g.fuzzy })}
+                title="同じ依頼者ではありません。この組はもう候補に出しません"
+              >
+                別の依頼者（統合しない）
+              </button>
+            </div>
           </div>
         );
       })}

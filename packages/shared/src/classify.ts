@@ -63,6 +63,32 @@ const LONG_SURNAMES = [
 ];
 
 /**
+ * 同じ依頼者かどうかを比べるための名前の芯。見た目の違いを取り除く:
+ * 空白・全角半角・大文字小文字、法人格（宗教法人・株式会社・㈱ など。前後どちらでも）、
+ * 括弧書き（「（代表取締役 三國敦子）」など）、末尾の「様」「御中」など。
+ * 「宗教法人 正行寺」「正行寺」「㈱ミクニ管材（代表 三國）」「ミクニ管材」がそれぞれ同じになる
+ */
+export function clientNameCore(name: string): string {
+  let s = (name ?? '').normalize('NFKC');
+  // 括弧書き（全角・半角とも NFKC で半角になる）と【】を外す
+  s = s.replace(/\([^()]*\)/g, '').replace(/【[^【】]*】/g, '');
+  s = s.replace(/[\s　]+/g, '');
+  // 法人格（長いものから。「医療法人社団」を「医療法人」より先に）
+  const forms = [...LEGAL_FORMS.map((f) => f.normalize('NFKC').replace(/[\s　]+/g, '')), '(株)', '(有)', '(同)', '(社)', '(財)']
+    .filter((f, i, a) => a.indexOf(f) === i)
+    .sort((a, b) => b.length - a.length);
+  for (const f of forms) s = s.split(f).join('');
+  s = s.replace(/(様|さま|殿|御中|さん)$/, '');
+  return s.toLowerCase();
+}
+
+/** 名前に付いている法人格（無ければ空） */
+export function legalFormOf(name: string): string {
+  const s = (name ?? '').normalize('NFKC').replace(/[\s　]+/g, '');
+  return [...LEGAL_FORMS].sort((a, b) => b.length - a.length).find((f) => s.includes(f.normalize('NFKC'))) ?? '';
+}
+
+/**
  * 差出人名や署名から、会社名（法人格を含む部分）だけを取り出す。
  * 「CTF株式会社 Connect the Torch for Future 名児耶和峰」→「CTF株式会社」、「株式会社 のぼり 山田太郎」→「株式会社 のぼり」。
  * 法人格が見当たらなければ、そのまま返す
