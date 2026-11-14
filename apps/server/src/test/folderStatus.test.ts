@@ -9,6 +9,8 @@ process.env.STORAGE_BACKEND = 'local';
 process.env.LOCAL_CLIENT_ROOT = path.join(tmp, 'clients');
 process.env.DATA_DIR = tmp;
 
+/** フォルダを動かした記録（アプリから区分に合わせて移したもの） */
+const moves: { id: string; to: string }[] = [];
 /** OneDrive 上のフォルダ（ID → 今の名前と親） */
 const drive = new Map<string, { id: string; name: string; parentReference: { path: string } }>();
 
@@ -20,6 +22,12 @@ vi.mock('../integrations/onedrive.js', async (importActual) => {
     getItem: async (id: string) => {
       const item = drive.get(id);
       if (!item) throw new Error('Graph エラー 404');
+      return item;
+    },
+    moveItem: async (id: string, newFolderPath: string) => {
+      const item = drive.get(id)!;
+      moves.push({ id, to: newFolderPath });
+      item.parentReference.path = `/drive/root:${newFolderPath}`;
       return item;
     },
     getItemByPath: async (p: string) => {
@@ -34,7 +42,7 @@ vi.mock('../integrations/onedrive.js', async (importActual) => {
 
 const { openTestDatabase, closeDatabase, db, schema } = await import('../db/index.js');
 const { setStorageBackend } = await import('../integrations/storage.js');
-const { syncClientFolderNames, saveStatusFolderMap, folderStatusMismatches, applyFolderStatuses, alignCaseStatusToFolder } = await import('../services/clientFolders.js');
+const { syncClientFolderNames, saveStatusFolderMap, folderStatusMismatches, applyFolderStatuses, alignCaseStatusToFolder, statusOfFolderRel, syncClientFolderWithStatus } = await import('../services/clientFolders.js');
 const { eq } = await import('drizzle-orm');
 
 /** OneDrive バックエンドのふり（読み書きはしない） */
@@ -127,5 +135,39 @@ describe('OneDrive の区分フォルダと事件の区分の連動', () => {
     expect(statuses(a.id)).toEqual(['closed']);
     expect(statuses(b.id)).toEqual(['active']);
     expect(folderStatusMismatches().some((m) => m.clientId === a.id)).toBe(false);
+  });
+
+  it('区分フォルダの中をさらに分けたフォルダ（「3.終了事件/2025年/」）へ移しても、その区分にする', async () => {
+    saveStatusFolderMap({ consultation: '0.相談', active: '1.進行事件', wrapup: '2.残務処理', closed: '3.終了事件' }, ['4.その他']);
+    expect(statusOfFolderRel('3.終了事件/2025年/深井花子')).toBe('closed');
+    expect(statusOfFolderRel('3.終了事件/深井花子')).toBe('closed');
+    expect(statusOfFolderRel('4.その他/顧問先')).toBeNull();
+    expect(statusOfFolderRel('3.終了事件')).toBeNull();
+    expect(statusOfFolderRel('/絶対/3.終了事件/x')).toBeNull();
+
+    const c = db().insert(schema.clients).values({ name: '深井 花子', onedriveFolderPath: '2.残務処理/深井花子', onedriveItemId: 'N1' }).returning().get();
+    db().insert(schema.cases).values({ clientId: c.id, title: '深井 離婚', status: 'wrapup' }).run();
+    at('N1', '深井花子', '2.残務処理');
+    await syncClientFolderNames();
+    expect(statuses(c.id)).toEqual(['wrapup']);
+
+    // 終了事件の中の「2025年」フォルダへ移す → 終了事件に
+    at('N1', '深井花子', '3.終了事件/2025年');
+    const r = await syncClientFolderNames();
+    expect(r.renames.find((x) => x.clientId === c.id)).toMatchObject({ to: '3.終了事件/2025年/深井花子', status: { to: 'closed' } });
+    expect(statuses(c.id)).toEqual(['closed']);
+    expect(db().select().from(schema.clients).where(eq(schema.clients.id, c.id)).get()!.onedriveFolderPath).toBe('3.終了事件/2025年/深井花子');
+    // 食い違いの一覧にも出ない（フォルダの区分＝事件の区分）
+    expect(folderStatusMismatches().some((m) => m.clientId === c.id)).toBe(false);
+
+    // アプリ側で区分を合わせ直しても、同じ区分の中の深いフォルダからは動かさない
+    moves.length = 0;
+    await syncClientFolderWithStatus(c.id);
+    expect(moves).toEqual([]);
+    // 進行事件に戻したら、進行事件のフォルダへ移す
+    db().update(schema.cases).set({ status: 'active' }).where(eq(schema.cases.clientId, c.id)).run();
+    await syncClientFolderWithStatus(c.id);
+    expect(moves).toEqual([{ id: 'N1', to: '/依頼者/1.進行事件' }]);
+    expect(db().select().from(schema.clients).where(eq(schema.clients.id, c.id)).get()!.onedriveFolderPath).toBe('1.進行事件/深井花子');
   });
 });

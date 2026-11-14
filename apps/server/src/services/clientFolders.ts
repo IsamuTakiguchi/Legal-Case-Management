@@ -314,7 +314,6 @@ export async function syncClientFolderWithStatus(clientId: number, caseId?: numb
     await resolveAllClientFolders().catch(() => undefined);
     client = db().select().from(schema.clients).where(eq(schema.clients.id, clientId)).get() ?? client;
   }
-  const statusParents = new Set(Object.values(map));
   const root = st.clientRoot();
   let result: { moved: boolean; from?: string; to?: string } = { moved: false };
   for (const g of folderGroups(client)) {
@@ -324,8 +323,10 @@ export async function syncClientFolderWithStatus(clientId: number, caseId?: numb
     const expectedParent = map[status];
     if (!expectedParent) continue;
     const { parent, name } = splitRel(g.rel);
-    if (parent === expectedParent) continue;
-    if (!statusParents.has(parent)) continue; // 顧問等の区分外フォルダは触らない
+    // いまの区分（区分フォルダの中の「2025年」などの下に入れてあっても、その区分）。同じ区分なら動かさない
+    const current = statusOfFolderRel(g.rel);
+    if (current === status) continue;
+    if (!current) continue; // 顧問等の区分外フォルダは触らない
     const item = await getItemByPath(joinPath(root, g.rel));
     if (!item) continue;
     await moveItem(item.id, joinPath(root, expectedParent));
@@ -404,14 +405,20 @@ export interface CaseStatusChange {
   to: CaseStatus;
 }
 
-/** 依頼者フォルダの相対パス（区分フォルダ/依頼者フォルダ）から、その区分。区分フォルダの外（顧問等・フラット）なら null */
+/**
+ * 依頼者フォルダの相対パスから、その区分。区分フォルダの中なら何階層下でもその区分にする
+ * （「3.終了事件/山田花子」も「3.終了事件/2025年/山田花子」も終了事件）。区分フォルダの外（顧問等・フラット）なら null
+ */
 export function statusOfFolderRel(rel: string | null | undefined): CaseStatus | null {
-  const r = (rel ?? '').trim();
-  if (!r || r.startsWith('/')) return null;
-  const { parent } = splitRel(r);
-  if (!parent) return null;
+  const r = (rel ?? '').trim().replace(/^\/+|\/+$/g, '');
+  if (!r || (rel ?? '').trim().startsWith('/')) return null;
   const map = statusFolderMap();
-  return (CASE_STATUSES.find((st) => map[st] === parent) as CaseStatus | undefined) ?? null;
+  // 区分フォルダ名が「/」を含む（深い場所にある）こともあるので、長いものから当てる
+  const hit = CASE_STATUSES.map((st) => ({ st, folder: map[st] }))
+    .filter((x): x is { st: CaseStatus; folder: string } => !!x.folder)
+    .sort((a, b) => b.folder.length - a.folder.length)
+    .find((x) => r.startsWith(`${x.folder}/`));
+  return hit?.st ?? null;
 }
 
 /**
@@ -595,6 +602,22 @@ async function locateMovedFolders(clientId: number): Promise<FolderRename[]> {
       if (p === parent) continue;
       const item = await getItemByPath(joinPath(root, at(p, name))).catch(() => null);
       if (item && item.folder && !item.deleted) hits.push({ rel: at(p, name), id: item.id });
+    }
+    // 区分フォルダの中をさらに分けている（「3.終了事件/2025年/」など）ときは、1 階層下も探す
+    if (!hits.length) {
+      for (const p of parents) {
+        if (!p) continue;
+        const subs = await storage()
+          .list(joinPath(root, p))
+          .catch(() => []);
+        for (const sub of subs) {
+          if (!sub.isFolder) continue;
+          const relHere = at(`${p}/${sub.name}`, name);
+          if (relHere === rel) continue;
+          const item = await getItemByPath(joinPath(root, relHere)).catch(() => null);
+          if (item && item.folder && !item.deleted) hits.push({ rel: relHere, id: item.id });
+        }
+      }
     }
     return hits.length === 1 ? hits[0]! : null;
   };
