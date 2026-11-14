@@ -19,7 +19,7 @@ import { listCaseTypes, upsertCaseType, createCase, updateCase, bulkUpdateCases,
 import * as creditors from '../services/creditors.js';
 import { onedriveCandidates, chatworkCandidates, applyImport, deleteClient } from '../services/clientImport.js';
 import { findDuplicateClients, mergeClients, ignoreDuplicate } from '../services/clientMerge.js';
-import { caseFolderRel, setCaseFolder, createCaseFolder, defaultCaseFolderRel, clientFolderParents, defaultClientFolderRel, syncClientFolderName, syncClientFolderNames, rememberClientFolderId, adoptClientFolderPath, renameClientFolder, folderStatusMismatches, applyFolderStatuses } from '../services/clientFolders.js';
+import { caseFolderRel, setCaseFolder, createCaseFolder, defaultCaseFolderRel, clientFolderParents, defaultClientFolderRel, syncClientFolderName, syncClientFolderNames, rememberClientFolderId, adoptClientFolderPath, renameClientFolder, folderStatusMismatches, applyFolderStatuses, ignoreFolderMismatches } from '../services/clientFolders.js';
 import { logger } from '../logger.js';
 import { listContacts, createContact, updateContact, deleteContact, contactBriefs } from '../services/contacts.js';
 import { readContactMemo, importContactMemo } from '../services/contactMemo.js';
@@ -190,6 +190,12 @@ clientRoutes.get('/clients/:id/files', async (c) => {
 
 /** OneDrive のフォルダの区分と、事件の区分が食い違っている依頼者 */
 clientRoutes.get('/clients/folders/status-mismatches', (c) => c.json(folderStatusMismatches()));
+
+/** 食い違いを「このままでよい」にする（フォルダを別の場所へ移して終わらせた、など）。フォルダの場所や区分が変われば、また出す */
+clientRoutes.post('/clients/folders/status-mismatches/ignore', async (c) => {
+  const body = z.object({ keys: z.array(z.string().max(1000)).min(1).max(200) }).parse(await c.req.json());
+  return c.json(ignoreFolderMismatches(body.keys));
+});
 
 /** 選んだ依頼者の事件の区分を、OneDrive のフォルダの区分に合わせる */
 clientRoutes.post('/clients/folders/align-status', async (c) => {

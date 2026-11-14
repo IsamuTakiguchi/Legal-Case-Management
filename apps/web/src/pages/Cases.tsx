@@ -234,6 +234,8 @@ export default function Cases() {
 }
 
 interface FolderMismatch {
+  /** 「このままでよい」にするときの印 */
+  key?: string;
   clientId: number;
   clientName: string;
   folder: string;
@@ -293,6 +295,15 @@ function FolderStatusSync() {
     },
     onError: (e) => setMsg((e as Error).message),
   });
+  // 食い違いを「このままでよい」にする（フォルダを別の場所へ移して終わらせた、など）
+  const keepAsIs = useMutation({
+    mutationFn: (keys: string[]) => api.post<{ ignored: number }>('/clients/folders/status-mismatches/ignore', { keys }),
+    onSuccess: (r) => {
+      setMsg(`${r.ignored} 件を「このままでよい」にしました（フォルダの場所や区分が変われば、また確認します）`);
+      refresh();
+    },
+    onError: (e) => setMsg((e as Error).message),
+  });
   const list = mism.data ?? [];
   const sel = picked ?? new Set(list.map((m) => m.clientId));
   return (
@@ -310,7 +321,10 @@ function FolderStatusSync() {
       </div>
       {open && list.length > 0 && (
         <div className="fade-in card space-y-2 border-orange-200 text-sm">
-          <div className="text-xs text-slate-600">OneDrive の依頼者フォルダが置かれている区分に、事件の区分を合わせます（フォルダは動かしません）。合わせない依頼者はチェックを外してください。</div>
+          <div className="text-xs text-slate-600">
+            OneDrive の依頼者フォルダが置かれている区分に、事件の区分を合わせます（フォルダは動かしません）。合わせない依頼者はチェックを外してください。
+            区分フォルダ以外の場所へ移して終わらせた依頼者は「このままでよい」で一覧から外せます。いつもその場所を使うなら、初期設定の「区分フォルダの設定」でそのフォルダを「終了事件とみなす」にすると、移しただけで終了事件になります。
+          </div>
           <ul className="space-y-1">
             {list.map((m) => (
               <li key={`${m.clientId}:${m.folder}`} className="flex flex-wrap items-center gap-2">
@@ -333,6 +347,17 @@ function FolderStatusSync() {
                   アプリ: <CaseStatusBadge status={m.appStatus} /> → フォルダ: <CaseStatusBadge status={m.folderStatus} />
                 </span>
                 <span className="truncate text-xs text-slate-400">{m.folder}</span>
+                {m.key && (
+                  <button
+                    type="button"
+                    className="ml-auto text-xs text-slate-500 underline hover:text-slate-800"
+                    onClick={() => keepAsIs.mutate([m.key!])}
+                    disabled={keepAsIs.isPending}
+                    title="アプリの区分のままにして、この一覧から外します（フォルダを区分フォルダ以外の場所へ移して終わらせた、など）"
+                  >
+                    このままでよい
+                  </button>
+                )}
               </li>
             ))}
           </ul>

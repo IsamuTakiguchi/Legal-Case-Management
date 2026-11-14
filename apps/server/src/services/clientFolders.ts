@@ -29,9 +29,38 @@ export function statusFolderMap(): StatusFolderMap {
   }
 }
 
-export function saveStatusFolderMap(map: StatusFolderMap, extras: string[]) {
+export function saveStatusFolderMap(map: StatusFolderMap, extras: string[], aliases?: StatusFolderAliases) {
   setSetting('client_status_folders', Object.keys(map).length ? JSON.stringify(map) : '');
   setSetting('client_extra_folders', extras.map((s) => s.replace(/^\/+|\/+$/g, '')).filter(Boolean).join('\n'));
+  if (aliases !== undefined) {
+    const clean: StatusFolderAliases = {};
+    for (const s of CASE_STATUSES) {
+      const list = [...new Set((aliases[s] ?? []).map((x) => x.trim().replace(/^\/+|\/+$/g, '')).filter((x) => x && x !== map[s]))];
+      if (list.length) clean[s] = list;
+    }
+    setSetting('client_status_folder_aliases', Object.keys(clean).length ? JSON.stringify(clean) : '');
+  }
+}
+
+/**
+ * 区分ごとの「この区分とみなす」追加のフォルダ（例: 終了事件 = 「3.終了事件」のほかに「5.破産終了」）。
+ * ここへ移したフォルダの事件もその区分にする。アプリから区分を変えたときの移動先は、いつも区分のフォルダ（statusFolderMap）
+ */
+export type StatusFolderAliases = Partial<Record<CaseStatus, string[]>>;
+export function statusFolderAliases(): StatusFolderAliases {
+  try {
+    const raw = getSetting('client_status_folder_aliases');
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: StatusFolderAliases = {};
+    for (const s of CASE_STATUSES) {
+      const v = parsed[s];
+      if (Array.isArray(v)) out[s] = v.filter((x): x is string => typeof x === 'string').map((x) => x.replace(/^\/+|\/+$/g, '')).filter(Boolean);
+    }
+    return out;
+  } catch {
+    return {};
+  }
 }
 
 /** 区分に対応しないが依頼者フォルダを含むフォルダ（例: 4.その他（顧問等）） */
@@ -49,12 +78,13 @@ export function hasStatusLayout(): boolean {
 /** 依頼者フォルダを探す親フォルダ（ルートからの相対）。フラット運用なら [''] */
 export function clientFolderParents(): string[] {
   const map = statusFolderMap();
-  const parents = [...new Set([...Object.values(map).filter((v): v is string => !!v), ...extraClientFolders()])];
+  const aliases = Object.values(statusFolderAliases()).flat();
+  const parents = [...new Set([...Object.values(map).filter((v): v is string => !!v), ...aliases, ...extraClientFolders()])];
   return parents.length ? parents : [''];
 }
 
-/** フォルダ名から区分を推定する（0.相談 → consultation など） */
-export function guessStatusFolders(names: string[]): { map: StatusFolderMap; extras: string[] } {
+/** フォルダ名から区分を推定する（0.相談 → consultation など）。同じ区分らしいフォルダが 2 つ目以降なら「この区分とみなす」フォルダにする */
+export function guessStatusFolders(names: string[]): { map: StatusFolderMap; extras: string[]; aliases: StatusFolderAliases } {
   const rules: [CaseStatus, RegExp][] = [
     ['consultation', /相談/],
     ['active', /進行|係属|受任中/],
@@ -63,12 +93,17 @@ export function guessStatusFolders(names: string[]): { map: StatusFolderMap; ext
   ];
   const map: StatusFolderMap = {};
   const extras: string[] = [];
+  const aliases: StatusFolderAliases = {};
   for (const n of names) {
     const hit = rules.find(([s, re]) => re.test(n) && !map[s]);
     if (hit) map[hit[0]] = n;
-    else extras.push(n);
+    else {
+      const again = rules.find(([, re]) => re.test(n));
+      if (again) aliases[again[0]] = [...(aliases[again[0]] ?? []), n];
+      else extras.push(n);
+    }
   }
-  return { map, extras };
+  return { map, extras, aliases };
 }
 
 /** 依頼者の実効区分: 進行事件 > 残務処理 > 相談 > 終了事件。事件が無ければ相談 */
@@ -380,7 +415,8 @@ export function relPathFromItem(item: { name: string; parentReference?: { path?:
   const norm = (p: string) => '/' + p.replace(/^\/+|\/+$/g, '');
   const r = norm(root);
   const p = norm(parent);
-  if (r !== '/' && p !== r && !p.startsWith(`${r}/`)) return null; // 依頼者ルートの外に出された
+  // 依頼者ルートの外に出された → OneDrive 上の絶対パス（「/」始まり）で追う（区分の外として扱う）
+  if (r !== '/' && p !== r && !p.startsWith(`${r}/`)) return p === '/' ? `/${item.name}` : `${p}/${item.name}`;
   const rel = (r === '/' ? p : p.slice(r.length)).replace(/^\/+|\/+$/g, '');
   return rel ? `${rel}/${item.name}` : item.name;
 }
@@ -413,8 +449,9 @@ export function statusOfFolderRel(rel: string | null | undefined): CaseStatus | 
   const r = (rel ?? '').trim().replace(/^\/+|\/+$/g, '');
   if (!r || (rel ?? '').trim().startsWith('/')) return null;
   const map = statusFolderMap();
-  // 区分フォルダ名が「/」を含む（深い場所にある）こともあるので、長いものから当てる
-  const hit = CASE_STATUSES.map((st) => ({ st, folder: map[st] }))
+  const aliases = statusFolderAliases();
+  // 区分のフォルダと「この区分とみなす」フォルダ。名前が「/」を含む（深い場所にある）こともあるので、長いものから当てる
+  const hit = CASE_STATUSES.flatMap((st) => [map[st], ...(aliases[st] ?? [])].map((folder) => ({ st, folder })))
     .filter((x): x is { st: CaseStatus; folder: string } => !!x.folder)
     .sort((a, b) => b.folder.length - a.folder.length)
     .find((x) => r.startsWith(`${x.folder}/`));
@@ -463,6 +500,8 @@ export function alignCaseStatusToFolder(clientId: number, target: CaseStatus, re
  * 事件ごとにフォルダがあれば事件のフォルダごと、無ければ依頼者フォルダごと（従来どおり）
  */
 export function folderStatusMismatches(): {
+  /** 「このままでよい」にするときの印（依頼者・フォルダ・両方の区分。どれかが変われば、また出す） */
+  key: string;
   clientId: number;
   clientName: string;
   folder: string;
@@ -473,17 +512,49 @@ export function folderStatusMismatches(): {
   caseTitles: string[];
 }[] {
   if (!hasStatusLayout()) return [];
+  const ignored = ignoredMismatches();
   const out: ReturnType<typeof folderStatusMismatches> = [];
   for (const c of db().select().from(schema.clients).all()) {
     for (const g of folderGroups(c)) {
       const folderStatus = statusOfFolderRel(g.rel);
       if (!folderStatus) continue;
       const appStatus = bestStatus(g.cases);
-      if (appStatus !== folderStatus)
-        out.push({ clientId: c.id, clientName: c.name, folder: g.rel, folderStatus, appStatus, caseCount: g.cases.length, caseIds: g.cases.map((k) => k.id), caseTitles: g.cases.map((k) => k.title) });
+      const key = mismatchKey(c.id, g.rel, folderStatus, appStatus);
+      if (appStatus !== folderStatus && !ignored.has(key))
+        out.push({ key, clientId: c.id, clientName: c.name, folder: g.rel, folderStatus, appStatus, caseCount: g.cases.length, caseIds: g.cases.map((k) => k.id), caseTitles: g.cases.map((k) => k.title) });
     }
   }
   return out;
+}
+
+const MISMATCH_IGNORE_KEY = 'folder_mismatch_ignored';
+function mismatchKey(clientId: number, folder: string, folderStatus: CaseStatus, appStatus: CaseStatus): string {
+  return `${clientId}|${folder}|${folderStatus}|${appStatus}`;
+}
+function ignoredMismatches(): Set<string> {
+  try {
+    const v = JSON.parse(getSetting(MISMATCH_IGNORE_KEY) || '[]') as unknown;
+    return new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * 食い違いを「このままでよい」にする（フォルダは別の場所へ移して終わらせた、など）。
+ * フォルダの場所や区分が変われば、また一覧に出す
+ */
+export function ignoreFolderMismatches(keys: string[]): { ignored: number } {
+  const current = new Set(folderStatusMismatches().map((m) => m.key));
+  const set = ignoredMismatches();
+  let n = 0;
+  for (const k of keys) {
+    if (!current.has(k)) continue; // 今の一覧に無いもの（もう解消した・すでに外した）は覚えない
+    set.add(k);
+    n++;
+  }
+  setSetting(MISMATCH_IGNORE_KEY, JSON.stringify([...set].slice(-1000)));
+  return { ignored: n };
 }
 
 /** 画面で選んだ依頼者について、事件の区分をフォルダの区分に合わせる */
@@ -536,7 +607,9 @@ function applyFolderMove(client: ClientRow, from: string, newRel: string): Folde
  */
 async function followFolder(client: ClientRow, rel: string, itemId: string | null, remember: (id: string) => void): Promise<{ rename: FolderRename | null; adopted: boolean; checked: boolean }> {
   const none = { rename: null, adopted: false, checked: false };
-  if (!rel || rel.startsWith('/')) return none; // 絶対パス指定はそのまま
+  if (!rel) return none;
+  // 絶対パス（依頼者ルートの外）は、ID を控えていれば追う（ルートの外へ移したフォルダも見失わない）
+  if (rel.startsWith('/') && !itemId) return none;
   const root = storage().clientRoot();
   if (!itemId) {
     const item = await getItemByPath(joinPath(root, rel)).catch(() => null);

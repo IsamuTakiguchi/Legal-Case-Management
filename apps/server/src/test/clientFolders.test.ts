@@ -64,8 +64,8 @@ describe('OneDrive のフォルダ名の変更の取り込み', () => {
     expect(relPathFromItem(item, '/依頼者')).toBe('1.進行事件/山田 花子');
     // URL エンコードされていても読める
     expect(relPathFromItem({ name: '山田 花子', parentReference: { path: '/drive/root:/%E4%BE%9D%E9%A0%BC%E8%80%85' } }, '/依頼者')).toBe('山田 花子');
-    // ルートの外に出されたものは対象にしない
-    expect(relPathFromItem({ name: '山田 花子', parentReference: { path: '/drive/root:/別のところ' } }, '/依頼者')).toBeNull();
+    // ルートの外に出されたものは、OneDrive 上の絶対パスで追う（区分の外として扱う）
+    expect(relPathFromItem({ name: '山田 花子', parentReference: { path: '/drive/root:/別のところ' } }, '/依頼者')).toBe('/別のところ/山田 花子');
   });
 
   it('フォルダ名を変えると依頼者のパスと保存済みファイルの表示パスが付け替わる', async () => {

@@ -6,7 +6,7 @@ import { resetIntegrationCaches } from '../integrations/reset.js';
 import { env, isConfigured } from '../config.js';
 import { isGoogleConnected } from '../integrations/google.js';
 import { isMsConnected, listChildren, joinPath } from '../integrations/onedrive.js';
-import { statusFolderMap, extraClientFolders, guessStatusFolders, saveStatusFolderMap, resolveAllClientFolders } from '../services/clientFolders.js';
+import { statusFolderMap, statusFolderAliases, extraClientFolders, guessStatusFolders, saveStatusFolderMap, resolveAllClientFolders } from '../services/clientFolders.js';
 import { CASE_STATUSES } from '@lcm/shared';
 
 export const setupRoutes = new Hono();
@@ -52,16 +52,18 @@ setupRoutes.get('/setup/onedrive/layout', async (c) => {
     .sort((a, b) => a.name.localeCompare(b.name, 'ja'));
   const current = statusFolderMap();
   const guess = guessStatusFolders(folders.map((f) => f.name).filter((n) => !/^_/.test(n)));
-  return c.json({ root, folders, current, extras: extraClientFolders(), guess });
+  return c.json({ root, folders, current, extras: extraClientFolders(), aliases: statusFolderAliases(), guess });
 });
 
 setupRoutes.put('/setup/onedrive/layout', async (c) => {
   const body = z
-    .object({ map: z.record(z.string(), z.string()).default({}), extras: z.array(z.string()).default([]) })
+    .object({ map: z.record(z.string(), z.string()).default({}), extras: z.array(z.string()).default([]), aliases: z.record(z.string(), z.array(z.string())).optional() })
     .parse(await c.req.json());
   const map: Record<string, string> = {};
   for (const [k, v] of Object.entries(body.map)) if ((CASE_STATUSES as readonly string[]).includes(k) && v.trim()) map[k] = v.trim();
-  saveStatusFolderMap(map, body.extras);
+  // 「この区分とみなす」追加のフォルダ（終了事件 = 「3.終了事件」と「5.破産終了」など）
+  const aliases = body.aliases ? Object.fromEntries(Object.entries(body.aliases).filter(([k]) => (CASE_STATUSES as readonly string[]).includes(k))) : undefined;
+  saveStatusFolderMap(map, body.extras, aliases);
   const resolved = await resolveAllClientFolders().catch((err) => ({ scanned: 0, updated: 0, missing: [String(err)] }));
   return c.json({ ok: true, resolved });
 });

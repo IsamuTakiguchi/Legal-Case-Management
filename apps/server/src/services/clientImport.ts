@@ -7,7 +7,7 @@ import { storage } from '../integrations/storage.js';
 import * as cw from '../channels/chatwork.js';
 import { isConfigured } from '../config.js';
 import { joinPath } from '../integrations/onedrive.js';
-import { clientFolderParents, statusFolderMap } from './clientFolders.js';
+import { clientFolderParents, statusFolderMap, statusFolderAliases } from './clientFolders.js';
 import { getSetting } from './settings.js';
 import { CASE_STATUS_LABEL, type CaseStatus } from '@lcm/shared';
 
@@ -138,6 +138,8 @@ export async function onedriveCandidates(): Promise<ImportCandidate[]> {
   const parents = clientFolderParents();
   const statusByParent = new Map<string, CaseStatus>();
   for (const [status, folder] of Object.entries(statusFolderMap())) if (folder) statusByParent.set(folder, status as CaseStatus);
+  // 「この区分とみなす」フォルダ（終了事件 = 「5.破産終了」など）にある依頼者も、その区分で取り込む
+  for (const [status, folders] of Object.entries(statusFolderAliases())) for (const f of folders ?? []) statusByParent.set(f, status as CaseStatus);
   const tightKana = isTightKanaFormat();
   for (const parent of parents) {
     const items = await storage().list(parent ? joinPath(root, parent) : root).catch(() => []);
