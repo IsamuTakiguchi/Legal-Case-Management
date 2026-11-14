@@ -1,4 +1,5 @@
-import { normalizePhones } from '@lcm/shared';
+import { normalizePhones, clientNameCore, legalFormOf, looksLikeCorporation } from '@lcm/shared';
+import { getSetting, setSetting } from './settings.js';
 import { and, eq, inArray } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { logger } from '../logger.js';
@@ -40,6 +41,14 @@ export interface DuplicateGroup {
   clients: MergeCandidate[];
   /** 既定で残す依頼者（情報が最も多いもの。同じなら古い方） */
   suggestedKeepId: number;
+  /** 名前が同じ（空白・全角半角の違いだけ）か。false なら法人格などが違うだけの似た名前 */
+  exact: boolean;
+  /** 似ていると判断した理由（法人格の有無・違い など） */
+  reasons: string[];
+  /** 統合後の名前に選べるもの（法人格の付いた正式な名前が先） */
+  names: string[];
+  /** 統合後の名前の既定（似た名前なら、法人格の付いた正式な名前） */
+  suggestedName: string;
 }
 
 function countsFor(clientId: number): MergeCandidate['counts'] {
@@ -94,23 +103,107 @@ function candidate(c: typeof schema.clients.$inferSelect): MergeCandidate {
   };
 }
 
-/** 名前が同じ（空白・全角半角の違いは無視）依頼者の組を探す */
+/** 「別の依頼者」として、重複の候補に出さない組（依頼者 ID の小さい方-大きい方） */
+const IGNORE_KEY = 'client_duplicate_ignored';
+function pairKey(a: number, b: number): string {
+  return a < b ? `${a}-${b}` : `${b}-${a}`;
+}
+function ignoredPairs(): Set<string> {
+  try {
+    const v = JSON.parse(getSetting(IGNORE_KEY) || '[]') as unknown;
+    return new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/** 選んだ依頼者どうしを「別の依頼者」として、重複の候補に出さないようにする */
+export function ignoreDuplicate(clientIds: number[]): { ignored: number } {
+  const ids = [...new Set(clientIds)];
+  if (ids.length < 2) throw new Error('2 人以上選んでください');
+  const set = ignoredPairs();
+  for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) set.add(pairKey(ids[i]!, ids[j]!));
+  setSetting(IGNORE_KEY, JSON.stringify([...set]));
+  return { ignored: ids.length };
+}
+
+/**
+ * 同じ依頼者の二重登録らしい組を探す。
+ * - 名前が同じ（空白・全角半角の違いは無視）
+ * - 法人格・括弧書き・「様」などを除くと同じ（「正行寺」と「宗教法人正行寺」、「㈱ミクニ管材」と「ミクニ管材（代表 三國）」）
+ * - 一方の名前が、もう一方に登録した別名と同じ
+ * 「別の依頼者」にした組は出さない
+ */
 export function findDuplicateClients(): DuplicateGroup[] {
-  const groups = new Map<string, typeof schema.clients.$inferSelect[]>();
-  for (const c of db().select().from(schema.clients).all()) {
-    const key = normalizeClientName(c.name);
-    if (!key) continue;
-    const list = groups.get(key) ?? [];
-    list.push(c);
-    groups.set(key, list);
+  const rows = db().select().from(schema.clients).all();
+  const ignored = ignoredPairs();
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  // 似た名前ごとに集め、つながる依頼者を 1 つの組にする（A と B、B と C が似ていれば A・B・C）
+  const parent = new Map<number, number>(rows.map((r) => [r.id, r.id]));
+  const find = (x: number): number => {
+    let r = x;
+    while (parent.get(r) !== r) r = parent.get(r)!;
+    parent.set(x, r);
+    return r;
+  };
+  const buckets = new Map<string, Set<number>>();
+  const put = (key: string, id: number) => {
+    if (key.length < 2) return; // 1 文字の名前どうしは偶然の一致が多いので見ない
+    const b = buckets.get(key) ?? new Set<number>();
+    b.add(id);
+    buckets.set(key, b);
+  };
+  for (const r of rows) {
+    put(clientNameCore(r.name), r.id);
+    for (const a of r.aliases ?? []) put(clientNameCore(a), r.id);
+  }
+  for (const ids of buckets.values()) {
+    const list = [...ids];
+    for (let i = 0; i < list.length; i++)
+      for (let j = i + 1; j < list.length; j++) {
+        if (ignored.has(pairKey(list[i]!, list[j]!))) continue;
+        parent.set(find(list[i]!), find(list[j]!));
+      }
+  }
+  const groups = new Map<number, typeof rows>();
+  for (const r of rows) {
+    const root = find(r.id);
+    groups.set(root, [...(groups.get(root) ?? []), r]);
   }
   const out: DuplicateGroup[] = [];
-  for (const [key, rows] of groups) {
-    if (rows.length < 2) continue;
-    const clients = rows.map(candidate).sort((a, b) => b.score - a.score || a.id - b.id);
-    out.push({ key, name: clients[0]!.name, clients, suggestedKeepId: clients[0]!.id });
+  for (const members of groups.values()) {
+    if (members.length < 2) continue;
+    const clients = members.map(candidate).sort((a, b) => b.score - a.score || a.id - b.id);
+    const exact = new Set(members.map((m) => normalizeClientName(m.name))).size === 1;
+    const reasons: string[] = [];
+    if (!exact) {
+      const forms = new Set(members.map((m) => legalFormOf(m.name)));
+      if (forms.size > 1) reasons.push('法人格の有無・違い');
+      if (members.some((m) => /[（(【]/.test(m.name))) reasons.push('括弧書きの違い');
+      const cores = new Set(members.map((m) => clientNameCore(m.name)));
+      if (cores.size > 1) reasons.push('別名に登録した名前と一致');
+      if (!reasons.length) reasons.push('「様」などの違い');
+    }
+    // 統合後の名前の候補。括弧書き（「（代表取締役 ○○）」など）を外した名前も並べ、
+    // 法人格の付いた正式な名前 → 括弧書きの無い名前 → 長い名前 の順にする
+    const withoutParens = (n: string) => n.replace(/[（(][^（）()]*[）)]/g, '').replace(/[\s　]+$/g, '').trim();
+    const hasParens = (n: string) => /[（(]/.test(n);
+    const names = [...new Set(members.flatMap((m) => [m.name.trim(), withoutParens(m.name)]).filter(Boolean))].sort(
+      (a, b) => Number(!!legalFormOf(b)) - Number(!!legalFormOf(a)) || Number(hasParens(a)) - Number(hasParens(b)) || b.length - a.length,
+    );
+    out.push({
+      key: clients.map((c) => c.id).sort((a, b) => a - b).join('-'),
+      name: clients[0]!.name,
+      clients,
+      suggestedKeepId: clients[0]!.id,
+      exact,
+      reasons,
+      names,
+      suggestedName: exact ? clients[0]!.name : names[0]!,
+    });
   }
-  return out.sort((a, b) => a.name.localeCompare(b.name, 'ja'));
+  // 名前が同じものを先に、似ているものはその後に
+  return out.sort((a, b) => Number(b.exact) - Number(a.exact) || a.name.localeCompare(b.name, 'ja'));
 }
 
 export interface MergeResult {
@@ -129,7 +222,7 @@ function uniq(xs: string[]): string[] {
  * sourceIds の依頼者を keepId の依頼者に統合する。
  * 事件はそのまま（削除せず）keepId に付け替えるので、同じ依頼者に複数の事件が並ぶ形になる。
  */
-export function mergeClients(keepId: number, sourceIds: number[]): MergeResult {
+export function mergeClients(keepId: number, sourceIds: number[], opts: { name?: string | null } = {}): MergeResult {
   const d = db();
   const keep = d.select().from(schema.clients).where(eq(schema.clients.id, keepId)).get();
   if (!keep) throw new Error('残す依頼者が見つかりません');
@@ -185,7 +278,10 @@ export function mergeClients(keepId: number, sourceIds: number[]): MergeResult {
     patch.emails = uniq([...keep.emails, ...sources.flatMap((s) => s.emails)]);
     // 電話番号は書き方が違っても同じ番号なら 1 つにする（残す側の書き方を優先）
     patch.phones = normalizePhones([...(keep.phones ?? []), ...sources.flatMap((s) => s.phones ?? [])]);
-    patch.aliases = uniq([...keep.aliases, ...sources.flatMap((s) => [...s.aliases, s.name])]).filter((a) => a !== keep.name);
+    // 統合後の名前（「宗教法人正行寺」など、選んだ正式な名前）。前の名前は別名に残す（メール・予定の照合に使う）
+    const finalName = opts.name?.trim() || keep.name;
+    if (finalName !== keep.name) patch.name = finalName;
+    patch.aliases = uniq([...keep.aliases, keep.name, ...sources.flatMap((s) => [...s.aliases, s.name])]).filter((a) => a !== finalName);
     patch.kana = keep.kana ?? sources.find((s) => s.kana)?.kana ?? null;
     // 法人の代表者は、残す側に無ければ統合する側から引き継ぐ
     if (!keep.representativeName) {
@@ -196,7 +292,7 @@ export function mergeClients(keepId: number, sourceIds: number[]): MergeResult {
         patch.representativeKana = s.representativeKana;
       }
     }
-    if (keep.entityType !== 'corporation' && sources.some((s) => s.entityType === 'corporation')) patch.entityType = 'corporation';
+    if (keep.entityType !== 'corporation' && (sources.some((s) => s.entityType === 'corporation') || looksLikeCorporation(finalName))) patch.entityType = 'corporation';
     patch.preferredChannel = keep.preferredChannel ?? sources.find((s) => s.preferredChannel)?.preferredChannel ?? null;
     if (!keep.lineUserId) {
       patch.lineUserId = sources.find((s) => s.lineUserId)?.lineUserId ?? null;
