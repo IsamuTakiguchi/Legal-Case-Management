@@ -102,7 +102,7 @@ export default function Clients() {
         <button className="btn" onClick={() => syncFolders.mutate()} disabled={syncFolders.isPending} title="OneDrive でフォルダ名を変えた・別の区分へ移した場合に、アプリ側の紐付けを付け直します">
           {syncFolders.isPending ? '確認中…' : 'フォルダ名の変更を取り込む'}
         </button>
-        <button className="btn" onClick={() => setShowMerge(!showMerge)} title="二重に登録した依頼者（同じ名前、または「正行寺」と「宗教法人正行寺」のような似た名前）を 1 件にまとめます">
+        <button className="btn" onClick={() => setShowMerge(!showMerge)} title="二重に登録した依頼者（同じ名前、「正行寺」と「宗教法人正行寺」のような似た名前、1 文字違いの名前）を 1 件にまとめます">
           重複の統合
         </button>
         <button className="btn btn-primary" onClick={() => setShowNew(!showNew)}>
@@ -455,6 +455,8 @@ interface DuplicateGroup {
   suggestedKeepId: number;
   /** 名前が同じ（空白・全角半角の違いだけ）か。false なら法人格などが違う似た名前 */
   exact?: boolean;
+  /** 1 文字違いの名前の組（別人のことも多い） */
+  fuzzy?: boolean;
   reasons?: string[];
   /** 統合後の名前に選べるもの */
   names?: string[];
@@ -476,7 +478,7 @@ function MergeDuplicates({ onDone }: { onDone: () => void }) {
   const [finalName, setFinalName] = useState<Record<string, string>>({});
   const [msg, setMsg] = useState('');
   const ignore = useMutation({
-    mutationFn: (ids: number[]) => api.post('/clients/duplicates/ignore', { clientIds: ids }),
+    mutationFn: (v: { ids: number[]; fuzzy: boolean }) => api.post('/clients/duplicates/ignore', { clientIds: v.ids, fuzzy: v.fuzzy }),
     onSuccess: () => {
       setMsg('別の依頼者として、この組はもう候補に出しません');
       qc.invalidateQueries({ queryKey: ['client-duplicates'] });
@@ -506,7 +508,7 @@ function MergeDuplicates({ onDone }: { onDone: () => void }) {
         </button>
       </div>
       <p className="text-xs text-slate-500">
-        名前が同じ依頼者（空白や全角半角の違いは無視）と、法人格（宗教法人・株式会社・㈱ など）・括弧書き・「様」を除くと同じ名前の依頼者（「正行寺」と「宗教法人正行寺」など）を探します。似た名前の組は別の人・団体のこともあるので、確かめてから統合してください。残す依頼者を選んで統合すると、もう一方の事件・会話・タスク・記録・受信ファイル・予定がすべて残す側に付け替わります。OneDrive のフォルダは自動では統合しません（別のフォルダがある場合はお知らせします）。
+        名前が同じ依頼者（空白や全角半角の違いは無視）と、法人格（宗教法人・株式会社・㈱ など）・括弧書き・「様」を除くと同じ名前の依頼者（「正行寺」と「宗教法人正行寺」など）、1 文字だけ違う名前の依頼者（「山田花子」と「山田華子」など。3 文字以上の名前）を探します。似た名前の組、とくに 1 文字違いは別の人・団体のことも多いので、事件・連絡先を見て確かめてから統合してください。残す依頼者を選んで統合すると、もう一方の事件・会話・タスク・記録・受信ファイル・予定がすべて残す側に付け替わります。OneDrive のフォルダは自動では統合しません（別のフォルダがある場合はお知らせします）。
       </p>
       {msg && <div className="fade-in whitespace-pre-wrap rounded border border-blue-200 bg-blue-50 p-2 text-slate-700">{msg}</div>}
       {dups.isLoading && <div className="loading-text text-slate-500">確認中…</div>}
@@ -602,7 +604,7 @@ function MergeDuplicates({ onDone }: { onDone: () => void }) {
               <button
                 className="btn btn-sm"
                 disabled={ignore.isPending}
-                onClick={() => ignore.mutate(g.clients.map((c) => c.id))}
+                onClick={() => ignore.mutate({ ids: g.clients.map((c) => c.id), fuzzy: !!g.fuzzy })}
                 title="同じ依頼者ではありません。この組はもう候補に出しません"
               >
                 別の依頼者（統合しない）

@@ -50,7 +50,7 @@ clientRoutes.post('/clients', async (c) => c.json(createClientRecord(clientInput
 
 // ---- 同じ名前で二重に登録した依頼者の統合 ----
 
-/** 二重登録らしい依頼者の組（名前が同じ、または法人格・括弧書きなどを除くと同じ） */
+/** 二重登録らしい依頼者の組（名前が同じ、法人格・括弧書きなどを除くと同じ、または 1 文字違い） */
 clientRoutes.get('/clients/duplicates', (c) => c.json(findDuplicateClients()));
 
 /** 選んだ依頼者を 1 件にまとめる。事件・会話・タスク・記録・ファイルの紐付けを残す側へ付け替える */
@@ -61,8 +61,8 @@ clientRoutes.post('/clients/merge', async (c) => {
 
 /** 重複の候補に出た組を「別の依頼者」として、もう候補に出さない */
 clientRoutes.post('/clients/duplicates/ignore', async (c) => {
-  const body = z.object({ clientIds: z.array(z.number().int()).min(2).max(20) }).parse(await c.req.json());
-  return c.json(ignoreDuplicate(body.clientIds));
+  const body = z.object({ clientIds: z.array(z.number().int()).min(2).max(20), fuzzy: z.boolean().optional() }).parse(await c.req.json());
+  return c.json(ignoreDuplicate(body.clientIds, { fuzzy: body.fuzzy }));
 });
 
 clientRoutes.get('/clients/:id', (c) => {

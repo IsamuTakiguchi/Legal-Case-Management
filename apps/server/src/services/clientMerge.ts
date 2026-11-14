@@ -43,6 +43,8 @@ export interface DuplicateGroup {
   suggestedKeepId: number;
   /** 名前が同じ（空白・全角半角の違いだけ）か。false なら法人格などが違うだけの似た名前 */
   exact: boolean;
+  /** 1 文字違いの名前の組（別人のことも多いので、よく確かめる） */
+  fuzzy: boolean;
   /** 似ていると判断した理由（法人格の有無・違い など） */
   reasons: string[];
   /** 統合後の名前に選べるもの（法人格の付いた正式な名前が先） */
@@ -117,28 +119,51 @@ function ignoredPairs(): Set<string> {
   }
 }
 
-/** 選んだ依頼者どうしを「別の依頼者」として、重複の候補に出さないようにする */
-export function ignoreDuplicate(clientIds: number[]): { ignored: number } {
+/**
+ * 選んだ依頼者どうしを「別の依頼者」として、重複の候補に出さないようにする。
+ * fuzzy（1 文字違いの組）のときは、1 文字違いのつながりだけを外す（名前が同じ・法人格だけ違う者どうしは候補に残す）
+ */
+export function ignoreDuplicate(clientIds: number[], opts: { fuzzy?: boolean } = {}): { ignored: number } {
   const ids = [...new Set(clientIds)];
   if (ids.length < 2) throw new Error('2 人以上選んでください');
   const set = ignoredPairs();
-  for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) set.add(pairKey(ids[i]!, ids[j]!));
+  const comp = opts.fuzzy ? nameComponents().find : null;
+  let n = 0;
+  for (let i = 0; i < ids.length; i++)
+    for (let j = i + 1; j < ids.length; j++) {
+      if (comp && comp(ids[i]!) === comp(ids[j]!)) continue;
+      set.add(pairKey(ids[i]!, ids[j]!));
+      n++;
+    }
   setSetting(IGNORE_KEY, JSON.stringify([...set]));
-  return { ignored: ids.length };
+  return { ignored: n };
 }
 
+/** 1 文字だけ違う（1 文字の置き換え・抜け・余分）か */
+export function oneCharApart(a: string, b: string): boolean {
+  if (a === b) return false;
+  const [s, t] = a.length <= b.length ? [a, b] : [b, a];
+  const x = [...s];
+  const y = [...t];
+  if (y.length - x.length > 1) return false;
+  let i = 0;
+  while (i < x.length && x[i] === y[i]) i++;
+  // 同じ長さなら 1 文字の置き換え、1 文字長いなら 1 文字の余分（抜け）
+  return x.length === y.length ? x.slice(i + 1).join('') === y.slice(i + 1).join('') : x.slice(i).join('') === y.slice(i + 1).join('');
+}
+
+/** 1 文字違いを拾う名前の長さの下限（法人格などを除いた長さ。2 文字の名前どうしは偶然の一致が多い） */
+const FUZZY_MIN_LENGTH = 3;
+/** 1 文字違いの組を一度に出す上限（統合・「別の依頼者」で減れば、次の確認で残りが出る） */
+const FUZZY_MAX_GROUPS = 200;
+
 /**
- * 同じ依頼者の二重登録らしい組を探す。
- * - 名前が同じ（空白・全角半角の違いは無視）
- * - 法人格・括弧書き・「様」などを除くと同じ（「正行寺」と「宗教法人正行寺」、「㈱ミクニ管材」と「ミクニ管材（代表 三國）」）
- * - 一方の名前が、もう一方に登録した別名と同じ
- * 「別の依頼者」にした組は出さない
+ * 名前の芯（法人格・括弧書き・「様」などを除いた名前）や別名が同じ依頼者を、つながりごとにまとめる。
+ * 「別の依頼者」にした組はつながない
  */
-export function findDuplicateClients(): DuplicateGroup[] {
+function nameComponents() {
   const rows = db().select().from(schema.clients).all();
   const ignored = ignoredPairs();
-  const byId = new Map(rows.map((r) => [r.id, r]));
-  // 似た名前ごとに集め、つながる依頼者を 1 つの組にする（A と B、B と C が似ていれば A・B・C）
   const parent = new Map<number, number>(rows.map((r) => [r.id, r.id]));
   const find = (x: number): number => {
     let r = x;
@@ -165,45 +190,82 @@ export function findDuplicateClients(): DuplicateGroup[] {
         parent.set(find(list[i]!), find(list[j]!));
       }
   }
-  const groups = new Map<number, typeof rows>();
+  const comps = new Map<number, typeof rows>();
   for (const r of rows) {
     const root = find(r.id);
-    groups.set(root, [...(groups.get(root) ?? []), r]);
+    comps.set(root, [...(comps.get(root) ?? []), r]);
   }
+  return { rows, comps, find, ignored };
+}
+
+/**
+ * 同じ依頼者の二重登録らしい組を探す。
+ * - 名前が同じ（空白・全角半角の違いは無視）
+ * - 法人格・括弧書き・「様」などを除くと同じ（「正行寺」と「宗教法人正行寺」、「㈱ミクニ管材」と「ミクニ管材（代表 三國）」）
+ * - 一方の名前が、もう一方に登録した別名と同じ
+ * - 法人格などを除いた名前が 1 文字だけ違う（「正行寺」と「正福寺」、「山田花子」と「山田華子」）。3 文字以上の名前だけ
+ * 「別の依頼者」にした組は出さない
+ */
+export function findDuplicateClients(): DuplicateGroup[] {
+  const { comps, ignored } = nameComponents();
   const out: DuplicateGroup[] = [];
-  for (const members of groups.values()) {
-    if (members.length < 2) continue;
-    const clients = members.map(candidate).sort((a, b) => b.score - a.score || a.id - b.id);
-    const exact = new Set(members.map((m) => normalizeClientName(m.name))).size === 1;
+  // 同じ依頼者が何組にも出ることがあるので、件数の数え直しを 1 回で済ませる
+  const cache = new Map<number, MergeCandidate>();
+  const cand = (m: typeof schema.clients.$inferSelect) => cache.get(m.id) ?? cache.set(m.id, candidate(m)).get(m.id)!;
+  const build = (members: (typeof schema.clients.$inferSelect)[], fuzzy: boolean): DuplicateGroup => {
+    const clients = members.map(cand).sort((a, b) => b.score - a.score || a.id - b.id);
+    const exact = !fuzzy && new Set(members.map((m) => normalizeClientName(m.name))).size === 1;
     const reasons: string[] = [];
+    if (fuzzy) reasons.push('1 文字違い');
     if (!exact) {
       const forms = new Set(members.map((m) => legalFormOf(m.name)));
       if (forms.size > 1) reasons.push('法人格の有無・違い');
       if (members.some((m) => /[（(【]/.test(m.name))) reasons.push('括弧書きの違い');
       const cores = new Set(members.map((m) => clientNameCore(m.name)));
-      if (cores.size > 1) reasons.push('別名に登録した名前と一致');
+      if (!fuzzy && cores.size > 1) reasons.push('別名に登録した名前と一致');
       if (!reasons.length) reasons.push('「様」などの違い');
     }
     // 統合後の名前の候補。括弧書き（「（代表取締役 ○○）」など）を外した名前も並べ、
-    // 法人格の付いた正式な名前 → 括弧書きの無い名前 → 長い名前 の順にする
+    // 法人格の付いた正式な名前 → 括弧書きの無い名前 → 長い名前 の順にする（1 文字違いは、情報の多い依頼者の名前を先に）
     const withoutParens = (n: string) => n.replace(/[（(][^（）()]*[）)]/g, '').replace(/[\s　]+$/g, '').trim();
     const hasParens = (n: string) => /[（(]/.test(n);
-    const names = [...new Set(members.flatMap((m) => [m.name.trim(), withoutParens(m.name)]).filter(Boolean))].sort(
-      (a, b) => Number(!!legalFormOf(b)) - Number(!!legalFormOf(a)) || Number(hasParens(a)) - Number(hasParens(b)) || b.length - a.length,
-    );
-    out.push({
-      key: clients.map((c) => c.id).sort((a, b) => a - b).join('-'),
+    const ordered = fuzzy ? clients.map((c) => c.name) : members.map((m) => m.name);
+    let names = [...new Set(ordered.flatMap((n) => [n.trim(), withoutParens(n)]).filter(Boolean))];
+    if (!fuzzy) names = names.sort((a, b) => Number(!!legalFormOf(b)) - Number(!!legalFormOf(a)) || Number(hasParens(a)) - Number(hasParens(b)) || b.length - a.length);
+    return {
+      key: `${fuzzy ? 'f' : 'g'}:${clients.map((c) => c.id).sort((a, b) => a - b).join('-')}`,
       name: clients[0]!.name,
       clients,
       suggestedKeepId: clients[0]!.id,
       exact,
+      fuzzy,
       reasons,
       names,
       suggestedName: exact ? clients[0]!.name : names[0]!,
-    });
+    };
+  };
+  const compList = [...comps.values()];
+  for (const members of compList) if (members.length >= 2) out.push(build(members, false));
+
+  // 1 文字違い（つながりどうしを比べる）。どちらかの名前・別名の芯が 1 文字違いなら、2 つのつながりを 1 組にする
+  const coresOf = (members: typeof compList[number]) => [...new Set(members.flatMap((m) => [m.name, ...(m.aliases ?? [])].map(clientNameCore)))].filter((k) => [...k].length >= FUZZY_MIN_LENGTH);
+  const compCores = compList.map(coresOf);
+  let fuzzyCount = 0;
+  for (let i = 0; i < compList.length && fuzzyCount < FUZZY_MAX_GROUPS; i++) {
+    if (!compCores[i]!.length) continue;
+    for (let j = i + 1; j < compList.length && fuzzyCount < FUZZY_MAX_GROUPS; j++) {
+      if (!compCores[j]!.length) continue;
+      if (!compCores[i]!.some((a) => compCores[j]!.some((b) => oneCharApart(a, b)))) continue;
+      // 「別の依頼者」にした組み合わせ（2 つのつながりの間がすべて外してある）は出さない
+      const cross = compList[i]!.flatMap((a) => compList[j]!.map((b) => pairKey(a.id, b.id)));
+      if (cross.every((k) => ignored.has(k))) continue;
+      out.push(build([...compList[i]!, ...compList[j]!], true));
+      fuzzyCount++;
+    }
   }
-  // 名前が同じものを先に、似ているものはその後に
-  return out.sort((a, b) => Number(b.exact) - Number(a.exact) || a.name.localeCompare(b.name, 'ja'));
+  // 名前が同じもの → 法人格などの違い → 1 文字違い の順
+  const rank = (g: DuplicateGroup) => (g.exact ? 0 : g.fuzzy ? 2 : 1);
+  return out.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name, 'ja'));
 }
 
 export interface MergeResult {

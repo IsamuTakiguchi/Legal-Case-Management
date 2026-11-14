@@ -8,7 +8,7 @@ process.env.SESSION_SECRET = 'test-session-secret';
 process.env.DATA_DIR = tmp;
 
 const { openTestDatabase, closeDatabase, db, schema } = await import('../db/index.js');
-const { findDuplicateClients, mergeClients, ignoreDuplicate } = await import('../services/clientMerge.js');
+const { findDuplicateClients, mergeClients, ignoreDuplicate, oneCharApart } = await import('../services/clientMerge.js');
 const { clientNameCore } = await import('@lcm/shared');
 const { eq } = await import('drizzle-orm');
 
@@ -74,6 +74,55 @@ describe('重複の候補', () => {
     ignoreDuplicate([a.id, b.id]);
     expect(groupOf(a.id)).toBeUndefined();
     expect(() => ignoreDuplicate([a.id])).toThrow();
+  });
+});
+
+describe('1 文字違いの名前', () => {
+  const fuzzyOf = (id: number) => findDuplicateClients().find((g) => g.fuzzy && g.clients.some((c) => c.id === id));
+
+  it('1 文字の置き換え・抜け・余分を見分ける', () => {
+    expect(oneCharApart('山田花子', '山田華子')).toBe(true);
+    expect(oneCharApart('青葉会', '青葉会館')).toBe(true);
+    expect(oneCharApart('青葉会館', '青葉館')).toBe(true);
+    expect(oneCharApart('山田花子', '山田花子')).toBe(false);
+    expect(oneCharApart('山田花子', '山本華子')).toBe(false);
+    expect(oneCharApart('青葉', '青葉会館')).toBe(false);
+  });
+
+  it('「山田花子」と「山田華子」、「光明寺」と「宗教法人光照寺」を、1 文字違いの組として最後に出す', () => {
+    const a = add('山田 花子X');
+    const b = add('山田華子X');
+    const g = fuzzyOf(a.id)!;
+    expect(g.clients.map((c) => c.id).sort()).toEqual([a.id, b.id].sort());
+    expect(g).toMatchObject({ exact: false, fuzzy: true });
+    expect(g.reasons).toContain('1 文字違い');
+    const list = findDuplicateClients();
+    expect(list.findIndex((x) => x.fuzzy)).toBeGreaterThan(list.findIndex((x) => !x.fuzzy));
+
+    // 法人格の違いと 1 文字違いが重なっていても拾う
+    const c = add('光明寺');
+    const d = add('宗教法人光照寺');
+    expect(fuzzyOf(c.id)!.clients.map((x) => x.id).sort()).toEqual([c.id, d.id].sort());
+    expect(fuzzyOf(c.id)!.reasons).toEqual(expect.arrayContaining(['1 文字違い', '法人格の有無・違い']));
+  });
+
+  it('2 文字の名前どうしは、1 文字違いでも出さない', () => {
+    const a = add('山中');
+    add('山内');
+    expect(fuzzyOf(a.id)).toBeUndefined();
+  });
+
+  it('「別の依頼者」にすると 1 文字違いのつながりだけ外し、名前が同じ組は残す', () => {
+    const x1 = add('鈴木 太郎Q');
+    const x2 = add('鈴木太郎Q');
+    const y = add('鈴木大郎Q');
+    const g = fuzzyOf(y.id)!;
+    expect(g.clients.map((c) => c.id).sort()).toEqual([x1.id, x2.id, y.id].sort());
+    ignoreDuplicate(g.clients.map((c) => c.id), { fuzzy: true });
+    expect(fuzzyOf(y.id)).toBeUndefined();
+    // 鈴木太郎どうし（名前が同じ）はまだ候補にある
+    const same = findDuplicateClients().find((x) => !x.fuzzy && x.clients.some((c) => c.id === x1.id))!;
+    expect(same.clients.map((c) => c.id).sort()).toEqual([x1.id, x2.id].sort());
   });
 });
 
