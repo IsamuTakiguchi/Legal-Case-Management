@@ -206,6 +206,8 @@ export const sendMessageSchema = z.object({
   waitingFollowUpAt: z.string().datetime({ offset: true }).optional().nullable(),
   /** 指定すると今は送らず、この時刻（ISO 8601）に送る */
   scheduledAt: z.string().datetime({ offset: true }).optional().nullable(),
+  /** 送った文を付ける事件（AI 秘書から送るときなど。送信予約でも送ったときに付ける） */
+  caseId: z.number().int().optional().nullable(),
   /** CC・BCC（Gmail だけ。LINE・Chatwork には CC の仕組みが無い） */
   cc: z.array(z.string().trim().email()).max(20).optional(),
   bcc: z.array(z.string().trim().email()).max(20).optional(),

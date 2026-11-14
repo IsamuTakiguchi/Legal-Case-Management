@@ -252,7 +252,7 @@ function systemPrompt(): string {
     '・タスクの変更（task_update: 完了・起案・検討完了・待ちなどの状態、期限、名前）、タスクの削除（task_delete）',
     '・予定の変更（event_update: 日時・件名・場所・種類・仮/確定）、予定の削除（event_delete）',
     '・仮押さえ（日程調整）の確定（hold_confirm: 候補の 1 つで確定し、ほかの候補を消す）・取消（hold_cancel: 候補をすべて消す）',
-    '・メッセージの送信（message_send: 依頼者・窓口へ Gmail/LINE/Chatwork、関係者へ Gmail/LINE、事務局へ Chatwork）',
+    '・メッセージの送信（message_send: 依頼者・窓口へ Gmail/LINE/Chatwork、関係者へ Gmail/LINE、事務局へ Chatwork）。「明日の朝 9 時に送って」のように送る日時を指定されたら scheduledAt に入れる（送信予約）',
     'できないこと: 記録の書き換え・削除、依頼者・事件の削除、ファイルの操作、書面の作成。頼まれたら、その旨を reply に書き、どの画面でできるかを添えてください。',
     '',
     '【手順】',

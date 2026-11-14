@@ -181,6 +181,11 @@ export async function sendToConversation(conversationId: number, input: Omit<Sen
   }
 
   d.update(schema.messages).set({ draftId: input.draftId ?? null }).where(eq(schema.messages.id, message.id)).run();
+  // 事件を指定して送ったら、送った文をその事件に付ける
+  if (input.caseId) {
+    const k = d.select({ clientId: schema.cases.clientId }).from(schema.cases).where(eq(schema.cases.id, input.caseId)).get();
+    if (k) d.update(schema.messages).set({ caseId: input.caseId, clientId: k.clientId }).where(eq(schema.messages.id, message.id)).run();
+  }
   // 送り終えたら、パソコンから選んだファイルの一時置き場を片付ける
   removeOutboundUploads(uploadIds);
 
