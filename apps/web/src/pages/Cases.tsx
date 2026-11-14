@@ -388,7 +388,7 @@ function CaseBulkBar({ ids, onClear, onDone }: { ids: number[]; onClear: () => v
   };
   // 下へスクロールしてチェックを付けていっても、まとめて処理するメニューが画面の上に出たままになるように固定する
   return (
-    <div className="fade-in card sticky top-2 z-20 flex flex-wrap items-center gap-2 border-blue-200 py-2 text-sm shadow-md" role="toolbar" aria-label="選んだ事件をまとめて処理">
+    <div className="fade-in card bulk-bar bulk-actions flex flex-wrap items-center gap-2 border-blue-200 py-2 text-sm" role="toolbar" aria-label="選んだ事件をまとめて処理">
       <span className="font-medium text-slate-700">{ids.length} 件を選択中</span>
       <span className="text-xs text-slate-500">区分:</span>
       {CASE_STATUSES.map((st) => (

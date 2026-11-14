@@ -814,3 +814,29 @@ summary:focus-visible {
 .spotlight-ring {
   animation: spotlight-ring 3.2s ease-out both;
 }
+
+/*
+ * チェックを付けているときの「まとめて処理」のメニュー（依頼者・事件・タスク・受信箱・ファイルの一覧）。
+ * 下へスクロールしてチェックを足していっても、何ができるかが見えるように画面の上端に固定する。
+ * ホーム画面から開いたとき（iPhone）は、時計などの表示の下に来るようにする
+ */
+.bulk-bar {
+  position: sticky;
+  top: calc(env(safe-area-inset-top, 0px) + 0.5rem);
+  z-index: 20;
+  box-shadow: var(--shadow-float);
+}
+/* スマホでは操作のボタンを 1 行にまとめ、横にスクロールできるようにする（何行にもなって一覧を覆わないように） */
+@media (max-width: 767px) {
+  .bulk-bar .bulk-actions,
+  .bulk-bar.bulk-actions {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .bulk-bar .bulk-actions > *,
+  .bulk-bar.bulk-actions > * {
+    flex-shrink: 0;
+  }
+}

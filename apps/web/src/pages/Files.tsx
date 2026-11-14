@@ -110,13 +110,14 @@ export default function Files() {
       )}
       {msg && <div className="fade-in text-xs text-slate-700">{msg}</div>}
       {selectable.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm">
+        // チェックを付けているあいだは、まとめて処理するメニューを画面の上に固定する（下へスクロールしても見える）
+        <div className={`flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm ${selected.size > 0 ? 'bulk-bar bulk-actions border-blue-200' : ''}`}>
           <label className="flex items-center gap-1">
             <input type="checkbox" checked={allSelected} onChange={(e) => setSelected(e.target.checked ? new Set(selectable.map((a) => a.id)) : new Set())} /> すべて選択
           </label>
           {selected.size > 0 && (
             <>
-              <span className="text-slate-500">{selected.size} 件を選択中</span>
+              <span className="font-medium text-slate-700">{selected.size} 件を選択中</span>
               <button className="btn btn-sm" disabled={bulk.isPending} onClick={() => bulk.mutate({ action: 'ignore' })} title="保存せずに一覧から外す">
                 不要にする
               </button>
