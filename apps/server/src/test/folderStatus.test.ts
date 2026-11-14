@@ -9,6 +9,9 @@ process.env.STORAGE_BACKEND = 'local';
 process.env.LOCAL_CLIENT_ROOT = path.join(tmp, 'clients');
 process.env.DATA_DIR = tmp;
 
+/** 区分フォルダの中のフォルダ（OneDrive 上のパス → 中のフォルダ名）と、作ったフォルダ */
+const listing = new Map<string, string[]>();
+const made: string[] = [];
 /** フォルダを動かした記録（アプリから区分に合わせて移したもの） */
 const moves: { id: string; to: string }[] = [];
 /** OneDrive 上のフォルダ（ID → 今の名前と親） */
@@ -49,11 +52,14 @@ const { eq } = await import('drizzle-orm');
 const fakeOneDrive = {
   kind: 'onedrive' as const,
   clientRoot: () => '/依頼者',
-  ensureFolder: async () => undefined,
+  ensureFolder: async (p: string) => {
+    made.push(p);
+  },
   put: async () => ({ path: '', size: 0 }),
   get: async () => Buffer.alloc(0),
   move: async () => ({ path: '', size: 0 }),
-  list: async () => [],
+  // 区分フォルダの中のフォルダ（OneDrive 上のパス → 中のフォルダ名）
+  list: async (p: string) => (listing.get(p) ?? []).map((name) => ({ name, path: `${p}/${name}`, isFolder: true })),
   remove: async () => undefined,
 };
 
@@ -224,5 +230,24 @@ describe('OneDrive の区分フォルダと事件の区分の連動', () => {
     // フォルダが別の区分に移れば、また確認する
     db().update(schema.clients).set({ onedriveFolderPath: '1.進行事件/残留三郎' }).where(eq(schema.clients.id, c.id)).run();
     expect(folderStatusMismatches().find((x) => x.clientId === c.id)).toMatchObject({ folderStatus: 'active', appStatus: 'closed' });
+  });
+
+  it('アプリで終了事件にすると、終了事件フォルダの中の分け方（年ごとなど）に合った場所へ移す', async () => {
+    saveStatusFolderMap({ consultation: '0.相談', active: '1.進行事件', wrapup: '2.残務処理', closed: '3.終了事件' }, []);
+    const c = db().insert(schema.clients).values({ name: '年末 花子', kana: 'ねんまつ はなこ', onedriveFolderPath: '2.残務処理/年末花子', onedriveItemId: 'Y1' }).returning().get();
+    const k = db().insert(schema.cases).values({ clientId: c.id, title: '年末 離婚', status: 'closed' }).returning().get();
+    at('Y1', '年末花子', '2.残務処理');
+    // 終了事件フォルダは年ごと（今年のフォルダはまだ無い）
+    const year = new Date(Date.now() + 9 * 3600_000).getUTCFullYear();
+    listing.set('/依頼者/3.終了事件', [`${year - 2}年`, `${year - 1}年`]);
+    moves.length = 0;
+    made.length = 0;
+    await syncClientFolderWithStatus(c.id, k.id);
+    expect(made).toEqual([`/依頼者/3.終了事件/${year}年`]);
+    expect(moves).toEqual([{ id: 'Y1', to: `/依頼者/3.終了事件/${year}年` }]);
+    expect(db().select().from(schema.clients).where(eq(schema.clients.id, c.id)).get()!.onedriveFolderPath).toBe(`3.終了事件/${year}年/年末花子`);
+    const note = db().select().from(schema.caseNotes).where(eq(schema.caseNotes.caseId, k.id)).all().at(-1)!;
+    expect(note.gist).toContain(`「3.終了事件/${year}年」へ移動`);
+    listing.clear();
   });
 });

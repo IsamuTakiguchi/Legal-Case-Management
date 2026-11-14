@@ -6,6 +6,7 @@ import { getSetting, setSetting } from './settings.js';
 import { logger } from '../logger.js';
 import { CASE_STATUSES, CASE_STATUS_LABEL, familyName, type CaseStatus } from '@lcm/shared';
 import { parseFolderName, detectFolderNameFormat, isTightKanaFormat } from './clientImport.js';
+import { placementFolder } from './folderPlacement.js';
 
 /**
  * 依頼者フォルダの区分レイアウト。
@@ -350,6 +351,7 @@ export async function syncClientFolderWithStatus(clientId: number, caseId?: numb
     client = db().select().from(schema.clients).where(eq(schema.clients.id, clientId)).get() ?? client;
   }
   const root = st.clientRoot();
+  const typeLabels = db().select({ key: schema.caseTypes.key, label: schema.caseTypes.label }).from(schema.caseTypes).all();
   let result: { moved: boolean; from?: string; to?: string } = { moved: false };
   for (const g of folderGroups(client)) {
     if (caseId && !g.cases.some((k) => k.id === caseId)) continue;
@@ -364,19 +366,32 @@ export async function syncClientFolderWithStatus(clientId: number, caseId?: numb
     if (!current) continue; // 顧問等の区分外フォルダは触らない
     const item = await getItemByPath(joinPath(root, g.rel));
     if (!item) continue;
-    await moveItem(item.id, joinPath(root, expectedParent));
-    const newRel = `${expectedParent}/${name}`;
+    // 区分フォルダの中を年・事件の種類・五十音などで分けていれば、その分け方に合った場所へ入れる（「3.終了事件/2026年」など）
+    const lead = g.cases.find((k) => k.status === status) ?? g.cases[0];
+    const dest = await placementFolder(
+      expectedParent,
+      { now: new Date(), kana: client.kana, caseTypeLabel: typeLabels.find((t) => t.key === lead?.caseType)?.label ?? null, allCaseTypeLabels: typeLabels.map((t) => t.label) },
+      {
+        list: (rel) => st.list(joinPath(root, rel)),
+        ensureFolder: (rel) => st.ensureFolder(joinPath(root, rel)),
+      },
+    ).catch((err) => {
+      logger.warn({ err, clientId }, '区分フォルダの中の置き場所を決められませんでした（区分フォルダの直下へ移します）');
+      return expectedParent;
+    });
+    await moveItem(item.id, joinPath(root, dest));
+    const newRel = `${dest}/${name}`;
     const isClientFolder = relOf(client.onedriveFolderPath) === g.rel;
     repointFolder(clientId, g.rel, newRel);
     if (caseId) {
       const now = new Date().toISOString();
       db()
         .insert(schema.caseNotes)
-        .values({ caseId, clientId, kind: 'progress', occurredAt: now, rawText: '', gist: `${isClientFolder ? '依頼者フォルダ' : `事件フォルダ「${name}」`}を「${parent}」から「${expectedParent}」へ移動（${CASE_STATUS_LABEL[status]}）`, createdBy: 'system' })
+        .values({ caseId, clientId, kind: 'progress', occurredAt: now, rawText: '', gist: `${isClientFolder ? '依頼者フォルダ' : `事件フォルダ「${name}」`}を「${parent}」から「${dest}」へ移動（${CASE_STATUS_LABEL[status]}）`, createdBy: 'system' })
         .run();
     }
-    logger.info({ clientId, folder: name, from: parent, to: expectedParent }, 'フォルダを区分に合わせて移動');
-    result = { moved: true, from: parent, to: expectedParent };
+    logger.info({ clientId, folder: name, from: parent, to: dest }, 'フォルダを区分に合わせて移動');
+    result = { moved: true, from: parent, to: dest };
   }
   return result;
 }
