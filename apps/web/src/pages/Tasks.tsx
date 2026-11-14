@@ -251,13 +251,18 @@ export default function Tasks() {
         </button>
         <span className="text-xs text-slate-400">⌘／Ctrl＋Enter でも追加できます</span>
       </form>
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <label className="flex items-center gap-1">
+      {/* チェックを付けているあいだは、まとめて処理するメニューを画面の上に固定する（下へスクロールしても見える） */}
+      <div
+        className={`flex flex-wrap items-center gap-2 text-sm ${selected.size > 0 ? 'card bulk-bar border-blue-200 py-2' : ''}`}
+        role={selected.size > 0 ? 'toolbar' : undefined}
+        aria-label={selected.size > 0 ? '選んだタスクをまとめて処理' : undefined}
+      >
+        <label className="flex shrink-0 items-center gap-1">
           <input type="checkbox" checked={allSelected} onChange={(e) => setSelected(e.target.checked ? new Set(rows.map((t) => t.id)) : new Set())} /> すべて選択
         </label>
         {selected.size > 0 ? (
-          <div className="fade-in flex flex-wrap items-center gap-1">
-            <span className="text-slate-600">{selected.size} 件を選択中</span>
+          <div className="fade-in bulk-actions flex min-w-0 max-w-full flex-wrap items-center gap-1">
+            <span className="font-medium text-slate-700">{selected.size} 件を選択中</span>
             <button className="btn btn-sm btn-primary" onClick={() => bulk.mutate('done')} disabled={bulk.isPending}>
               完了にする
             </button>

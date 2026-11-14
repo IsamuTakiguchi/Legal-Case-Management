@@ -111,8 +111,9 @@ export default function Clients() {
       </div>
       {folderMsg && <div className="fade-in card text-sm text-slate-700">{folderMsg}</div>}
       {selected.length > 0 && (
-        <div className="card flex flex-wrap items-center gap-2 border-red-200 bg-red-50 text-sm">
-          <span>{selected.length} 件を選択中</span>
+        // 下へスクロールしてチェックを足していっても、何ができるかが見えるように画面の上に固定する
+        <div className="fade-in card bulk-bar bulk-actions flex flex-wrap items-center gap-2 border-red-200 bg-red-50 py-2 text-sm" role="toolbar" aria-label="選んだ依頼者をまとめて処理">
+          <span className="font-medium">{selected.length} 件を選択中</span>
           <button
             className="btn btn-danger btn-sm"
             onClick={() => {

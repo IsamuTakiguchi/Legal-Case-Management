@@ -302,10 +302,20 @@ function StatusFolderLayout({ rootKey }: { rootKey: string }) {
   const qc = useQueryClient();
   const q = useQuery({
     queryKey: ['onedrive-layout', rootKey],
-    queryFn: () => api.get<{ root: string; folders: { name: string; childCount: number }[]; current: Record<string, string>; extras: string[]; guess: { map: Record<string, string>; extras: string[] } }>('/setup/onedrive/layout'),
+    queryFn: () =>
+      api.get<{
+        root: string;
+        folders: { name: string; childCount: number }[];
+        current: Record<string, string>;
+        extras: string[];
+        aliases?: Record<string, string[]>;
+        guess: { map: Record<string, string>; extras: string[]; aliases?: Record<string, string[]> };
+      }>('/setup/onedrive/layout'),
   });
   const [map, setMap] = useState<Record<string, string>>({});
   const [extras, setExtras] = useState<string[]>([]);
+  // 「この区分とみなす」追加のフォルダ（終了事件 = 「3.終了事件」と「5.破産終了」など）
+  const [aliases, setAliases] = useState<Record<string, string[]>>({});
   const [touched, setTouched] = useState(false);
   const [msg, setMsg] = useState('');
   useEffect(() => {
@@ -313,9 +323,25 @@ function StatusFolderLayout({ rootKey }: { rootKey: string }) {
     const hasCurrent = Object.keys(q.data.current).length > 0;
     setMap(hasCurrent ? q.data.current : q.data.guess.map);
     setExtras(hasCurrent ? q.data.extras : q.data.guess.extras.filter((n) => !/^_/.test(n)));
+    setAliases(hasCurrent ? (q.data.aliases ?? {}) : (q.data.guess.aliases ?? {}));
   }, [q.data, touched]);
+  /** 区分のフォルダに選んでいないフォルダの使い方: '' 使わない／'extra' 区分外／区分のキー（その区分とみなす） */
+  const roleOf = (n: string) => (extras.includes(n) ? 'extra' : (STATUS_KEYS.find((k) => aliases[k]?.includes(n)) ?? ''));
+  const setRole = (n: string, role: string) => {
+    setTouched(true);
+    setExtras((x) => (role === 'extra' ? [...new Set([...x, n])] : x.filter((y) => y !== n)));
+    setAliases((a) => {
+      const next: Record<string, string[]> = {};
+      for (const k of STATUS_KEYS) {
+        const list = (a[k] ?? []).filter((y) => y !== n);
+        if (role === k) list.push(n);
+        if (list.length) next[k] = list;
+      }
+      return next;
+    });
+  };
   const save = useMutation({
-    mutationFn: () => api.put<{ ok: boolean; resolved: { scanned: number; updated: number; missing: string[] } }>('/setup/onedrive/layout', { map, extras }),
+    mutationFn: () => api.put<{ ok: boolean; resolved: { scanned: number; updated: number; missing: string[] } }>('/setup/onedrive/layout', { map, extras, aliases }),
     onSuccess: (r) => {
       setMsg(`保存しました。区分フォルダ内のフォルダ ${r.resolved.scanned} 件を確認し、依頼者 ${r.resolved.updated} 名のフォルダを対応付けました${r.resolved.missing.length ? `（見つからない依頼者: ${r.resolved.missing.slice(0, 5).join('、')}${r.resolved.missing.length > 5 ? ' ほか' : ''}）` : ''}`);
       qc.invalidateQueries({ queryKey: ['onedrive-layout'] });
@@ -363,21 +389,27 @@ function StatusFolderLayout({ rootKey }: { rootKey: string }) {
       </div>
       {folderNames.filter((n) => !used.has(n) && !/^_/.test(n)).length > 0 && (
         <div className="mt-2">
-          <div className="mb-1 text-slate-600">区分には当たらないが依頼者フォルダを含むフォルダ（顧問先など）。チェックしたものは依頼者の検索対象になり、区分の変更では動かしません。</div>
-          <div className="flex flex-wrap gap-2">
+          <div className="mb-1 text-slate-600">
+            そのほかのフォルダの使い方。「○○とみなす」にすると、そこへ移したフォルダの事件もその区分になります（例: 「5.破産終了」を「終了事件とみなす」）。
+            「区分外」は顧問先などで、依頼者の検索対象になりますが区分は変えません。
+          </div>
+          <div className="grid gap-1.5 md:grid-cols-2">
             {folderNames
               .filter((n) => !used.has(n) && !/^_/.test(n))
               .map((n) => (
-                <label key={n} className="flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1">
-                  <input
-                    type="checkbox"
-                    checked={extras.includes(n)}
-                    onChange={(e) => {
-                      setTouched(true);
-                      setExtras((x) => (e.target.checked ? [...x, n] : x.filter((y) => y !== n)));
-                    }}
-                  />
-                  {n}
+                <label key={n} className="flex items-center gap-2 rounded border border-slate-200 bg-white px-2 py-1">
+                  <span className="min-w-0 flex-1 truncate" title={n}>
+                    {n}
+                  </span>
+                  <select className="input w-auto py-0.5 text-xs" value={roleOf(n)} onChange={(e) => setRole(n, e.target.value)} aria-label={`${n} の使い方`}>
+                    <option value="">使わない</option>
+                    <option value="extra">区分外（顧問先など）</option>
+                    {STATUS_KEYS.map((k) => (
+                      <option key={k} value={k}>
+                        {STATUS_LABEL[k]}とみなす
+                      </option>
+                    ))}
+                  </select>
                 </label>
               ))}
           </div>

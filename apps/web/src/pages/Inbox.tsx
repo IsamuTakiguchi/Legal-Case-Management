@@ -180,13 +180,18 @@ export default function Inbox() {
       )}
       <StaleUnanswered compact />
       {((query.data?.length ?? 0) > 0 || undoArchive !== null) && (
-        <div className="flex flex-wrap items-center gap-2 text-sm">
+        // チェックを付けているあいだは、まとめて処理するメニューを画面の上に固定する（下へスクロールしても見える）
+        <div
+          className={`flex flex-wrap items-center gap-2 text-sm ${selected.size > 0 ? 'card bulk-bar bulk-actions border-blue-200 py-2' : ''}`}
+          role={selected.size > 0 ? 'toolbar' : undefined}
+          aria-label={selected.size > 0 ? '選んだ会話をまとめて処理' : undefined}
+        >
           <label className="flex items-center gap-1">
             <input type="checkbox" checked={allSelected} onChange={(e) => setSelected(e.target.checked ? new Set(ids) : new Set())} /> すべて選択
           </label>
           {selected.size > 0 ? (
             <>
-              <span className="text-slate-600">{selected.size} 件を選択中</span>
+              <span className="font-medium text-slate-700">{selected.size} 件を選択中</span>
               {filter.archived !== '1' && (
                 <>
                   <button className="btn btn-sm" onClick={() => bulk.mutate('resolve')} disabled={bulk.isPending} title="要返信を外して既読にします">
