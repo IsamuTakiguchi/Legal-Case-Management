@@ -29,6 +29,7 @@ import { editCalendarEvent, removeCalendarEvent, confirmHold, cancelHoldSet, lis
 import { listStaff, createStaff, updateStaff } from './staff.js';
 import { clientSendTargets, contactSendTargets, staffSendTargets, startClientConversation, startContactConversation, startRoomConversation } from './newMessage.js';
 import { sendToConversation } from './send.js';
+import { scheduleMessage } from './scheduledSend.js';
 import { listClientPersons } from './clientPersons.js';
 
 /**
@@ -187,6 +188,9 @@ export const messageSendSchema = z.object({
   subject: z.string().optional().describe('メールの件名（新しいメールにするとき）。空なら、その相手との最後のメールの続きにする'),
   text: z.string().describe('送る本文（弁護士本人から送る文）'),
   caseId: z.number().int().optional().describe('送った文を付ける事件'),
+  scheduledAt: isoAt
+    .optional()
+    .describe('送る日時を指定されたとき（「明日の朝 9 時に送って」「月曜 10 時に」など）だけ入れる。今は送らず、この日時に送る（送信予約）。指定が無ければ入れない（登録したときにすぐ送る）'),
 });
 
 /**
@@ -421,7 +425,8 @@ export function previewExtended(a: ExtendedAction): { label: string; changes: Ch
           : a.to === 'contact'
             ? (getContact(a.contactId ?? 0)?.name ?? '関係者')
             : `事務局 ${nameOf.staff(a.staffId)}`;
-      return { label: `メッセージの送信: ${who}へ ${CHANNEL_LABEL[a.channel]}`, changes: [] };
+      const when = a.scheduledAt ? `（${formatJaEventTime(a.scheduledAt, a.scheduledAt)} に送信予約）` : '';
+      return { label: `メッセージの送信: ${who}へ ${CHANNEL_LABEL[a.channel]}${when}`, changes: [] };
     }
   }
 }
@@ -568,6 +573,8 @@ export async function applyExtended(a: ExtendedAction): Promise<{ label: string;
     }
     case 'message_send': {
       if (!a.text.trim()) throw new Error('本文が空です');
+      // 送信予約の時刻は、会話を作る前に確かめる（過去の時刻なら何もしない）
+      if (a.scheduledAt && !(Date.parse(a.scheduledAt) >= Date.now() - 60_000)) throw new Error('送る日時が過去になっています。日時を直すか、空にしてすぐ送ってください');
       let conversationId: number;
       let text = a.text;
       if (a.to === 'client') {
@@ -594,11 +601,13 @@ export async function applyExtended(a: ExtendedAction): Promise<{ label: string;
         if (s.chatworkAccountId && !text.includes(`[To:${s.chatworkAccountId}]`)) text = `[To:${s.chatworkAccountId}]${s.name}さん\n${text}`;
         conversationId = startRoomConversation(roomId, t.rooms.find((r) => r.roomId === roomId)?.name ?? null).conversationId;
       }
-      const r = await sendToConversation(conversationId, { text, attachmentIds: [], driveFiles: [], createWaitingTask: false });
-      if (a.caseId) {
-        const k = d.select({ clientId: schema.cases.clientId }).from(schema.cases).where(eq(schema.cases.id, a.caseId)).get();
-        if (k) d.update(schema.messages).set({ caseId: a.caseId, clientId: k.clientId }).where(eq(schema.messages.id, r.messageId)).run();
+      const payload = { text, attachmentIds: [], driveFiles: [], createWaitingTask: false, caseId: a.caseId ?? null };
+      // 日時の指定があれば送信予約（時刻が来たら毎分のジョブが送る。受信箱の会話の「送信予約」から取消・変更できる）
+      if (a.scheduledAt) {
+        scheduleMessage(conversationId, payload, a.scheduledAt);
+        return { label, link: messageLink(conversationId) };
       }
+      const r = await sendToConversation(conversationId, payload);
       return { label, link: messageLink(conversationId, r.messageId) };
     }
   }

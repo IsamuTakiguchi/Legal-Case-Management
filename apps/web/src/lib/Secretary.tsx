@@ -7,6 +7,7 @@ import { DeadlineInput, DUE_LABEL, FOLLOW_LABEL } from './Deadline';
 import { useDraft, DraftHint } from './draft';
 import { Icon } from './icons';
 import { useClients } from './ClientPicker';
+import { quickSendTimes } from './sendTimes';
 import { useDictation } from './dictation';
 
 /**
@@ -741,6 +742,7 @@ const FIELD_UI: Record<string, { label: string; kind: FieldKind; options?: [stri
   endAt: { label: '終了', kind: 'datetime' },
   dueAt: { label: '締切', kind: 'datetime' },
   followUpAt: { label: '返信期限', kind: 'datetime' },
+  scheduledAt: { label: '送る日時', kind: 'datetime' },
   phones: { label: '電話（カンマ区切り）', kind: 'list' },
   emails: { label: 'メール（カンマ区切り）', kind: 'list' },
   addPhones: { label: '足す電話', kind: 'list' },
@@ -769,6 +771,31 @@ const CLEAR_LABEL: Record<string, string> = { staffId: '担当事務局', stage:
 /** 画面で直さない項目（どれを対象にするかの ID など） */
 const HIDDEN = new Set(['type', 'summary', 'caseId', 'clientId', 'contactId', 'taskId', 'eventId', 'personId', 'to', 'clear']);
 
+/** 送る日時（空ならすぐ送る）。会話の画面の「時刻を指定」と同じ、よく使う時刻のボタンも出す */
+function SendAtInput({ value, onChange }: { value: string | undefined; onChange: (v: string | undefined) => void }) {
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <input type="datetime-local" className="input w-auto" value={toLocalInput(value ?? null)} onChange={(e) => onChange(e.target.value ? fromLocalInput(e.target.value) : undefined)} aria-label="送る日時" />
+        {value ? (
+          <button type="button" className="btn btn-sm" onClick={() => onChange(undefined)} title="送信予約をやめて、登録したときにすぐ送ります">
+            すぐ送る
+          </button>
+        ) : (
+          <span className="text-xs text-slate-500">空なら、登録したときにすぐ送ります</span>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {quickSendTimes().map((q) => (
+          <button key={q.key} type="button" className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-xs hover:border-blue-300 hover:bg-blue-50" onClick={() => onChange(fromLocalInput(q.value))}>
+            {q.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** 変更・作成・削除・送信の案を直す欄。項目ごとに「いま」の値も並べる */
 function ExtendedEditor({ a, changes, onChange }: { a: ExtendedAction; changes: Change[]; onChange: (p: Partial<Action>) => void }) {
   const staff = useQuery({ queryKey: ['staff'], queryFn: () => api.get<{ id: number; name: string }[]>('/staff'), enabled: 'staffId' in a });
@@ -776,6 +803,8 @@ function ExtendedEditor({ a, changes, onChange }: { a: ExtendedAction; changes: 
   const before = (field: string) => changes.find((c) => c.field === field || (c.field === 'time' && (field === 'startAt' || field === 'endAt')))?.before;
   const set = (field: string, v: unknown) => onChange({ [field]: v } as Partial<Action>);
   const fields = Object.keys(a).filter((k) => !HIDDEN.has(k) && a[k] !== undefined);
+  // 送信は、日時を頼まれていなくても「送る日時」の欄を出す（あとから送信予約にできるように）
+  if (a.type === 'message_send' && !fields.includes('scheduledAt')) fields.push('scheduledAt');
   const clear = (a.clear as string[] | undefined) ?? [];
   if (a.type === 'task_delete' || a.type === 'event_delete' || a.type === 'hold_cancel') return <div className="pl-6 text-xs text-red-700">登録すると削除します（元に戻せません）。</div>;
   if (a.type === 'hold_confirm') return <div className="pl-6 text-xs text-slate-600">登録すると、この候補で確定し、ほかの候補の仮押さえは消えます。</div>;
@@ -794,6 +823,7 @@ function ExtendedEditor({ a, changes, onChange }: { a: ExtendedAction; changes: 
         const prev = before(f);
         let input;
         if (ui.kind === 'textarea') input = <textarea className={`input ${f === 'text' ? 'min-h-32' : 'min-h-16'}`} value={String(v ?? '')} onChange={(e) => set(f, e.target.value)} />;
+        else if (f === 'scheduledAt') input = <SendAtInput value={typeof v === 'string' ? v : undefined} onChange={(x) => set(f, x)} />;
         else if (ui.kind === 'datetime')
           input = <input type="datetime-local" className="input w-auto" value={toLocalInput(typeof v === 'string' ? v : null)} onChange={(e) => set(f, e.target.value ? fromLocalInput(e.target.value) : undefined)} />;
         else if (ui.kind === 'list')
@@ -846,7 +876,13 @@ function ExtendedEditor({ a, changes, onChange }: { a: ExtendedAction; changes: 
           ))}
         </div>
       )}
-      {a.type === 'message_send' && <div className="text-xs text-red-700">登録すると、この本文がそのまま送られます。</div>}
+      {a.type === 'message_send' && (
+        <div className="text-xs text-red-700">
+          {typeof a.scheduledAt === 'string' && a.scheduledAt
+            ? `登録すると、${fmtDateTime(a.scheduledAt)} にこの本文を送るよう予約します（受信箱の会話の「送信予約」から取消・時刻変更・今すぐ送信ができます）。`
+            : '登録すると、この本文がすぐに送られます。時刻を指定するときは「送る日時」を入れてください。'}
+        </div>
+      )}
     </div>
   );
 }

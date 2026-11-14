@@ -177,6 +177,35 @@ describe('AI 秘書: メッセージの送信', () => {
     expect(r.applied[0]!.error).toContain('件名を入れてください');
     expect(sent).toHaveLength(0);
   });
+
+  it('送る日時を指定すると、今は送らず送信予約にする。時刻が来たら送って事件に付ける', async () => {
+    const { dispatchScheduled } = await import('../services/scheduledSend.js');
+    const s = seed();
+    const at = new Date(Date.now() + 2 * 3600_000).toISOString();
+    const action = parse({ type: 'message_send', summary: 'x', to: 'client', clientId: s.client.id, channel: 'gmail', subject: '期日のご連絡', text: '次回期日のご案内です。', caseId: s.kase.id, scheduledAt: at });
+    expect(previewAction(action).label).toContain('送信予約');
+    const r = await applySecretaryActions([action]);
+    expect(r.applied[0]).toMatchObject({ ok: true });
+    expect(sent).toHaveLength(0);
+    const row = db().select().from(schema.scheduledMessages).all().find((x) => x.text === '次回期日のご案内です。')!;
+    expect(row).toMatchObject({ status: 'pending', scheduledAt: at });
+    expect(r.applied[0]!.link).toBe(`/inbox/${row.conversationId}`);
+
+    // 時刻が来たら送り、送った文はその事件に付く
+    await dispatchScheduled(row.id, { force: true });
+    expect(sent[0]).toMatchObject({ subject: '期日のご連絡', text: '次回期日のご案内です。' });
+    const out = db().select().from(schema.messages).all().find((m) => m.direction === 'out' && m.body === '次回期日のご案内です。')!;
+    expect(out).toMatchObject({ caseId: s.kase.id, clientId: s.client.id });
+  });
+
+  it('送る日時が過去なら、送らず予約もしない', async () => {
+    const s = seed();
+    const r = await applySecretaryActions([parse({ type: 'message_send', summary: 'x', to: 'client', clientId: s.client.id, channel: 'gmail', subject: '件名', text: '過去の予約', scheduledAt: new Date(Date.now() - 3600_000).toISOString() })]);
+    expect(r.applied[0]).toMatchObject({ ok: false });
+    expect(r.applied[0]!.error).toContain('過去');
+    expect(sent).toHaveLength(0);
+    expect(db().select().from(schema.scheduledMessages).all().some((x) => x.text === '過去の予約')).toBe(false);
+  });
 });
 
 describe('AI 秘書: 事務局へのチャットの書き方', () => {
