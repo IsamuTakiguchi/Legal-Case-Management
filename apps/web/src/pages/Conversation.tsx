@@ -229,12 +229,24 @@ export default function Conversation() {
     onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
   });
 
+  // 資料の提供を頼まれていたとき、下書きと一緒にフォルダから選んだ添付の候補（理由を出す）
+  const [suggested, setSuggested] = useState<{ requested: string[]; files: (DriveFile & { reason: string })[]; note: string } | null>(null);
   const draft = useMutation({
-    mutationFn: () => api.post<{ id: number; generatedText: string }>(`/conversations/${id}/draft`, { instruction, templateKey: templateKey || null }),
+    mutationFn: () =>
+      api.post<{ id: number; generatedText: string; attachments?: { requested: string[]; files: (DriveFile & { reason: string })[]; note: string } | null }>(`/conversations/${id}/draft`, {
+        instruction,
+        templateKey: templateKey || null,
+      }),
     onSuccess: (d) => {
       setText(d.generatedText);
       setDraftId(d.id);
       setMsg(null);
+      const a = d.attachments;
+      if (a && (a.files.length || a.requested.length)) {
+        setSuggested(a);
+        // 見つかったファイルは、はじめから添付しておく（外せる）
+        if (a.files.length) setDriveFiles((prev) => [...prev, ...a.files.filter((f) => !prev.some((x) => x.path === f.path)).map(({ reason: _r, ...f }) => f)]);
+      } else setSuggested(null);
     },
     onError: (e) => setMsg({ kind: 'err', text: (e as Error).message }),
   });
@@ -277,6 +289,7 @@ export default function Conversation() {
       setDraftId(null);
       setSelectedAtt([]);
       setDriveFiles([]);
+      setSuggested(null);
       uploads.clear();
       setCreateWaiting(false);
       setWaitUntil(null);
@@ -824,6 +837,33 @@ export default function Conversation() {
           )}
           <textarea className="input min-h-40 font-mono text-sm" value={text} onChange={(e) => setText(e.target.value)} placeholder="返信本文（AI 下書きを編集して送信。ファイルはこの欄のどこにドラッグ＆ドロップしても添付できます）" />
           <DraftHint handle={textDraft} />
+          {suggested && (
+            <div className="fade-in space-y-1 rounded-[10px] border border-blue-200 bg-blue-50/50 px-3 py-2 text-xs">
+              <div className="flex items-start gap-2">
+                <span className="font-semibold text-slate-700">📎 資料のご依頼：{suggested.requested.join('・')}</span>
+                <button type="button" className="ml-auto shrink-0 text-slate-400 hover:text-slate-700" onClick={() => setSuggested(null)} aria-label="閉じる">
+                  ×
+                </button>
+              </div>
+              {suggested.files.length > 0 ? (
+                <>
+                  <div className="text-slate-600">依頼者のフォルダから、当てはまりそうなファイルを添付しました。違っていれば下の添付から × で外してください。</div>
+                  <ul className="ml-4 list-disc text-slate-700">
+                    {suggested.files.map((f) => (
+                      <li key={f.path}>
+                        {f.name}
+                        <span className="ml-1 text-slate-500">（{f.reason}）</span>
+                        {!driveFiles.some((x) => x.path === f.path) && <span className="ml-1 text-slate-400">外しました</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
+                <div className="text-slate-600">フォルダから当てはまるファイルが見つかりませんでした。「📎 ファイルを添付」から選んでください。</div>
+              )}
+              {suggested.note && <div className="text-amber-700">{suggested.note}</div>}
+            </div>
+          )}
           {(selectedAtt.length > 0 || driveFiles.length > 0) && (
             <div className="flex flex-wrap gap-1 text-xs">
               {selectedAtt.map((aid) => {

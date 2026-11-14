@@ -1,4 +1,6 @@
 import { Hono } from 'hono';
+import { logger } from '../logger.js';
+import { suggestRequestedFiles, canSuggestFiles } from '../services/attachmentSuggest.js';
 import { z } from 'zod';
 import { recordSentElsewhere } from '../services/manualRecord.js';
 import { eq, desc } from 'drizzle-orm';
@@ -290,8 +292,18 @@ inboxRoutes.post('/conversations/:id/draft', async (c) => {
   const activeCase = conv.clientId ? activeCasesForClient(conv.clientId)[0] : null;
   // 法人の担当者とのやり取りなら、その人に宛てる
   const person = conv.clientPersonId ? getClientPerson(conv.clientPersonId) : null;
+  // 資料の提供を頼まれていたら、依頼者・事件のフォルダから添付の候補を探す（見つかれば本文でも添付に触れる）
+  const attachments = canSuggestFiles(id)
+    ? await suggestRequestedFiles(id).catch((err) => {
+        logger.warn({ err, conversationId: id }, '添付の候補探しに失敗（下書きはそのまま作ります）');
+        return null;
+      })
+    : null;
+  const attachNote = attachments?.files.length
+    ? `\n（この返信には次のファイルを添付する: ${attachments.files.map((f) => f.name).join('、')}。本文では、ご依頼の資料を添付した旨を自然に書く。ファイル名を並べる必要はない）${attachments.note ? `\n（見つからなかった資料: ${attachments.note}。その資料は追ってお送りする旨を書く）` : ''}`
+    : '';
   const text = await draftReply(
-    req,
+    attachNote ? { ...req, instruction: `${req.instruction ?? ''}${attachNote}`.trim() } : req,
     {
       channel: conv.channel as Channel,
       clientName: conv.client?.name ?? null,
@@ -307,7 +319,7 @@ inboxRoutes.post('/conversations/:id/draft', async (c) => {
     conv.clientId,
   );
   const draft = db().insert(schema.drafts).values({ conversationId: id, instruction: req.instruction, generatedText: text }).returning().get();
-  return c.json(draft);
+  return c.json({ ...draft, attachments });
 });
 
 /** 事務局に確認するチャット（Chatwork）の下ごしらえ・下書き・送信 */
